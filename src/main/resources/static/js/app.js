@@ -2,7 +2,7 @@ import {computed, createApp, nextTick, onMounted, ref, shallowRef, watch} from '
 import {api} from './api.js?v=30';
 import Picker from './components/Picker.vue.js?v=17';
 import Editor from './components/Editor.vue.js?v=46';
-import Settings from './components/Settings.vue.js?v=11';
+import Settings from './components/Settings.vue.js?v=12';
 import TranslateView from './components/TranslateView.vue.js?v=29';
 import SearchView from './components/SearchView.vue.js?v=9';
 import TagsView from './components/TagsView.vue.js?v=22';
@@ -223,7 +223,7 @@ const App = {
             const ol = g.openrouterConfigured ? ('ключ задан' + (g.openrouterModel ? ', ' + g.openrouterModel : '')) : 'без ключа';
             return 'Gemini: ' + gl + '\nOpenRouter: ' + ol;
         });
-        const sourceStatus = ref({mode: 'game', csvDir: '', gamePath: '', gameValid: false, gameVersion: '', unpackerExe: '', unpackerReady: false, activeRoot: '', ready: false, configured: false});
+        const sourceStatus = ref({gamePath: '', gameValid: false, gameVersion: '', activeRoot: '', ready: false, configured: false});
         const showSettings = ref(false);
         const settingsSection = ref('sources');
         function openSettings(s) {

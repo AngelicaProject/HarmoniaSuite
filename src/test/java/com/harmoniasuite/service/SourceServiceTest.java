@@ -42,17 +42,11 @@ class SourceServiceTest {
     }
 
     @Test
-    @DisplayName("режим по умолчанию — game")
-    void defaultModeIsGame(@TempDir Path workspace, @TempDir Path dbDir) {
-        assertEquals("game", seed(workspace, dbDir).sources().mode());
-    }
-
-    @Test
     @DisplayName("версия игры читается из ffxivgame.ver")
     void gameVersionReadsVerFile(@TempDir Path workspace, @TempDir Path dbDir) throws Exception {
         Fixture fixture = seed(workspace, dbDir);
         Path game = fakeGame(workspace);
-        fixture.sources().update(new UpdateSourceSettingsRequest(null, game.toString(), null, null));
+        fixture.sources().update(new UpdateSourceSettingsRequest(game.toString()));
         assertEquals("2099.01.01.0000.0000", fixture.sources().gameVersion());
         assertTrue(fixture.sources().isValidGamePath(game.toString()));
     }
@@ -66,45 +60,17 @@ class SourceServiceTest {
     }
 
     @Test
-    @DisplayName("обновление отклоняет неизвестный режим")
-    void updateRejectsUnknownMode(@TempDir Path workspace, @TempDir Path dbDir) {
-        Fixture fixture = seed(workspace, dbDir);
-        assertThrows(HarmoniaSuiteBadRequestException.class, () -> fixture.sources()
-                .update(new UpdateSourceSettingsRequest("thaliak", null, null, null)));
-    }
-
-    @Test
     @DisplayName("обновление отклоняет несуществующий путь игры")
     void updateRejectsMissingGamePath(@TempDir Path workspace, @TempDir Path dbDir) {
         Fixture fixture = seed(workspace, dbDir);
         assertThrows(HarmoniaSuiteBadRequestException.class, () -> fixture.sources()
-                .update(new UpdateSourceSettingsRequest(null, workspace.resolve("missing").toString(),
-                        null, null)));
-    }
-
-    @Test
-    @DisplayName("активный корень в режиме csvdir")
-    void activeRootInCsvdirMode(@TempDir Path workspace, @TempDir Path dbDir) throws Exception {
-        Fixture fixture = seed(workspace, dbDir);
-        Path csv = workspace.resolve("pack-one");
-        Files.createDirectories(csv);
-        fixture.sources().update(new UpdateSourceSettingsRequest("csvdir", null, null, "pack-one"));
-        assertEquals(csv.toAbsolutePath().normalize(), fixture.sources().activeRoot());
+                .update(new UpdateSourceSettingsRequest(workspace.resolve("missing").toString())));
     }
 
     @Test
     @DisplayName("активный корень без источников бросает 400")
     void activeRootWithoutSourcesThrows(@TempDir Path workspace, @TempDir Path dbDir) {
         Fixture fixture = seed(workspace, dbDir);
-        assertThrows(HarmoniaSuiteBadRequestException.class,
-                () -> fixture.sources().activeRoot());
-    }
-
-    @Test
-    @DisplayName("режим csvdir без каталога не готов")
-    void csvdirWithoutDirIsNotReady(@TempDir Path workspace, @TempDir Path dbDir) {
-        Fixture fixture = seed(workspace, dbDir);
-        fixture.sources().update(new UpdateSourceSettingsRequest("csvdir", null, null, null));
         assertThrows(HarmoniaSuiteBadRequestException.class,
                 () -> fixture.sources().activeRoot());
     }
@@ -124,7 +90,7 @@ class SourceServiceTest {
         Fixture fixture = seed(workspace, dbDir);
         Files.createDirectories(workspace.resolve("rawexd").resolve("en"));
         Path game = fakeGame(workspace);
-        fixture.sources().update(new UpdateSourceSettingsRequest(null, game.toString(), null, null));
+        fixture.sources().update(new UpdateSourceSettingsRequest(game.toString()));
         Path cached = workspace.resolve("data").resolve("sources")
                 .resolve("2099.01.01.0000.0000").resolve("en");
         Files.createDirectories(cached);

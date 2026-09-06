@@ -15,7 +15,7 @@
 
 ## State & Sources
 
-- Game sources come from the local install via XivExdUnpacker into versioned cache `data/sources/<gameVersion>/en`. Source autodetect (`GET /api/settings/detect`): unpacker — bundled `<jar>/unpacker/XivExdUnpacker.exe` first, then `source/repos/XivExdUnpacker` under `%USERPROFILE%` (Release/Debug); game — standard `Program Files` locations; everything else only via settings.
+- Game sources come from the local install via XivExdUnpacker into versioned cache `data/sources/<gameVersion>/en`. Source autodetect (`GET /api/settings/detect`): game — standard `Program Files` locations; unpacker is always the bundled `<jar>/unpacker/XivExdUnpacker.exe`, no settings for it.
 - Project state lives in SQLite (`harmonia.db-path`, default `data/harmonia.db` in the workspace — workspace is the repo root in dev, `%APPDATA%/HarmoniaSuite` when installed; Flyway migrations in `db/migration/sqlite`, hand-written SQL via JdbcTemplate, no ORM). PostgreSQL profile (`-Dspring.profiles.active=postgres`, migrations in `db/migration/postgresql`, `PG_URL/PG_USER/PG_PASSWORD`) for real deploys.
 - `projects/<name>/` keeps only `exported_csv/`. No `project.json` anywhere (no import, no fallback).
 
@@ -55,7 +55,7 @@
 ## Release
 
 - Single pom `<version>` (SemVer, dev on `*-SNAPSHOT`); dist = `harmonia-suite-<version>.zip` with `VERSION.txt`; release = `versions:set` + tag `vX.Y.Z` + `package` (README §Релиз). On future front/back split: backend keeps the pom version, frontend gets its own, contract pinned via `/api/version`.
-- Distribution (Windows): per-user MSI on `v*` tags only (`release.yml`: extractor from `AngelicaProject/HarmoniaExtractor` self-contained, Temurin 21 + MinGit bundled under `toolchain/`, repo snapshot under `src/`, WiX via choco). Installed state defaults to `%APPDATA%/HarmoniaSuite`; bundled unpacker is the first autodetect candidate.
+- Distribution (Windows): per-user MSI on `v*` tags only (`release.yml`: extractor from `AngelicaProject/HarmoniaExtractor` self-contained, Temurin 21 + MinGit bundled under `toolchain/`, repo snapshot under `src/`, WiX via choco). Installed state defaults to `%APPDATA%/HarmoniaSuite`; game-only sources (no csvdir mode), unpacker always bundled.
 - Self-update (`UpdateService`, `POST /api/update` as `update` job): always from source — `git pull --ff-only` + full local `mvnw package` (toolchain: install-bundled → system → `%LOCALAPPDATA%` cache → download; dirty tree refused; auto-rollback via `reset --hard` on failure). Relaunch targets the freshly built jar (bundled runtime for the installed exe). UI: version chip (check on open + hourly) + Hermes-style modal + restart overlay.
 
 ## Goal

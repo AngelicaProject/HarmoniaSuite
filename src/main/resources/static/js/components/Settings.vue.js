@@ -5,7 +5,7 @@ export default {
   data() {
     return {
       section: this.initial || 'sources',
-      mode: 'game', gamePath: '', unpackerExe: '', csvDir: '',
+      gamePath: '',
       srcSt: {}, srcError: '', srcSaved: '', srcSaving: false,
       syncJob: null, syncTimer: null,
       provider: 'gemini', geminiKey: '', openrouterKey: '', openrouterModel: '',
@@ -75,10 +75,7 @@ export default {
       try {
         const s = await api.settings();
         this.srcSt = s;
-        this.mode = s.mode || 'game';
         if (s.gamePath) this.gamePath = s.gamePath;
-        if (s.unpackerExe) this.unpackerExe = s.unpackerExe;
-        if (s.csvDir) this.csvDir = s.csvDir;
       } catch (e) {
         this.srcError = e.message;
       }
@@ -88,8 +85,7 @@ export default {
       try {
         const d = await api.detectSettings();
         if (d.gamePath) this.gamePath = d.gamePath;
-        if (d.unpackerExe) this.unpackerExe = d.unpackerExe;
-        if (!d.gamePath && !d.unpackerExe) this.srcError = 'Ничего не найдено — укажите пути вручную';
+        else this.srcError = 'Игра не найдена — укажите путь вручную';
       } catch (e) {
         this.srcError = e.message;
       }
@@ -99,8 +95,7 @@ export default {
       this.srcSaved = '';
       this.srcSaving = true;
       try {
-        this.srcSt = await api.saveSettings({mode: this.mode, gamePath: this.gamePath.trim(),
-          unpackerExe: this.unpackerExe.trim(), csvDir: this.csvDir.trim()});
+        this.srcSt = await api.saveSettings({gamePath: this.gamePath.trim()});
         this.srcSaved = 'Сохранено';
         this.$emit('changed');
       } catch (e) {
@@ -261,31 +256,14 @@ export default {
           <template v-if="section==='sources'">
             <p class="set-intro">CSV генерируются из установленной игры через XivExdUnpacker и кэшируются в <span class="mono">data/sources/‹версия›/en</span>. После патча игры синхронизируйтесь заново — старые версии кэша остаются рядом.</p>
             <div class="set-field">
-              <span class="set-label">Режим</span>
-              <div class="seg" style="max-width:400px">
-                <button :class="{on:mode==='game'}" @click="mode='game'">Игра + XivExdUnpacker</button>
-                <button :class="{on:mode==='csvdir'}" @click="mode='csvdir'">Готовые CSV</button>
-              </div>
-            </div>
-            <template v-if="mode==='game'">
-              <div class="set-field">
-                <span class="set-label">Путь к игре</span>
-                <div class="set-row"><input class="grow" v-model="gamePath" placeholder="C:/Program Files (x86)/Steam/steamapps/common/FINAL FANTASY XIV Online"><button class="subtle" @click="detect">Найти</button></div>
-                <div class="set-hint">Версия: {{srcSt.gameVersion||'—'}}</div>
-              </div>
-              <div class="set-field">
-                <span class="set-label">XivExdUnpacker.exe</span>
-                <input v-model="unpackerExe" class="set-control" placeholder="C:/Tools/XivExdUnpacker/XivExdUnpacker.exe">
-              </div>
-            </template>
-            <div v-else class="set-field">
-              <span class="set-label">Каталог CSV</span>
-              <input v-model="csvDir" class="set-control" placeholder="каталог с готовыми CSV">
+              <span class="set-label">Путь к игре</span>
+              <div class="set-row"><input class="grow" v-model="gamePath" placeholder="C:/Program Files (x86)/Steam/steamapps/common/FINAL FANTASY XIV Online"><button class="subtle" @click="detect">Найти</button></div>
+              <div class="set-hint">Версия: {{srcSt.gameVersion||'—'}}</div>
             </div>
             <div class="set-hint">Активный корень: <span class="mono">{{srcSt.activeRoot||'—'}}</span></div>
             <div v-if="srcError" class="form-error">{{srcError}}</div>
             <div v-else-if="srcSaved" class="set-ok">{{srcSaved}}</div>
-            <div class="set-actions"><button class="primary" @click="srcSave" :disabled="srcSaving">Сохранить</button><button v-if="mode==='game'" @click="runSync" :disabled="syncRunning">Синхронизировать</button></div>
+            <div class="set-actions"><button class="primary" @click="srcSave" :disabled="srcSaving">Сохранить</button><button @click="runSync" :disabled="syncRunning">Синхронизировать</button></div>
             <div v-if="syncJob" class="set-field">
               <div class="set-hint">Синхронизация: {{syncRunning?'выполняется…':syncJob.status}}</div>
               <pre ref="syncBox" class="log" style="max-height:220px;white-space:pre-wrap;margin-top:6px">{{syncTail}}</pre>
