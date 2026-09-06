@@ -20,7 +20,21 @@ public class StartupLink implements ApplicationListener<ApplicationReadyEvent> {
 
     @Override
     public void onApplicationEvent(ApplicationReadyEvent event) {
-        log.info("Откройте в браузере: {}", url(environment.getProperty("local.server.port")));
+        String link = url(environment.getProperty("local.server.port"));
+        log.info("Откройте в браузере: {}", link);
+        if (System.getProperty("jpackage.app-path") != null) {
+            openBrowser(link);
+        }
+    }
+
+    public static void openBrowser(String link) {
+        try {
+            if (java.awt.Desktop.isDesktopSupported()) {
+                java.awt.Desktop.getDesktop().browse(new java.net.URI(link));
+            }
+        } catch (Exception e) {
+            log.warn("Не открыт браузер: {}", e.getMessage());
+        }
     }
 
     static String url(String port) {

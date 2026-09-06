@@ -64,8 +64,8 @@ jobs:
         run: |
           $tag = $env:GITHUB_REF_NAME.TrimStart('v')
           jpackage --type msi --dest installer --name HarmoniaSuite --vendor AngelicaProject `
-            --app-version $tag --win-per-user-install --win-shortcut --win-menu `
-            --input staging --main-jar harmonia-suite.jar
+            --app-version $tag --win-per-user-install --win-shortcut --win-menu --win-menu-group AngelicaProject `
+            --icon app/src/main/dist/yuki.ico --input staging --main-jar harmonia-suite.jar
       - uses: softprops/action-gh-release@v2
         with:
           files: |
