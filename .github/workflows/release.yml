@@ -35,10 +35,11 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force toolchain-dl | Out-Null
           Invoke-WebRequest -Uri 'https://api.adoptium.net/v3/binary/latest/21/ga/windows/x64/jdk/hotspot/normal/eclipse' -OutFile toolchain-dl/jdk.zip
-          gh release download -R git-for-windows/git -p 'MinGit-*-64-bit.zip' -D toolchain-dl
+          $mingit = gh release view -R git-for-windows/git --json assets -q '.assets[].name' | Where-Object { $_ -like 'MinGit-*-64-bit.zip' -and $_ -notlike '*busybox*' } | Select-Object -First 1
+          gh release download -R git-for-windows/git -p $mingit -D toolchain-dl
           New-Item -ItemType Directory -Force staging/toolchain/jdk, staging/toolchain/git | Out-Null
           Expand-Archive toolchain-dl/jdk.zip staging/toolchain/jdk
-          Expand-Archive toolchain-dl/MinGit-*-64-bit.zip staging/toolchain/git
+          Expand-Archive "toolchain-dl/$mingit" staging/toolchain/git
       - run: choco install wixtoolset --version=3.14.1 -y
       - run: .\mvnw.cmd -B -q -DskipTests package -Dapp.commit=$env:GITHUB_SHA
         working-directory: app

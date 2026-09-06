@@ -107,7 +107,9 @@ public class UpdateService {
         }
         for (Map<String, String> asset : assets) {
             String name = asset.get("name");
-            if (name != null && name.startsWith("MinGit-") && name.endsWith("64-bit.zip")) {
+            String lower = name == null ? "" : name.toLowerCase();
+            if (name != null && name.startsWith("MinGit-") && lower.endsWith("64-bit.zip")
+                    && !lower.contains("busybox")) {
                 return asset.get("browser_download_url");
             }
         }

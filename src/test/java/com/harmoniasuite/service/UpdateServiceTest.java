@@ -56,6 +56,7 @@ class UpdateServiceTest {
     @DisplayName("MinGit выбирается из ассетов релиза")
     void picksMinGitAsset() {
         assertEquals("https://example.com/m.zip", UpdateService.pickMinGitUrl(List.of(
+                Map.of("name", "MinGit-2.51.0-busybox-64-bit.zip", "browser_download_url", "https://example.com/bb.zip"),
                 Map.of("name", "Git-2.51.0-64-bit.exe", "browser_download_url", "https://example.com/g.exe"),
                 Map.of("name", "MinGit-2.51.0-64-bit.zip", "browser_download_url", "https://example.com/m.zip"))));
         assertEquals(null, UpdateService.pickMinGitUrl(List.of(
