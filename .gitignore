@@ -16,3 +16,4 @@ data/
 projects/
 *.db*
 node_modules/
+**/.hermes-tmp.*
