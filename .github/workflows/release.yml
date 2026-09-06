@@ -40,7 +40,13 @@ jobs:
           New-Item -ItemType Directory -Force staging/toolchain/jdk, staging/toolchain/git | Out-Null
           Expand-Archive toolchain-dl/jdk.zip staging/toolchain/jdk
           Expand-Archive "toolchain-dl/$mingit" staging/toolchain/git
-      - run: choco install wixtoolset --version=3.14.1 -y
+      - name: Ensure WiX
+        shell: pwsh
+        run: |
+          if (-not (Get-Command light.exe -ErrorAction SilentlyContinue)) {
+            choco install wixtoolset -y
+            "C:\Program Files (x86)\WiX Toolset v3.14\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
+          }
       - run: .\mvnw.cmd -B -q -DskipTests package -Dapp.commit=$env:GITHUB_SHA
         working-directory: app
       - name: Stage jpackage input
