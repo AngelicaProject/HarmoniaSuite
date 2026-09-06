@@ -667,3 +667,10 @@ input.invalid,textarea.invalid{border-color:var(--danger)}
 .tree-phrase.flash{animation:revealFlash 2.2s ease-in-out 1;border-radius:8px}
 .ft-cell.flash{animation:revealFlash 2.2s ease-in-out 1}
 @keyframes revealFlash{0%,100%{filter:brightness(1)}25%{filter:brightness(1.55)}50%{filter:brightness(1)}75%{filter:brightness(1.55)}}
+
+/* ---------- Self-update ---------- */
+.sb-warn{color:var(--warning)}
+.upd-modal{width:460px;max-width:94vw}
+.upd-title{margin:0 0 6px;font-size:17px;font-weight:750}
+.upd-sec{margin:12px 0 6px;font-size:11px;font-weight:700;letter-spacing:.07em;color:var(--head)}
+.upd-list{margin:0;padding-left:18px;font-size:13px;display:flex;flex-direction:column;gap:3px}

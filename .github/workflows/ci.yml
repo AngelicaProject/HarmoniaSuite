@@ -38,7 +38,7 @@ jobs:
           distribution: temurin
           java-version: '21'
           cache: maven
-      - run: ./mvnw -B -q -DskipTests package
+      - run: ./mvnw -B -q -DskipTests package -Dapp.commit=$GITHUB_SHA
       - uses: actions/upload-artifact@v4
         with:
           name: harmonia-suite-dist

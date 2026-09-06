@@ -300,10 +300,31 @@ public class SourceService {
         return null;
     }
 
+    private static List<String> bundledUnpacker() {
+        try {
+            if (System.getProperty("java.class.path", "").contains("target/classes")) {
+                return List.of();
+            }
+            Path jarDir = Paths.get(SourceService.class.getProtectionDomain()
+                    .getCodeSource().getLocation().toURI()).getParent();
+            Path exe = jarDir.resolve("unpacker").resolve("XivExdUnpacker.exe");
+            if (Files.isRegularFile(exe)) {
+                return List.of(exe.toString());
+            }
+        } catch (Exception ignored) {
+        }
+        return List.of();
+    }
+
     private String detectUnpackerExe() {
         String configured = unpackerExe();
         if (isRegularFile(configured)) {
             return configured;
+        }
+        for (String candidate : bundledUnpacker()) {
+            if (isRegularFile(candidate)) {
+                return candidate;
+            }
         }
         for (String candidate : UNPACKER_CANDIDATES) {
             if (isRegularFile(candidate)) {

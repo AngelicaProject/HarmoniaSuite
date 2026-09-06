@@ -54,7 +54,7 @@ public class JobService {
                 .filter(h -> h.action().equals(request.action()))
                 .findFirst()
                 .orElseThrow(() -> new IllegalArgumentException("unknown action"));
-        if ("sync-sources".equals(request.action())) {
+        if ("sync-sources".equals(request.action()) || "update".equals(request.action())) {
             return launch(handler, request, new JobPaths(null, null, workspace.root(), null));
         }
         if (request.projectId() == null) {

@@ -54,6 +54,7 @@ public class HarmoniaProperties {
     public static class App {
         private String version = "dev";
         private String buildTime = "";
+        private String commit = "";
 
         public String getVersion() {
             return version;
@@ -69,6 +70,14 @@ public class HarmoniaProperties {
 
         public void setBuildTime(String buildTime) {
             this.buildTime = buildTime;
+        }
+
+        public String getCommit() {
+            return commit;
+        }
+
+        public void setCommit(String commit) {
+            this.commit = commit;
         }
     }
 

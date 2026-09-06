@@ -2,6 +2,7 @@ package com.harmoniasuite.controller;
 
 import com.harmoniasuite.config.AppVersion;
 import com.harmoniasuite.config.HarmoniaProperties;
+import com.harmoniasuite.service.UpdateService;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -23,6 +24,10 @@ public class VersionController {
         String built = AppVersion.resolve(properties.getApp().getBuildTime(), "");
         if (!built.isEmpty()) {
             map.put("buildTime", built);
+        }
+        String commit = UpdateService.resolveCommit(properties.getApp().getCommit());
+        if (!commit.isEmpty()) {
+            map.put("commit", commit);
         }
         return map;
     }

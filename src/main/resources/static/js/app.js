@@ -1,5 +1,5 @@
 import {computed, createApp, nextTick, onMounted, ref, shallowRef, watch} from 'vue';
-import {api} from './api.js?v=29';
+import {api} from './api.js?v=30';
 import Picker from './components/Picker.vue.js?v=17';
 import Editor from './components/Editor.vue.js?v=46';
 import Settings from './components/Settings.vue.js?v=11';
@@ -188,6 +188,35 @@ const App = {
             }
         }
         loadGeminiStatus();
+        const upd = ref({supported: false, mode: '', version: '', needsToolchain: false, currentSha: '', latestSha: '', behindBy: 0, subjects: [], updateAvailable: false});
+        const updModal = ref(false);
+        const updRestarting = ref(false);
+        async function loadUpdateStatus() {
+            try {
+                upd.value = await api.updateStatus();
+            } catch (e) {
+            }
+        }
+        const updLabel = computed(() => {
+            const u = upd.value || {};
+            const sha = (u.currentSha || '').slice(0, 7);
+            if (u.updateAvailable) return 'v' + (u.version || 'dev') + ' (+' + u.behindBy + ') ' + sha;
+            return 'v' + (u.version || 'dev') + ' · ' + sha;
+        });
+        const updTitle = computed(() => {
+            const u = upd.value || {};
+            if (!u.supported) return 'Обновления недоступны';
+            if (!u.updateAvailable) return 'Актуально\n' + (u.currentSha || '');
+            return 'Текущий: ' + (u.currentSha || '') + '\nНа main: ' + (u.latestSha || '');
+        });
+        async function runUpdate() {
+            updModal.value = false;
+            try {
+                startJob(await api.runUpdate());
+            } catch (e) {
+                showToast(e.message);
+            }
+        }
         const aiTitle = computed(() => {
             const g = geminiStatus.value || {};
             const gl = g.configured ? ('ключ задан' + (g.model ? ', ' + g.model : '')) : 'без ключа';
@@ -688,7 +717,9 @@ const App = {
                                 logText.value += '\nСборка не завершена (' + d.status + ') — архив не скачан';
                             }
                         }
-                        if (d.action === 'sync-sources') {
+                        if (d.action === 'update') {
+                            setTimeout(loadUpdateStatus, 400);
+                        } else if (d.action === 'sync-sources') {
                             setTimeout(async () => {
                                 await loadSourceStatus();
                                 if (projectId.value) loadProject();
@@ -707,6 +738,7 @@ const App = {
                         }
                     }
                 } catch (e) {
+                    if (job.value && job.value.action === 'update') onUpdateGone();
                     if (++fails >= 10) {
                         clearInterval(jobTimer);
                         jobTimer = null;
@@ -716,7 +748,26 @@ const App = {
             }, 700);
         }
 
+        let updWatch = null;
+        function onUpdateGone() {
+            updRestarting.value = true;
+            if (updWatch) return;
+            updWatch = setInterval(async () => {
+                try {
+                    await api.version();
+                    clearInterval(updWatch);
+                    updWatch = null;
+                    location.reload();
+                } catch (e) {
+                }
+            }, 3000);
+        }
         function startJob(d) {
+            updRestarting.value = false;
+            if (updWatch) {
+                clearInterval(updWatch);
+                updWatch = null;
+            }
             job.value = {status: d.status || 'running', action: d.action, output: ''};
             pollJob(d.id);
         }
@@ -1403,6 +1454,8 @@ const App = {
             document.addEventListener('click', closeMenusOnDocClick, true);
             document.addEventListener('contextmenu', onGlobalCtx);
             loadSourceStatus();
+            loadUpdateStatus();
+            setInterval(loadUpdateStatus, 3600000);
             if (projectId.value && !showPicker.value) {
                 loadProject().then(scanSource);
             }
@@ -1564,6 +1617,13 @@ const App = {
             loadSourceStatus,
             loadGeminiStatus,
             aiTitle,
+            upd,
+            updModal,
+            updRestarting,
+            updLabel,
+            updTitle,
+            loadUpdateStatus,
+            runUpdate,
             onSave,
             onConfirm,
             scanSource,
@@ -1746,10 +1806,11 @@ const App = {
   <footer class="statusbar" v-if="!showPicker">
     <span class="sb-item sb-proj" :title="projectId">{{projectName||projectId||'—'}}</span>
     <span class="sb-item sb-badge" @click="gotoView('summary')" title="Сводка">{{badge}}</span>
-    <span v-if="job" class="sb-item">{{ {extract:'Обновление',gemini:'Gemini',openrouter:'OpenRouter',merge:'Сборка','sync-sources':'Синхронизация'}[job.action]||job.action }}: {{job.status==='running'?'…':job.status==='queued'?'в очереди':job.status }}</span>
+    <span v-if="job" class="sb-item">{{ {extract:'Обновление',gemini:'Gemini',openrouter:'OpenRouter',merge:'Сборка','sync-sources':'Синхронизация',update:'Апдейт'}[job.action]||job.action }}: {{job.status==='running'?'…':job.status==='queued'?'в очереди':job.status }}</span>
     <span class="sb-item" @click="openSettings('sources')" :title="(sourceStatus.activeRoot||'')+' — настроить источники'"><span class="status-dot" :class="sourceStatus.ready?'on':'off'"></span>{{sourceLabel}}</span>
     <span class="grow"></span>
     <span class="sb-item sb-ai" @click="openSettings('ai')" :title="aiTitle"><span class="status-dot" :class="geminiStatus.configured?'on':'off'"></span>Gemini<span class="sb-sep">·</span><span class="status-dot" :class="geminiStatus.openrouterConfigured?'on':'off'"></span>OpenRouter</span>
+    <span v-if="upd.supported||upd.version" class="sb-item" :class="{'sb-warn':upd.updateAvailable}" @click="upd.updateAvailable||upd.needsToolchain?updModal=true:loadUpdateStatus()" :title="updTitle">{{updLabel}}</span>
   </footer>
 
   <div v-if="paletteOpen" class="overlay" @click.self="paletteOpen=false">
@@ -1766,6 +1827,20 @@ const App = {
   <div v-if="ctxZone" class="dz-menu" style="position:fixed;z-index:301;bottom:auto" :style="{left:ctxZone.x+'px',top:ctxZone.y+'px'}"><div v-if="ctxZone.view" class="dz-menu-i" @click="hideWidget()">Скрыть виджет</div><div v-else class="dz-menu-i" @click="hidePanel(ctxZone.zone)">Скрыть панель</div></div>
   <div v-if="addMenu" class="dz-menu" style="position:fixed;z-index:301;bottom:auto" :style="{left:addMenu.x+'px',top:addMenu.y+'px'}"><div class="dz-menu-h">Добавить панель</div><div v-if="!hiddenViews.length" class="muted" style="padding:4px 10px;font-size:12px">Все панели размещены</div><div v-for="v in hiddenViews" :key="v" class="dz-menu-i" @click="addView(addMenu.zone,v);addMenu=null"><span class="dz-ic" v-html="VIEWS[v].icon"></span>{{VIEWS[v].title}}</div><div class="dz-menu-i dim" @click="resetLayout();addMenu=null">Сбросить раскладку</div></div>
   <div v-if="ctxMenu" class="dz-menu" style="position:fixed;z-index:302;bottom:auto" :style="{left:ctxMenu.x+'px',top:ctxMenu.y+'px'}"><div v-for="(it,i) in ctxMenu.items" :key="i" class="dz-menu-i" :class="{sel:it.sel}" @click="runCtx(it)">{{it.t}}</div></div>
+  <div v-if="updModal" class="overlay" @click.self="updModal=false">
+    <div class="modal upd-modal">
+      <div class="upd-title">Доступно новое обновление</div>
+      <div v-if="upd.needsToolchain" class="muted">Для обновления докачается тулчейн (JDK + git, ~250 МБ, один раз)</div>
+      <div v-if="!upd.needsToolchain" class="muted">v{{upd.version}} · {{(upd.currentSha||'').slice(0,7)}} → {{(upd.latestSha||'').slice(0,7)}} · коммитов: {{upd.behindBy}}</div>
+      <template v-if="!upd.needsToolchain">
+      <div class="upd-sec">IN THIS UPDATE</div>
+      <ul class="upd-list"><li v-for="(s,i) in (upd.subjects||[])" :key="i">{{s}}</li></ul>
+      <div v-if="upd.behindBy>(upd.subjects||[]).length" class="muted">+ ещё {{upd.behindBy-(upd.subjects||[]).length}} изменений</div>
+      </template>
+      <div class="set-actions"><button class="primary" @click="runUpdate">Обновить сейчас</button><button class="ghost" @click="updModal=false">Возможно позже</button></div>
+    </div>
+  </div>
+  <div v-if="updRestarting" class="overlay"><div class="modal upd-modal"><div class="upd-title">Перезапуск…</div><div class="muted">Новая версия поднимается — страница обновится сама</div></div></div>
   <div v-if="toast" class="toast">{{toast}}</div>`
 };
 const app = createApp(App);

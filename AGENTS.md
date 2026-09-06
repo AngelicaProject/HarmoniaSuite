@@ -11,18 +11,18 @@
 ## Tests & Style
 
 - Unit tests under `src/test/java` (JUnit 5, no Spring context). Every test carries a Russian `@DisplayName`; new tests follow. Fixtures use abstract data only (`example.com`, `pack-one`, `Author One`) — never real vendor, author, or customer names. Code comments minimal, only the non-obvious. No lint, typecheck, or pre-commit configuration.
-- Git: branch `main`, `core.autocrlf=true`. Ignored: `data/` (CSV cache + SQLite), `projects/` (work state), `target/`, `.idea/`. Releases are `vX.Y.Z` tags (see §Release). Commits follow Conventional Commits: `type(scope): subject` (`feat`, `fix`, `docs`, `refactor`, `test`, `chore`, `build`). Committed files stay machine-neutral: no usernames, absolute local paths, IDE versions, secrets, or prompt fragments — generic paths, `%USERPROFILE%`/env placeholders, neutral examples only. Co-authors via PR to `main` only; CI (`ci.yml`) runs tests on push/PR and builds the versioned dist on `v*` tags. Coverage: JaCoCo XML → Codecov on every CI run (report only, no gates yet). Vulns: CodeQL (`codeql.yml`, push/PR + weekly) + Dependabot (maven, github-actions, weekly PRs).
+- Git: branch `main`, `core.autocrlf=true`. Ignored: `data/` (CSV cache + SQLite), `projects/` (work state), `target/`, `.idea/`. Releases are `vX.Y.Z` tags (see §Release). Commits follow Conventional Commits: `type(scope): subject` (`feat`, `fix`, `docs`, `refactor`, `test`, `chore`, `build`). Committed files stay machine-neutral: no usernames, absolute local paths, IDE versions, secrets, or prompt fragments — generic paths, `%USERPROFILE%`/env placeholders, neutral examples only. Co-authors via PR to `main` only; CI (`ci.yml`) runs tests on push/PR and builds the versioned dist on `v*` tags; `release.yml` builds the stable MSI on tags and the rolling MSI prerelease on every `main` push. New files meant for commit are staged explicitly (`git add <path>`); never leave intended files untracked. Coverage: JaCoCo XML → Codecov on every CI run (report only, no gates yet). Vulns: CodeQL (`codeql.yml`, push/PR + weekly) + Dependabot (maven, github-actions, weekly PRs).
 
 ## State & Sources
 
-- Game sources come from the local install via XivExdUnpacker into versioned cache `data/sources/<gameVersion>/en`. Source autodetect (`GET /api/settings/detect`): game — standard `Program Files` locations, unpacker — `source/repos/XivExdUnpacker` under `%USERPROFILE%` (Release/Debug); everything else only via settings.
-- Project state lives in SQLite (`harmonia.db-path`, default `data/harmonia.db` in the workspace; Flyway migrations in `db/migration/sqlite`, hand-written SQL via JdbcTemplate, no ORM). PostgreSQL profile (`-Dspring.profiles.active=postgres`, migrations in `db/migration/postgresql`, `PG_URL/PG_USER/PG_PASSWORD`) for real deploys.
+- Game sources come from the local install via XivExdUnpacker into versioned cache `data/sources/<gameVersion>/en`. Source autodetect (`GET /api/settings/detect`): unpacker — bundled `<jar>/unpacker/XivExdUnpacker.exe` first, then `source/repos/XivExdUnpacker` under `%USERPROFILE%` (Release/Debug); game — standard `Program Files` locations; everything else only via settings.
+- Project state lives in SQLite (`harmonia.db-path`, default `data/harmonia.db` in the workspace — workspace is the repo root in dev, `%APPDATA%/HarmoniaSuite` when installed; Flyway migrations in `db/migration/sqlite`, hand-written SQL via JdbcTemplate, no ORM). PostgreSQL profile (`-Dspring.profiles.active=postgres`, migrations in `db/migration/postgresql`, `PG_URL/PG_USER/PG_PASSWORD`) for real deploys.
 - `projects/<name>/` keeps only `exported_csv/`. No `project.json` anywhere (no import, no fallback).
 
 ## Jobs, Status, Version
 
-- Job sequence `extract` -> `gemini` (optional) -> `merge`; async via `POST /api/jobs` (`RunRequest{action,projectId:UUID,root,output,files}`), polled via `GET /api/jobs/{id}` (`JobDto{id,action,status,output,code}`). `DELETE /api/jobs/{id}` cancels cooperatively (checked between batches, in-flight HTTP aborts without retry).
-- `GET /api/status` → `{geminiConfigured, geminiModel, ...}` for the UI indicator. `GET /api/version` → `{version, buildTime}` (`dev` = non-packaged run).
+- Job sequence `extract` -> `gemini` (optional) -> `merge`; async via `POST /api/jobs` (`RunRequest{action,projectId:UUID,root,output,files,force,model,reasoning}`), polled via `GET /api/jobs/{id}` (`JobDto{id,action,status,output,code}`). `DELETE /api/jobs/{id}` cancels cooperatively (checked between batches, in-flight HTTP aborts without retry).
+- `GET /api/status` → `{geminiConfigured, geminiModel, ...}` for the UI indicator. `GET /api/version` → `{version, buildTime, commit}` (`dev` = non-packaged run, commit empty unless built with `-Dapp.commit=`). `GET /api/update/status` + `POST /api/update` run the self-update as an `update` job.
 
 ## API
 
@@ -35,7 +35,7 @@
 ## Frontend
 
 - Scope-based loading, never the whole table: open = `overview` + first files page; files list server-paged with server search (100 per page, need-first); per-file entries on open (`entries?file=`, cap 5000, client-side union cache); editor works on the focused file only (row-grouped cards); phrase search in the Search tab (`entries?q=`, jump by id), Ctrl+K file jump. Case-insensitive search relies on `source_lc`/`translation_lc` columns (SQLite `LOWER()` is ASCII-only).
-- Static cache-busting is manual `?v=`: bump in `index.html` and every `import ... from '...?v='` on any `js/`/`css` change. Deliberate — build-time substitution breaks IntelliJ live serving.
+- Static cache-busting is manual `?v=`: bump in `index.html` and every `import ... from '...?v='` on any `js/`/`css` change. Deliberate — build-time substitution breaks IntelliJ live serving. Self-update UI: version chip in the statusbar (check on open + hourly), Hermes-style modal, restart overlay.
 
 ## Layering & SQL
 
@@ -55,6 +55,8 @@
 ## Release
 
 - Single pom `<version>` (SemVer, dev on `*-SNAPSHOT`); dist = `harmonia-suite-<version>.zip` with `VERSION.txt`; release = `versions:set` + tag `vX.Y.Z` + `package` (README §Релиз). On future front/back split: backend keeps the pom version, frontend gets its own, contract pinned via `/api/version`.
+- Distribution (Windows): per-user MSI on `v*` tags only (`release.yml`: extractor from `AngelicaProject/HarmoniaExtractor` self-contained, Temurin 21 + MinGit bundled under `toolchain/`, repo snapshot under `src/`, WiX via choco). Installed state defaults to `%APPDATA%/HarmoniaSuite`; bundled unpacker is the first autodetect candidate.
+- Self-update (`UpdateService`, `POST /api/update` as `update` job): always from source — `git pull --ff-only` + full local `mvnw package` (toolchain: install-bundled → system → `%LOCALAPPDATA%` cache → download; dirty tree refused; auto-rollback via `reset --hard` on failure). Relaunch targets the freshly built jar (bundled runtime for the installed exe). UI: version chip (check on open + hourly) + Hermes-style modal + restart overlay.
 
 ## Goal
 
