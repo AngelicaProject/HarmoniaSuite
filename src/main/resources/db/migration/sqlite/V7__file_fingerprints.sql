@@ -1,0 +1,2 @@
+ALTER TABLE source_files ADD COLUMN content_size INTEGER NOT NULL DEFAULT -1;
+ALTER TABLE source_files ADD COLUMN content_hash TEXT NOT NULL DEFAULT '';

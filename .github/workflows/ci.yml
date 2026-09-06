@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - run: ./mvnw -B -q test
+      - run: node --test tools/test-tags.mjs
+      - uses: codecov/codecov-action@v5
+        with:
+          use_oidc: true
+          files: target/site/jacoco/jacoco.xml
+          fail_ci_if_error: false
+
+  dist:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - run: ./mvnw -B -q -DskipTests package
+      - uses: actions/upload-artifact@v4
+        with:
+          name: harmonia-suite-dist
+          path: target/harmonia-suite-*.zip

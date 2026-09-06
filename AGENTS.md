@@ -1,0 +1,87 @@
+# Agent Notes
+
+## Stack & Run
+
+- Single Spring Boot 3.4.3 app under `src/main/java/com/harmoniasuite`; Java 21, Maven wrapper (`mvnw.cmd` on Windows).
+- Run commands from the repo root: `harmonia.workspace` defaults to the cwd, so the cwd defines all relative data paths.
+- Build/verify: `./mvnw.cmd -q -DskipTests compile`, `./mvnw.cmd test`, `./mvnw.cmd package`.
+- git-bash on Windows: export a JDK 21+ `JAVA_HOME` plus native temp dirs (`TMPDIR`/`TMP`/`TEMP` as plain Windows paths, unset lowercase `tmp`); the wrapper dist is pre-seeded under `.m2/wrapper/dists`, no download needed. Known-good `JAVA_HOME`: IntelliJ JBR 21+ (`<ide-home>/jbr`).
+- Local UI via `./mvnw.cmd spring-boot:run`; binds `127.0.0.1:8765`. The user normally runs the app from IntelliJ IDEA — a stale instance may already hold port 8765; probe the live instance before starting a second one. Run the project only via IntelliJ IDEA.
+
+## Tests & Style
+
+- Unit tests under `src/test/java` (JUnit 5, no Spring context). Every test carries a Russian `@DisplayName`; new tests follow. Fixtures use abstract data only (`example.com`, `pack-one`, `Author One`) — never real vendor, author, or customer names. Code comments minimal, only the non-obvious. No lint, typecheck, or pre-commit configuration.
+- Git: branch `main`, `core.autocrlf=true`. Ignored: `data/` (CSV cache + SQLite), `projects/` (work state), `target/`, `.idea/`. Releases are `vX.Y.Z` tags (see §Release). Commits follow Conventional Commits: `type(scope): subject` (`feat`, `fix`, `docs`, `refactor`, `test`, `chore`, `build`). Committed files stay machine-neutral: no usernames, absolute local paths, IDE versions, secrets, or prompt fragments — generic paths, `%USERPROFILE%`/env placeholders, neutral examples only. Co-authors via PR to `main` only; CI (`ci.yml`) runs tests on push/PR and builds the versioned dist on `v*` tags. Coverage: JaCoCo XML → Codecov on every CI run (report only, no gates yet). Vulns: CodeQL (`codeql.yml`, push/PR + weekly) + Dependabot (maven, github-actions, weekly PRs).
+
+## State & Sources
+
+- Game sources come from the local install via XivExdUnpacker into versioned cache `data/sources/<gameVersion>/en`. Source autodetect (`GET /api/settings/detect`): game — standard `Program Files` locations, unpacker — `source/repos/XivExdUnpacker` under `%USERPROFILE%` (Release/Debug); everything else only via settings.
+- Project state lives in SQLite (`harmonia.db-path`, default `data/harmonia.db` in the workspace; Flyway migrations in `db/migration/sqlite`, hand-written SQL via JdbcTemplate, no ORM). PostgreSQL profile (`-Dspring.profiles.active=postgres`, migrations in `db/migration/postgresql`, `PG_URL/PG_USER/PG_PASSWORD`) for real deploys.
+- `projects/<name>/` keeps only `exported_csv/`. No `project.json` anywhere (no import, no fallback).
+
+## Jobs, Status, Version
+
+- Job sequence `extract` -> `gemini` (optional) -> `merge`; async via `POST /api/jobs` (`RunRequest{action,projectId:UUID,root,output,files}`), polled via `GET /api/jobs/{id}` (`JobDto{id,action,status,output,code}`). `DELETE /api/jobs/{id}` cancels cooperatively (checked between batches, in-flight HTTP aborts without retry).
+- `GET /api/status` → `{geminiConfigured, geminiModel, ...}` for the UI indicator. `GET /api/version` → `{version, buildTime}` (`dev` = non-packaged run).
+
+## API
+
+- Project-scoped REST under `/api/projects/{projectId}`. Project identity: `name` is a human-readable unique label (directory `projects/<name>/`, pack fallback id); the ONLY lookup key is the UUID `id` — controllers take `UUID` (malformed → 400 on conversion, JSON `project_id` is `UUID` too), services and repositories take `UUID` throughout (no `String` ids, no `uuidOf` inside); `findById` is existence + row fetch only (unknown id/entry → 404 `HarmoniaSuiteNotFoundException`; validation errors → 400 `HarmoniaSuiteBadRequestException`). No slug, no path-based lookup.
+- `GET /api/projects` → `{projects:[{id,name,...}]}`, `POST` (201, `{id,name}`), `DELETE /api/projects/{projectId}`, `GET .../{projectId}/overview` (meta+summary+selection, 3 cheap queries), `GET .../{projectId}/files/tree`, `GET .../{projectId}/translate/pending-by-file`, `GET .../{projectId}/files` (paged: `q,hideReady,readyOnly,offset,limit`, default 100, max 500, need-first order; `{files,total,offset,limit,needFiles,readyFiles,summary}` in one pass over `source_files` via `COUNT/SUM OVER()`; `total/done` materialized in `source_files`, recounted at write points: full `recountFiles` on extract, touched-only `recountEntries` on Gemini/manual saves, delta `updateTranslated` (no `refreshStats`) on manual save).
+- `GET .../entries` (always paged: `file,q,status(CSV),rowKey,untranslated,offset,limit`; default 80, max 500, 5000 in file scope; exact status match), `GET .../entries/{entryId}` (UUID only), `GET .../entries/by-cell/{cellId}` (tab restore), `PATCH .../entries/{entryId}` (UUID only, frontend sends `EntryDto.uuid`).
+- `GET/PUT .../pack`; `GET .../exports/csv?file=` + `/exports/zip` + `/exports/manifest` + `/exports` (built-CSV listing + manifest flag).
+- Filesystem browse (pre-extract source picking, raw CSV preview): `GET /api/source/files?root=`, `GET /api/source/preview?root=&file=&full=`; no server-side file-content search — search is DB-backed via `entries?q=`.
+
+## Frontend
+
+- Scope-based loading, never the whole table: open = `overview` + first files page; files list server-paged with server search (100 per page, need-first); per-file entries on open (`entries?file=`, cap 5000, client-side union cache); editor works on the focused file only (row-grouped cards); phrase search in the Search tab (`entries?q=`, jump by id), Ctrl+K file jump. Case-insensitive search relies on `source_lc`/`translation_lc` columns (SQLite `LOWER()` is ASCII-only).
+- Static cache-busting is manual `?v=`: bump in `index.html` and every `import ... from '...?v='` on any `js/`/`css` change. Deliberate — build-time substitution breaks IntelliJ live serving.
+
+## Layering & SQL
+
+- Controllers are thin and never touch repositories — only services do. Endpoints return DTO records (`dto` package) mapped from entities with MapStruct (`mapping` package, `componentModel=spring`); custom `ObjectMapper` bean disables Boot's `spring.jackson.*` defaults, so DTOs carry explicit `@JsonInclude(NON_NULL)`.
+- Every statement is a named `private static final String` constant at the top of its repository (uppercase keywords, one clause per line, literal table names, no inline concat except `COLUMNS` composition and `UPDATE ... SET` prefix + `SqlBuilder` filter text); dynamic filters only through `SqlBuilder` (`where/and/andIn/orderBy/limitOffset`) with bind params — no value interpolation, ever. Round trips are consolidated where it pays: `listWithStats` (projects JOIN stats, no N+1), `pageWithTotal` (`COUNT(*) OVER()`), `refreshStats` (one pass over entries + file counter), `batchWriteTranslations` (Gemini batch = 2 queries instead of 2N), `filesWithStats` (`source_files` only + window counters, no entries JOIN), `findByKey` (uuid → PK lookup, else cell id → UNIQUE lookup, no `OR`); `touch()` removed — `updated_at` changes only with its own table's UPDATE; long writes go through one programmatic transaction (`TransactionTemplate` — self-invocation bypasses the proxy, so `@Transactional` on internal methods does nothing); pack loads via 4 targeted queries deliberately (joining three one-to-many relations would cartesian-explode).
+
+## CSV, Entries, AI
+
+- CSV extraction expects the FFXIV layout from `CsvSupport`: row 4 (zero-based index 3) declares columns, translatable data starts at row 5 (zero-based index 4); only `String` columns with letter-containing, non-`TEXT_*` cells are extracted. Merge validates row/column structure before writing.
+- Entry ids are cell-addressed (`EntryIds.ofCell`: `c_` + first 16 hex of SHA-256 over `file\0rowKey\0columnIndex`); every String cell is its own entry. Never send them to the LLM. Record identity is DB-generated UUIDv6 (`uuid6()` SQL function in PostgreSQL, custom per-connection `uuid6()` in SQLite via `db/SqliteDataSources`; Java never mints ids, `RETURNING id` where needed); `cell_id` stays a per-project UNIQUE business key (stable across re-extracts: `syncSources` parses outside the transaction, upserts in one write transaction, deletes only stale rows by run timestamp — uuids survive game patches). API `id` params accept uuid or cell id (`findByKey`).
+- Gemini key resolves as UI settings (`ai.gemini.api-key`, no restart) over `GEMINI_API_KEY` env (IDEA run-config); OpenRouter mirrors it (`ai.openrouter.api-key` / `OPENROUTER_API_KEY`, default model/reasoning in config). Keys live in env vars or ignored local config, never in tracked files. Session reasoning override (`RunRequest.reasoning`: default/off/low/medium/high); thinking-model traces go to the log as `[REASONING]` lines (excerpted, shown separately in UI).
+- Gemini translator (free tier, default `gemini-3.5-flash-lite`): model per run comes from the tab (`RunRequest.model`, allowlist `harmonia.gemini.models`, default `harmonia.gemini.model`); token budgets shared across models (`max-input-chars`/`max-output-tokens`); request `[{i,s}]`, response `[{i,t}]` (tolerates `translation`/`index`/`id` keys and bare string arrays as positional fallback); echoes (translation == source) rejected. Greedy batches in `AbstractBatchTranslator.partition` over input chars (default 500000) and estimated output (default 65536, filled to 80% via self-calibrating `estimateOutTokens`); `MAX_TOKENS`/mismatch splits the batch recursively; deterministic echoes (temperature 0) become `no_translation_required` without retries; model tags are not validated (fixed at review). `request-delay-ms` default 5000 (~12 RPM under the 15 RPM free cap, pause before every request); `usageMetadata` accumulated, logged every 10 requests plus a final total. OpenRouter differs: no ceilings (`Integer.MAX_VALUE` — batch size set by slow-start window 40→2000, `LlmProvider.maxBatchItems/noteBatchOk`), `/models` catalog only for the model list and reasoning flag; 8 consecutive errors abort the run; output cap measured per route (`noteTruncated`/`noteRouteChanged`), 429s honored via `LlmHttp.waitSeconds`.
+- Game-patch workflow: re-`extract` reconciles by cell id (silent carry, `stale` when source text changed but the column name matches) with fallback carry by identical text (same file first, then anywhere — copied once, diverges after); report line `Перенесено/устарело/непереведённых`. `stale` is excluded from translated counts everywhere but included in editor "needs work" navigation. `merge` skips `stale`, verifies the target column is still `String` and the cell still equals the entry source, then `validateStructure`; mismatches are skipped with per-file errors, never silently miswritten.
+- Entry statuses: `untranslated`, `machine_translated`, `no_translation_required` (set by human or machine on echo), `stale`, `needs_human_review`, `approved` (plus legacy `proofread` in read-only labels and as a read-filter value; writes reject unknown statuses with 400).
+- Raw source browsing (`/api/source/*`) lists CSV names via filesystem walk; search and progress are DB-backed, no ripgrep dependency.
+
+## Release
+
+- Single pom `<version>` (SemVer, dev on `*-SNAPSHOT`); dist = `harmonia-suite-<version>.zip` with `VERSION.txt`; release = `versions:set` + tag `vX.Y.Z` + `package` (README §Релиз). On future front/back split: backend keeps the pom version, frontend gets its own, contract pinned via `/api/version`.
+
+## Goal
+
+Generate CSV and ZIP for import into Harmonia (sibling `Harmonia` checkout, Dalamud plugin `HarmoniaEngine`). Harmonia imports only translation packs: `manifest.json` + Lumina-EXD CSV packed in a ZIP. A flat ZIP of bare CSVs without a manifest is rejected.
+
+## Harmonia Import Contract (verified against sources)
+
+- Installed pack layout: `resources/packs/<pack-id>/manifest.json` + `*.csv` beside it (`TranslationPackStore.PacksDir`, `ManifestFileName`). Files outside `packs/` are ignored; a pack without a manifest is invisible (`Flat_resources_without_manifest_are_ignored`).
+- Folder name must equal `manifest.id`, else the pack is invalid (`Folder_name_must_match_manifest_id`).
+- `TranslationPackImporter.TryImportZip` accepts a ZIP in two shapes:
+  1. `manifest.json` at ZIP root + CSVs beside it;
+  2. a single top-level folder (`bundle-1.0/manifest.json`, `bundle-1.0/*.csv`) — installed under the name from `manifest.id`, not the folder name.
+  Without `manifest.json` the import fails with a `manifest.json` error and installs nothing. Zip-slip (`../evil.csv`) is rejected without writing.
+- `manifest.json` (`TranslationPackManifest`, `CurrentManifestVersion = 1`):
+  - required: `manifestVersion` = 1 (future versions rejected), `id` — slug (letters/digits/`-`/`_` only, no spaces), `translationVersion` (non-empty), `gameVersion` (non-empty — exact `Framework.GameVersionString`, e.g. `"2026.08.11.0000.0000"`, compared without normalization), `vendor.id` + `vendor.name` (non-empty), `authors` — at least 1 with non-empty `name` (`role` is a free string, unknown roles load).
+  - optional: `compatibleGameVersions[]` (empty means `[gameVersion]`, case-insensitive, `IsCompatibleWithGame(null)` = true), `languages[]` (e.g. `["ru"]`), `title`, `description`, `changelog`, `homepage`, `license`, `minPluginVersion`, `source{feedUrl,channel,signature}`, plus any `Extra` (unknown fields preserved, parsing never fails).
+  - Minimal valid manifest reference: `TranslationPacksTests.Manifest(id, gameVersion)` in Harmonia.
+- CSV (`CsvTranslationResourceReader`, `Sep` parser with `HasHeader = false`):
+  - Lumina EXD dump, NOT `sheet,row,column,text`. Service rows by first column skipped: `key`, `#`, `offset`.
+  - A row with `Int32` in the first column declares column types; translations read only from `String` columns.
+  - Data rows: first column is rowId (`int.TryParse`, `>= 0`), otherwise skipped (`key`/`-1`/`not-an-id` ignored).
+  - A row with fewer columns than the type header throws `InvalidDataException` — column counts must match.
+  - Values are stored `\0`-terminated inside Harmonia, plain text in CSV; Lumina macros (`<settime...>`, `<if...>`) must survive verbatim.
+
+## What This Project Must Output
+
+- `merge` writes translated EXD-CSVs to `projects/<id>/exported_csv/`, preserving structure (`CsvSupport.validateStructure`: same row/column counts, first key column untouched; plus String-column type and cell-hash checks before writing). This format is already Harmonia-reader-compatible — structure unchanged, only `String` cells change.
+- A `manifest.json` per the contract above accompanies `exported_csv/`; auto-assembled on `merge` from the project pack settings (Pack tab, `GET/PUT /api/projects/{projectId}/pack`, download `GET .../exports/manifest`). ZIP (`GET .../exports/zip`) puts `manifest.json` as the first entry at archive root beside the CSVs — `TranslationPackImporter` accepts such a ZIP. ZIP with an unconfigured pack is rejected with 400 and a validation-error list.
+- Checks before claiming readiness: `exported_csv/*.csv` open in the Harmonia reader (column count = header, integer rowIds `>= 0`); `manifest.json` passes `TranslationPackManifest.TryParse`; ZIP installs via `TryImportZip`; folder name in ZIP = `manifest.id`; `compatibleGameVersions` covers the target game version.
+

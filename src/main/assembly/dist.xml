@@ -1,0 +1,26 @@
+<assembly xmlns="http://maven.apache.org/ASSEMBLY/2.2.0"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://maven.apache.org/ASSEMBLY/2.2.0 https://maven.apache.org/xsd/assembly-2.2.0.xsd">
+    <id>dist</id>
+    <formats>
+        <format>zip</format>
+    </formats>
+    <includeBaseDirectory>true</includeBaseDirectory>
+    <baseDirectory>harmonia-suite</baseDirectory>
+    <files>
+        <file>
+            <source>${project.build.directory}/${project.build.finalName}.jar</source>
+            <destName>harmonia-suite.jar</destName>
+            <fileMode>0644</fileMode>
+        </file>
+        <file>
+            <source>src/main/dist/run.cmd</source>
+            <fileMode>0644</fileMode>
+        </file>
+        <file>
+            <source>src/main/dist/VERSION.txt</source>
+            <filtered>true</filtered>
+            <fileMode>0644</fileMode>
+        </file>
+    </files>
+</assembly>

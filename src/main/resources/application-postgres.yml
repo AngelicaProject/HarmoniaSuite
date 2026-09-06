@@ -1,0 +1,7 @@
+spring:
+  datasource:
+    url: ${PG_URL:jdbc:postgresql://127.0.0.1:5432/harmonia}
+    username: ${PG_USER:harmonia}
+    password: ${PG_PASSWORD:harmonia}
+  flyway:
+    locations: classpath:db/migration/postgresql

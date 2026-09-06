@@ -1,0 +1,186 @@
+{
+ "generated": "2026-09-05T22:44:20.930Z",
+ "files": 986,
+ "tags": {
+  "br": {
+   "count": 45283,
+   "kind": "break",
+   "sample": "<br>"
+  },
+  "colortype": {
+   "count": 23199,
+   "kind": "color",
+   "sample": "<colortype(500)>"
+  },
+  "edgecolortype": {
+   "count": 23015,
+   "kind": "color",
+   "sample": "<edgecolortype(501)>"
+  },
+  "italic": {
+   "count": 12404,
+   "kind": "fmt",
+   "sample": "<italic(1)>"
+  },
+  "if": {
+   "count": 2779,
+   "kind": "logic",
+   "sample": "<if([gnum77==3],<num(t_day)>/<num(t_mon)>,<num(t_mon)>/<num(t_day)>)>"
+  },
+  "num": {
+   "count": 2576,
+   "kind": "value",
+   "sample": "<num(lnum1)>"
+  },
+  "icon2": {
+   "count": 1678,
+   "kind": "media",
+   "sample": "<icon2(10)>"
+  },
+  "string": {
+   "count": 1274,
+   "kind": "value",
+   "sample": "<string(lstr1)>"
+  },
+  "sheet": {
+   "count": 988,
+   "kind": "value",
+   "sample": "<sheet(Aetheryte,lnum1,8)>"
+  },
+  "switch": {
+   "count": 696,
+   "kind": "logic",
+   "sample": "<switch(t_hour,1,2,3,4,5,6,7,8,9,10,11,12,1,2,3,4,5,6,7,8,9,10,11)>"
+  },
+  "icon": {
+   "count": 635,
+   "kind": "media",
+   "sample": "<icon(6)>"
+  },
+  "ennoun": {
+   "count": 424,
+   "kind": "value",
+   "sample": "<ennoun(Item,2,lnum1,1,1)>"
+  },
+  "split": {
+   "count": 386,
+   "kind": "misc",
+   "sample": "<split(<string(gstr1)>, ,1)>"
+  },
+  "head": {
+   "count": 303,
+   "kind": "value",
+   "sample": "<head(<sheet(InstanceContent,lnum1,3)>)>"
+  },
+  "color": {
+   "count": 268,
+   "kind": "color",
+   "sample": "<color(4279443759)>"
+  },
+  "sec": {
+   "count": 244,
+   "kind": "value",
+   "sample": "<sec(t_min)>"
+  },
+  "kilo": {
+   "count": 233,
+   "kind": "value",
+   "sample": "<kilo(lnum1,\\,)>"
+  },
+  "key": {
+   "count": 185,
+   "kind": "misc",
+   "sample": "<key>"
+  },
+  "settime": {
+   "count": 141,
+   "kind": "media",
+   "sample": "<settime(lnum1)>"
+  },
+  "switchplatform": {
+   "count": 117,
+   "kind": "logic",
+   "sample": "<switchplatform(381)>"
+  },
+  "edge": {
+   "count": 89,
+   "kind": "color",
+   "sample": "<edge(0)>"
+  },
+  "shadow": {
+   "count": 88,
+   "kind": "color",
+   "sample": "<shadow(1)>"
+  },
+  "headall": {
+   "count": 71,
+   "kind": "value",
+   "sample": "<headall(<sheet(GatheringPointName,lnum1,0)>)>"
+  },
+  "sound": {
+   "count": 67,
+   "kind": "media",
+   "sample": "<sound(1,96)>"
+  },
+  "setresettime": {
+   "count": 56,
+   "kind": "media",
+   "sample": "<setresettime(21,6)>"
+  },
+  "pcname": {
+   "count": 44,
+   "kind": "value",
+   "sample": "<pcname(lnum1)>"
+  },
+  "digit": {
+   "count": 43,
+   "kind": "value",
+   "sample": "<digit(lnum1,2)>"
+  },
+  "ordinal": {
+   "count": 27,
+   "kind": "value",
+   "sample": "<ordinal(lnum2)>"
+  },
+  "lower": {
+   "count": 24,
+   "kind": "value",
+   "sample": "<lower(<switchplatform(1)>)>"
+  },
+  "nbsp": {
+   "count": 21,
+   "kind": "misc",
+   "sample": "<nbsp>"
+  },
+  "levelpos": {
+   "count": 17,
+   "kind": "value",
+   "sample": "<levelpos(lnum2)>"
+  },
+  "float": {
+   "count": 12,
+   "kind": "value",
+   "sample": "<float(lnum2,10,.)>"
+  },
+  "edgecolor": {
+   "count": 10,
+   "kind": "color",
+   "sample": "<edgecolor(4289837773)>"
+  },
+  "payload": {
+   "count": 9,
+   "kind": "misc",
+   "sample": "<payload: 02>"
+  },
+  "fixed": {
+   "count": 1,
+   "kind": "misc",
+   "sample": "<fixed(6,618)>"
+  },
+  "lowerhead": {
+   "count": 1,
+   "kind": "value",
+   "sample": "<lowerhead(<sheet(InstanceContent,99,3)>)>"
+  }
+ }
+}

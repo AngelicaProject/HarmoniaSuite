@@ -1,0 +1,1 @@
+ALTER TABLE projects ADD COLUMN sources_fp TEXT NOT NULL DEFAULT '';
