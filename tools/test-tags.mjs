@@ -115,7 +115,7 @@ describe('render', () => {
   it('классы категорий и тултипы', () => {
     const h = highlightTags('A<br>B');
     assert.ok(h.includes('tk-break'));
-    assert.ok(h.includes('перенос строки'));
+    assert.ok(h.includes('Перенос строки'));
   });
   it('флаг пропущенных', () => {
     const h = highlightTags('A<br>B', ['<br>']);
