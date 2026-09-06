@@ -3,6 +3,8 @@
 [![CI](https://github.com/AngelicaProject/HarmoniaSuite/actions/workflows/ci.yml/badge.svg)](https://github.com/AngelicaProject/HarmoniaSuite/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/AngelicaProject/HarmoniaSuite/branch/main/graph/badge.svg)](https://codecov.io/gh/AngelicaProject/HarmoniaSuite)
 
+![Yuki](src/main/resources/static/img/yuki-banner.jpg)
+
 Локальный пайплайн локализации FFXIV (EN → RU). Генерирует паки переводов для импорта в Harmonia.
 
 ## Требования
