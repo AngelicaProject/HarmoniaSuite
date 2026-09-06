@@ -9,6 +9,7 @@ import com.harmoniasuite.repository.SettingsRepository;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -112,6 +113,16 @@ class SourceServiceTest {
         Fixture fixture = seed(workspace, dbDir);
         assertThrows(HarmoniaSuiteBadRequestException.class,
                 () -> fixture.sources().cacheDir("../../pack-one"));
+    }
+
+    @Test
+    @DisplayName("домашний фолбэк — Release раньше Debug")
+    void homeFallbackOrder(@TempDir Path workspace, @TempDir Path dbDir) {
+        seed(workspace, dbDir);
+        List<String> candidates = SourceService.homeCandidates("C:/Users/pack-one");
+        assertEquals(2, candidates.size());
+        assertTrue(candidates.get(0).contains("Release"));
+        assertTrue(candidates.get(1).contains("Debug"));
     }
 
     @Test

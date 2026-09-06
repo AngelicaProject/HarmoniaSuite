@@ -5,16 +5,20 @@ import com.harmoniasuite.dto.UpdateSourceSettingsRequest;
 import com.harmoniasuite.exception.HarmoniaSuiteBadRequestException;
 import com.harmoniasuite.repository.SettingsRepository;
 import java.io.BufferedReader;
+import java.io.File;
 import java.io.IOException;
 import java.io.InputStreamReader;
+import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
+import java.util.regex.Pattern;
 import java.util.stream.Stream;
 import org.springframework.stereotype.Service;
 
@@ -146,7 +150,8 @@ public class SourceService {
         }
         String exe = bundledExe();
         if (!isRegularFile(exe)) {
-            throw new HarmoniaSuiteBadRequestException("Нет bundled XivExdUnpacker");
+            throw new HarmoniaSuiteBadRequestException(
+                    "Нет XivExdUnpacker (bundled нет; для своей сборки — через env HARMONIA_UNPACKER_EXE)");
         }
         String version = gameVersion();
         if (version == null) {
@@ -199,19 +204,78 @@ public class SourceService {
     }
 
     private static String bundledExe() {
-        try {
-            if (System.getProperty("java.class.path", "").contains("target/classes")) {
-                return "";
-            }
-            Path jarDir = Paths.get(SourceService.class.getProtectionDomain()
-                    .getCodeSource().getLocation().toURI()).getParent();
-            Path exe = jarDir.resolve("unpacker").resolve("XivExdUnpacker.exe");
+        String env = System.getenv("HARMONIA_UNPACKER_EXE");
+        if (isRegularFile(env)) {
+            return env.strip();
+        }
+        for (Path base : bundledBases()) {
+            Path exe = base.resolve("unpacker").resolve("XivExdUnpacker.exe");
             if (Files.isRegularFile(exe)) {
                 return exe.toString();
             }
-        } catch (Exception ignored) {
+        }
+        String home = System.getProperty("user.home");
+        if (home != null) {
+            for (String candidate : homeCandidates(home)) {
+                if (isRegularFile(candidate)) {
+                    return candidate;
+                }
+            }
         }
         return "";
+    }
+
+    static List<String> homeCandidates(String home) {
+        List<String> out = new ArrayList<>();
+        for (String config : List.of("Release", "Debug")) {
+            out.add(Paths.get(home, "source", "repos", "XivExdUnpacker",
+                    "bin", config, "net10.0", "XivExdUnpacker.exe").toString());
+        }
+        return out;
+    }
+
+    static List<Path> bundledBases() {
+        List<Path> bases = new ArrayList<>();
+        for (String entry : System.getProperty("java.class.path", "").split(Pattern.quote(File.pathSeparator))) {
+            if (entry.isBlank()) {
+                continue;
+            }
+            try {
+                Path path = Paths.get(entry.strip());
+                if (!path.isAbsolute()) {
+                    path = Paths.get(System.getProperty("user.dir")).resolve(path).normalize();
+                }
+                Path fileName = path.getFileName();
+                Path parent = path.getParent();
+                bases.add(fileName != null && fileName.toString().toLowerCase().endsWith(".jar") && parent != null
+                        ? parent : path);
+            } catch (Exception ignored) {
+            }
+        }
+        String appPath = System.getProperty("jpackage.app-path");
+        if (appPath != null && !appPath.isBlank()) {
+            try {
+                Path exe = Paths.get(appPath);
+                Path dir = Files.isDirectory(exe) ? exe : exe.getParent();
+                if (dir != null) {
+                    bases.add(dir.resolve("app"));
+                    bases.add(dir);
+                }
+            } catch (Exception ignored) {
+            }
+        }
+        try {
+            URI location = SourceService.class.getProtectionDomain()
+                    .getCodeSource().getLocation().toURI();
+            if ("file".equalsIgnoreCase(location.getScheme())) {
+                Path parent = Paths.get(location).getParent();
+                if (parent != null) {
+                    bases.add(parent);
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        return bases;
     }
 
     private static long countCsv(Path dir) throws IOException {

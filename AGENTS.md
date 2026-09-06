@@ -15,7 +15,8 @@
 
 ## State & Sources
 
-- Game sources come from the local install via XivExdUnpacker into versioned cache `data/sources/<gameVersion>/en`. Source autodetect (`GET /api/settings/detect`): game — standard `Program Files` locations; unpacker is always the bundled `<jar>/unpacker/XivExdUnpacker.exe`, no settings for it.
+- Game sources come from the local install via XivExdUnpacker into versioned cache `data/sources/<gameVersion>/en`. Source autodetect (`GET /api/settings/detect`): game — standard `Program Files` locations; unpacker is always the bundled `<jar>/unpacker/XivExdUnpacker.exe`, no settings for it
+(dev fallback, silent: `HARMONIA_UNPACKER_EXE` env, then VS-default `~/source/repos` build).
 - Project state lives in SQLite (`harmonia.db-path`, default `data/harmonia.db` in the workspace — workspace is the repo root in dev, `%APPDATA%/HarmoniaSuite` when installed; Flyway migrations in `db/migration/sqlite`, hand-written SQL via JdbcTemplate, no ORM). PostgreSQL profile (`-Dspring.profiles.active=postgres`, migrations in `db/migration/postgresql`, `PG_URL/PG_USER/PG_PASSWORD`) for real deploys.
 - `projects/<name>/` keeps only `exported_csv/`. No `project.json` anywhere (no import, no fallback).
 
