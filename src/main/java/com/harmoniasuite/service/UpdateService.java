@@ -312,7 +312,7 @@ public class UpdateService {
         new ProcessBuilder("wscript", "//Nologo", "//B", script.toString())
                 .redirectOutput(ProcessBuilder.Redirect.DISCARD)
                 .redirectError(ProcessBuilder.Redirect.DISCARD)
-                .redirectInput(ProcessBuilder.Redirect.DISCARD)
+                .redirectInput(ProcessBuilder.Redirect.INHERIT)
                 .start();
     }
 
