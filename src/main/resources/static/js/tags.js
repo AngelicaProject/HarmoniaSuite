@@ -97,6 +97,97 @@ function parsePayloadEnd(s, start) {
   return close < 0 ? -1 : close + 1;
 }
 
+// Hidden speaker name: (-Name-), parsed by the game client as the dialogue
+// nameplate (unknown speakers show (-???-)). Always at string start in game
+// data, single per string; the inner may carry tags and parens but never a
+// newline. The wrapper is engine syntax, the inner text is translated.
+// Shape is open for more engine constructs of this kind later.
+const ANON_TEXT = /[\p{L}\p{N}?？]/u;
+const ANON_OPEN_NEXT = /[\p{L}\p{N}?？<"'"“”]/u;
+
+export function parseAnon(value) {
+  const out = [];
+  if (!value) return out;
+  const n = value.length;
+  let i = 0;
+  while (i + 1 < n) {
+    const c = value[i];
+    if (c === '\\' && i + 1 < n) { i += 2; continue; }
+    if (c === '(' && value[i + 1] === '-') {
+      const end = anonEnd(value, i);
+      if (end > i) {
+        out.push({text: value.slice(i, end), inner: value.slice(i + 2, end - 2), start: i, end});
+        i = end;
+        continue;
+      }
+    }
+    i++;
+  }
+  return out;
+}
+
+// End (exclusive) of the (-...-) token starting at `start`, or -1. The first
+// -) closes; the inner must be single-line and carry real text.
+function anonEnd(s, start) {
+  const n = s.length;
+  let i = start + 2;
+  while (i + 1 < n) {
+    const c = s[i];
+    if (c === '\n' || c === '\r') return -1;
+    if (c === '\\' && i + 1 < n) { i += 2; continue; }
+    if (c === '-' && s[i + 1] === ')') {
+      return ANON_TEXT.test(s.slice(start + 2, i)) ? i + 2 : -1;
+    }
+    i++;
+  }
+  return -1;
+}
+
+export function distinctAnon(value) {
+  const seen = new Set(), out = [];
+  for (const t of parseAnon(value)) {
+    if (!seen.has(t.text)) { seen.add(t.text); out.push(t.text); }
+  }
+  return out;
+}
+
+// Hard errors for broken anonymizers (unclosed (-...-)). A bare (- is never
+// enough: the opener must be followed by text-like input, so prose like
+// (-: or (- ... stays quiet.
+export function validateAnon(translation) {
+  const errors = [];
+  if (!translation || !translation.trim()) return errors;
+  const starts = new Set(parseAnon(translation).map(t => t.start));
+  for (let i = 0; i + 1 < translation.length; i++) {
+    if (translation[i] === '(' && translation[i + 1] === '-'
+        && !starts.has(i) && !escapedAt(translation, i)
+        && ANON_OPEN_NEXT.test(translation[i + 2] || '')) {
+      const close = translation.indexOf('-)', i + 2);
+      const len = close >= 0 && close - i <= 32 ? close - i + 2 : Math.min(24, translation.length - i);
+      const end = Math.min(translation.length, i + 24);
+      const snippet = translation.slice(i, end) + (end < translation.length ? '...' : '');
+      errors.push({pos: i, len, message: 'похоже на незакрытую конструкцию (-...-) (позиция ' + i + '): ' + shortTag(snippet)});
+    }
+  }
+  return errors;
+}
+
+// Soft presence warnings: the inner is translated, so only the construct
+// itself is compared — never its text.
+export function warnAnon(source, translation) {
+  const warnings = [];
+  if (!translation || !translation.trim()) return warnings;
+  const want = parseAnon(source || '');
+  const got = parseAnon(translation);
+  for (let i = got.length; i < want.length; i++) {
+    warnings.push('нет конструкции ' + shortTag(want[i].text) + ' из оригинала');
+  }
+  for (let i = want.length; i < got.length; i++) {
+    warnings.push('новая конструкция ' + shortTag(got[i].text));
+  }
+  return warnings;
+}
+
 export function tagSequence(value) {
   return parseDeep(value).map(t => t.text);
 }
@@ -202,6 +293,7 @@ export function validateTags(source, translation) {
       errors.push({pos: i, len, message: 'похоже на незакрытый тег (позиция ' + i + '): ' + shortTag(snippet)});
     }
   }
+  for (const e of validateAnon(translation)) errors.push(e);
   return errors;
 }
 
@@ -219,6 +311,10 @@ export function findMissingTags(source, translation) {
     const need = want.filter(x => x === t).length - (have.get(t) || 0);
     if (need > 0) missing.push(t);
   }
+  const wantAnon = parseAnon(source || '');
+  if (wantAnon.length > parseAnon(translation).length) {
+    for (const t of wantAnon) if (!missing.includes(t.text)) missing.push(t.text);
+  }
   return missing;
 }
 
@@ -229,7 +325,7 @@ export function warnTags(source, translation) {
   if (!translation || !translation.trim()) return warnings;
   const want = tagSequence(source || '').map(normalizedTag);
   const got = tagSequence(translation).map(normalizedTag);
-  if (want.join('\0') === got.join('\0')) return warnings;
+  if (want.join('\0') === got.join('\0')) return warnAnon(source, translation);
   const count = list => {
     const m = new Map();
     list.forEach(t => m.set(t, (m.get(t) || 0) + 1));
@@ -245,7 +341,7 @@ export function warnTags(source, translation) {
     const extra = c - (w.get(t) || 0);
     if (extra > 0) warnings.push('новый тег ' + shortTag(t) + times(extra));
   }
-  return warnings;
+  return warnings.concat(warnAnon(source, translation));
 }
 
 // Tag kinds follow Lumina's MacroCode (src/Lumina/Text/Payloads/MacroCode.cs):
@@ -263,7 +359,7 @@ const TAG_KINDS = {
 // Undocumented MacroCodes (key, link, split, fixed, scale, wait) fall into misc.
 const KIND_LABELS = {
   break: 'Перенос строки', color: 'Цвет', fmt: 'Форматирование', logic: 'Условие',
-  value: 'Подстановка', media: 'Иконка/время', misc: 'Тег',
+  value: 'Подстановка', media: 'Иконка/время', misc: 'Тег', anon: 'Скрытое имя',
 };
 
 export function tagNameOf(text) {
@@ -272,11 +368,19 @@ export function tagNameOf(text) {
 }
 
 export function tagKindOf(text) {
+  if (isAnonToken(text)) return 'anon';
   const name = tagNameOf(text);
   for (const kind in TAG_KINDS) {
     if (TAG_KINDS[kind].includes(name)) return kind;
   }
   return 'misc';
+}
+
+// Whole-string (-...-) token, parsed — never matched loosely.
+function isAnonToken(text) {
+  if (!text || !text.startsWith('(-') || !text.endsWith('-)')) return false;
+  const found = parseAnon(text);
+  return found.length === 1 && found[0].start === 0 && found[0].end === text.length;
 }
 
 export function tagKindLabel(kind) {
@@ -371,6 +475,22 @@ function parseRuby(text) {
   return {base: parts[0], reading: parts.slice(1).join(',')};
 }
 
+// Top-level spans for highlighting: tags and (-...-) anonymizers merged,
+// nested ones left for the recursive render (anonymizer inners may carry tags).
+function topSpans(str) {
+  const spans = parseTags(str).map(t => ({text: t.text, start: t.start, end: t.end, anon: false}));
+  for (const t of parseAnon(str)) spans.push({text: t.text, start: t.start, end: t.end, anon: true});
+  spans.sort((a, b) => a.start - b.start || b.end - a.end);
+  const out = [];
+  let lastEnd = -1;
+  for (const t of spans) {
+    if (t.start < lastEnd) continue;
+    out.push(t);
+    lastEnd = t.end;
+  }
+  return out;
+}
+
 // Single-pass highlight: plain text escaped (tinted by active <colortype>),
 // tags wrapped in pills. Logic macros (if/switch/...) nest: the wrapper pill
 // holds branch text and nested pills. missingKeys (normalized) get flagged.
@@ -382,20 +502,27 @@ export function highlightTags(value, missingKeys) {
   let idx = 0;
   const renderSlice = str => {
     let out = '', pos = 0;
-    for (const t of parseTags(str)) {
+    for (const t of topSpans(str)) {
       const chunk = str.slice(pos, t.start);
       if (chunk) out += coloredText(state, escHtml(chunk));
-      trackColor(t.text, state);
-      const kind = tagKindOf(t.text);
-      const missed = missing.has(normalizedTag(t.text)) ? ' tk-missing' : '';
-      let body = escHtml(t.text);
-      if (LOGIC_TAGS.has(tagNameOf(t.text))) {
-        const sub = str.slice(t.start + 1, t.end);
-        if (parseTags(sub).length) body = renderSlice(sub);
+      if (t.anon) {
+        const missed = missing.has(t.text) ? ' tk-missing' : '';
+        out += '<mark class="ptoken tk-anon' + missed + '" data-tag="' + (idx++) + '" title="'
+          + escHtml(tagKindLabel('anon') + ': ' + t.text) + '">'
+          + renderSlice(str.slice(t.start + 2, t.end - 2)) + '</mark>';
+      } else {
+        trackColor(t.text, state);
+        const kind = tagKindOf(t.text);
+        const missed = missing.has(normalizedTag(t.text)) ? ' tk-missing' : '';
+        let body = escHtml(t.text);
+        if (LOGIC_TAGS.has(tagNameOf(t.text))) {
+          const sub = str.slice(t.start + 1, t.end);
+          if (parseTags(sub).length || parseAnon(sub).length) body = renderSlice(sub);
+        }
+        out += '<mark class="ptoken tk-' + kind + missed + '" data-tag="' + (idx++) + '" title="'
+          + escHtml(tagKindLabel(kind) + ': ' + t.text) + '">'
+          + body + '</mark>';
       }
-      out += '<mark class="ptoken tk-' + kind + missed + '" data-tag="' + (idx++) + '" title="'
-        + escHtml(tagKindLabel(kind) + ': ' + t.text) + '">'
-        + body + '</mark>';
       pos = t.end;
     }
     const tail = str.slice(pos);
@@ -489,9 +616,20 @@ function previewTags(value, tags) {
   return out;
 }
 
+// Plate label: anonymizer inner without macro syntax (view-only).
+function stripTopTags(s) {
+  let out = '', pos = 0;
+  for (const t of parseTags(s)) { out += s.slice(pos, t.start); pos = t.end; }
+  return out + s.slice(pos);
+}
+
 export function renderGamePreview(value, marks) {
   if (!value) return '';
-  const tags = previewTags(value, parseTags(value));
+  const anons = parseAnon(value);
+  const inAnon = (s, e) => anons.some(a => s >= a.start && e <= a.end);
+  const tags = previewTags(value, parseTags(value).filter(t => !inAnon(t.start, t.end)));
+  for (const a of anons) tags.push({text: a.text, start: a.start, end: a.end, anon: true, inner: a.inner});
+  tags.sort((a, b) => a.start - b.start);
   const state = {fg: null, edge: null, shadow: null, italic: false, bold: false};
   const ranges = (marks || []).map(m => ({from: m.pos, to: m.pos + m.len}))
     .sort((a, b) => a.from - b.from);
@@ -516,8 +654,16 @@ export function renderGamePreview(value, marks) {
     }
   };
   tags.forEach(t => {
+    if (t.start < pos) return;
     pushText(value.slice(pos, t.start), pos);
     if (t.skip) { pos = t.end; return; }
+    if (t.anon) {
+      const label = stripTopTags(t.inner).replace(/\\(.)/g, '$1') || t.inner.replace(/\\(.)/g, '$1');
+      out += '<span class="anplate" title="' + escHtml('Скрытое имя: ' + t.text) + '">'
+        + escHtml(label) + '</span>';
+      pos = t.end;
+      return;
+    }
     trackColor(t.text, state);
     const ruby = parseRuby(t.text);
     if (ruby) {

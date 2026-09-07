@@ -292,9 +292,13 @@ input[type="checkbox"]:disabled:checked,input[type="checkbox"]:disabled:indeterm
 .ptoken.tk-value,.tag-chip.tk-value{color:var(--success);background:var(--success-soft);border-color:rgba(76,183,130,.35);box-shadow:inset 0 0 0 1px rgba(76,183,130,.22)}
 .ptoken.tk-media,.tag-chip.tk-media{color:#5fd3c6;background:rgba(80,200,185,.12);border-color:rgba(80,200,185,.4);box-shadow:inset 0 0 0 1px rgba(80,200,185,.22)}
 .ptoken.tk-misc,.tag-chip.tk-misc{color:var(--text-2);background:var(--surface-3);border-color:var(--border-soft);box-shadow:none}
+.ptoken.tk-anon,.tag-chip.tk-anon{color:#e0aa4e;background:rgba(224,170,78,.13);border-color:rgba(224,170,78,.45);box-shadow:inset 0 0 0 1px rgba(224,170,78,.22)}
 [data-theme="light"] .ptoken.tk-fmt,[data-theme="light"] .tag-chip.tk-fmt{color:#7a3fd1;background:#f0e8fb;border-color:#d9c6f5}
 [data-theme="light"] .ptoken.tk-media,[data-theme="light"] .tag-chip.tk-media{color:#0f766e;background:#e0f5f2;border-color:#b5e3dd}
 [data-theme="light"] .ptoken.tk-break,[data-theme="light"] .tag-chip.tk-break,[data-theme="light"] .ptoken.tk-misc,[data-theme="light"] .tag-chip.tk-misc{background:#eef0f3;color:#5a606c;border-color:#dfe2e8}
+[data-theme="light"] .ptoken.tk-anon,[data-theme="light"] .tag-chip.tk-anon{color:#8a5a00;background:#faf0d7;border-color:#e3cf9e}
+.anplate{display:inline-block;padding:0 8px;margin:0 6px 2px 0;font-size:12px;line-height:1.7;white-space:nowrap;color:var(--text-2);background:var(--surface-3);border:1px solid var(--border-soft);border-left:2px solid #e0aa4e;border-radius:4px}
+[data-theme="light"] .anplate{border-left-color:#8a5a00}
 .tag-chips{display:flex;flex-wrap:wrap;gap:6px;padding:9px 16px;border-top:1px solid var(--border-soft);max-height:86px;overflow:auto;flex-shrink:0}
 .tag-chip{font:11px var(--mono);padding:4px 10px;border-radius:6px;background:var(--warning-soft);color:var(--warning);border:1px solid rgba(210,154,82,.3);cursor:pointer;font-weight:600;transition:border-color .12s,background .12s}
 .tag-chip:hover{border-color:var(--warning)}

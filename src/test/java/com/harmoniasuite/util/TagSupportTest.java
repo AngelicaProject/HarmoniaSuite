@@ -223,4 +223,78 @@ class TagSupportTest {
                 "20s <if(gnum68==19),if(gnum72>=54),<br><colortype(504)>X<colortype(0)>,,)>!")
                 .isEmpty());
     }
+
+    @Test
+    @DisplayName("anon speaker parses at string start")
+    void parseAnonAtStart() {
+        var anons = TagSupport.parseAnon("(-Mikoto-)Hello, <if(gnum4,madam,sir)>.");
+        assertEquals(1, anons.size());
+        assertEquals("(-Mikoto-)", anons.get(0).text());
+        assertEquals("Mikoto", anons.get(0).inner());
+        assertEquals(0, anons.get(0).start());
+    }
+
+    @Test
+    @DisplayName("anon inner may carry tags and parens")
+    void parseAnonWithTagsAndParens() {
+        String value = "(-<italic(1)>Title (Revision 34)<italic(0)>-)Body";
+        var anons = TagSupport.parseAnon(value);
+        assertEquals(1, anons.size());
+        assertEquals("(-<italic(1)>Title (Revision 34)<italic(0)>-)", anons.get(0).text());
+        assertEquals(2, TagSupport.parse(value).size());
+    }
+
+    @Test
+    @DisplayName("escaped anon opener and bare parens are not tokens")
+    void parseAnonIgnoresEscapedAndBare() {
+        assertTrue(TagSupport.parseAnon("Say \\(-hi-) now").isEmpty());
+        assertTrue(TagSupport.parseAnon("(- -) and (...) and (-...-)").isEmpty());
+    }
+
+    @Test
+    @DisplayName("unclosed anon at string start is a positioned error")
+    void validateReportsUnclosedAnon() {
+        List<String> errors = TagSupport.validate("(-Mikoto, hello");
+        assertEquals(1, errors.size());
+        assertTrue(errors.get(0).contains("(позиция 0)"));
+        assertTrue(errors.get(0).contains("(-...-)"));
+    }
+
+    @Test
+    @DisplayName("unclosed anon mid-string errors, prose parens stay quiet")
+    void validateAnonMidString() {
+        assertEquals(1, TagSupport.validate("Say (-5 hi").size());
+        assertTrue(TagSupport.validate("Smile (-: bye").isEmpty());
+        assertTrue(TagSupport.validate("a (- b").isEmpty());
+    }
+
+    @Test
+    @DisplayName("multiline anon inner is an error")
+    void validateMultilineAnonInner() {
+        assertEquals(1, TagSupport.validate("(-Mikoto\n-)Hi").size());
+    }
+
+    @Test
+    @DisplayName("valid anon passes validation")
+    void validateAcceptsAnon() {
+        assertTrue(TagSupport.validate("(-???-)Hello").isEmpty());
+        assertTrue(TagSupport.validate("(-Mikoto-)Привет").isEmpty());
+    }
+
+    @Test
+    @DisplayName("warnings report missing and extra anonymizers")
+    void warningsOnAnonPresence() {
+        List<String> missing = TagSupport.warnings("(-Narrator-)Hello", "Привет");
+        assertEquals(1, missing.size());
+        assertTrue(missing.get(0).contains("нет конструкции (-Narrator-)"));
+        List<String> extra = TagSupport.warnings("Hello", "(-Рассказчик-)Привет");
+        assertEquals(1, extra.size());
+        assertTrue(extra.get(0).contains("новая конструкция (-Рассказчик-)"));
+    }
+
+    @Test
+    @DisplayName("translated anon inner produces no warnings")
+    void warningsSilentOnTranslatedAnonInner() {
+        assertTrue(TagSupport.warnings("(-Narrator-)Hello", "(-Рассказчик-)Привет").isEmpty());
+    }
 }

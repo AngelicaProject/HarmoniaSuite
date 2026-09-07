@@ -1,6 +1,7 @@
 package com.harmoniasuite.util;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -22,6 +23,72 @@ public final class TagSupport {
     }
 
     public record Tag(String text, String name, int start, int end) {
+    }
+
+    /**
+     * Hidden speaker name {@code (-Name-)}, parsed by the game client as the
+     * dialogue nameplate (unknown speakers show {@code (-???-)}). The wrapper
+     * is engine syntax, the inner text is translated.
+     */
+    public record Anon(String text, String inner, int start, int end) {
+    }
+
+    /** Top-level anonymizer spans, in document order. */
+    public static List<Anon> parseAnon(String value) {
+        List<Anon> out = new ArrayList<>();
+        if (value == null || value.isEmpty()) {
+            return out;
+        }
+        int n = value.length();
+        int i = 0;
+        while (i + 1 < n) {
+            char c = value.charAt(i);
+            if (c == '\\' && i + 1 < n) {
+                i += 2;
+                continue;
+            }
+            if (c == '(' && value.charAt(i + 1) == '-') {
+                int end = anonEnd(value, i);
+                if (end > i) {
+                    out.add(new Anon(value.substring(i, end), value.substring(i + 2, end - 2), i, end));
+                    i = end;
+                    continue;
+                }
+            }
+            i++;
+        }
+        return out;
+    }
+
+    /** End (exclusive) of the {@code (-...-)} token at {@code start}, or -1. */
+    private static int anonEnd(String s, int start) {
+        int n = s.length();
+        int i = start + 2;
+        while (i + 1 < n) {
+            char c = s.charAt(i);
+            if (c == '\n' || c == '\r') {
+                return -1;
+            }
+            if (c == '\\' && i + 1 < n) {
+                i += 2;
+                continue;
+            }
+            if (c == '-' && s.charAt(i + 1) == ')') {
+                return anonTextPresent(s, start + 2, i) ? i + 2 : -1;
+            }
+            i++;
+        }
+        return -1;
+    }
+
+    private static boolean anonTextPresent(String s, int from, int to) {
+        return s.substring(from, to).codePoints()
+                .anyMatch(cp -> cp == '?' || cp == '？' || Character.isLetterOrDigit(cp));
+    }
+
+    private static boolean anonOpenNext(char c) {
+        return c == '?' || c == '？' || c == '<' || c == '"' || c == '\''
+                || c == '“' || c == '”' || Character.isLetterOrDigit(c);
     }
 
     /** Top-level tags only (for highlighting and span replacement). */
@@ -230,6 +297,20 @@ public final class TagSupport {
         for (Stray stray : strayTags(translation, parseDeep(translation))) {
             errors.add("похоже на незакрытый тег (позиция " + stray.pos() + "): " + shortTag(stray.snippet()));
         }
+        Set<Integer> anonStarts = new HashSet<>();
+        for (Anon anon : parseAnon(translation)) {
+            anonStarts.add(anon.start());
+        }
+        int n = translation.length();
+        for (int i = 0; i + 1 < n; i++) {
+            if (translation.charAt(i) == '(' && translation.charAt(i + 1) == '-'
+                    && !anonStarts.contains(i) && !escaped(translation, i)
+                    && i + 2 < n && anonOpenNext(translation.charAt(i + 2))) {
+                int end = Math.min(n, i + 24);
+                errors.add("похоже на незакрытую конструкцию (-...-) (позиция " + i + "): "
+                        + shortTag(translation.substring(i, end) + (end < n ? "..." : "")));
+            }
+        }
         return errors;
     }
 
@@ -247,7 +328,7 @@ public final class TagSupport {
         List<String> want = sequence(source == null ? "" : source).stream().map(TagSupport::normalizedTag).toList();
         List<String> got = sequence(translation).stream().map(TagSupport::normalizedTag).toList();
         if (want.equals(got)) {
-            return warnings;
+            return anonWarnings(source, translation);
         }
         Map<String, Integer> wantCounts = counts(want);
         Map<String, Integer> gotCounts = counts(got);
@@ -262,6 +343,23 @@ public final class TagSupport {
             if (extra > 0) {
                 warnings.add("новый тег " + shortTag(e.getKey()) + times(extra));
             }
+        }
+        warnings.addAll(anonWarnings(source, translation));
+        return warnings;
+    }
+
+    private static List<String> anonWarnings(String source, String translation) {
+        List<String> warnings = new ArrayList<>();
+        if (translation == null || translation.isBlank()) {
+            return warnings;
+        }
+        List<Anon> wantAnon = parseAnon(source == null ? "" : source);
+        List<Anon> gotAnon = parseAnon(translation);
+        for (int i = gotAnon.size(); i < wantAnon.size(); i++) {
+            warnings.add("нет конструкции " + shortTag(wantAnon.get(i).text()) + " из оригинала");
+        }
+        for (int i = wantAnon.size(); i < gotAnon.size(); i++) {
+            warnings.add("новая конструкция " + shortTag(gotAnon.get(i).text()));
         }
         return warnings;
     }

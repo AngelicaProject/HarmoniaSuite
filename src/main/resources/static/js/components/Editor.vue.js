@@ -1,4 +1,4 @@
-import {highlightTags, renderGamePreview, validateTags, warnTags, distinctTags, findMissingTags, normalizedTag as normTag, tagKindOf as kindOfTag, tagKindLabel as kindLabel} from '../tags.js?v=11';
+import {highlightTags, renderGamePreview, validateTags, warnTags, distinctTags, distinctAnon, findMissingTags, normalizedTag as normTag, tagKindOf as kindOfTag, tagKindLabel as kindLabel} from '../tags.js?v=12';
 import {api} from '../api.js?v=29';
 import CsvPreview from './CsvPreview.vue.js?v=3';
 export default {
@@ -39,7 +39,7 @@ export default {
         || '<span style="color:var(--faint);font-size:13px">Перевод пуст — введите текст, здесь появится игровой предпросмотр</span>';
     },
     missingKeys() { return this.current ? findMissingTags(this.current.source || '', this.translation || '') : []; },
-    sourceTags() { return this.current ? distinctTags(this.current.source || '') : []; },
+    sourceTags() { const s = this.current ? this.current.source || '' : ''; return distinctAnon(s).concat(distinctTags(s)); },
     tagIssues() { return this.current ? validateTags(this.current.source || '', this.translation || '') : []; },
     tagWarnings() { return this.current ? warnTags(this.current.source || '', this.translation || '') : []; },
     conflictEntry() { return this.activeTab && this.activeTab.kind === 'conflict' ? (this.byId[this.activeTab.id] || null) : null; },

@@ -1,5 +1,5 @@
 import {TAG_CATALOG} from '../tag-catalog.js?v=8';
-import {tagKindLabel} from '../tags.js?v=11';
+import {tagKindLabel} from '../tags.js?v=12';
 import {UI_COLORS} from '../ui-colors.js?v=7';
 
 const KINDS = ['break', 'color', 'fmt', 'logic', 'value', 'media', 'misc'];

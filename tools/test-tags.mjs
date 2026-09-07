@@ -3,8 +3,8 @@
 import {describe, it} from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  parseTags, parseDeep, tagSequence, distinctTags, tagNameOf, tagKindOf,
-  validateTags, warnTags, findMissingTags, normalizedTag,
+  parseTags, parseDeep, parseAnon, distinctAnon, tagSequence, distinctTags, tagNameOf, tagKindOf,
+  tagKindLabel, validateTags, validateAnon, warnTags, warnAnon, findMissingTags, normalizedTag,
   highlightTags, renderGamePreview,
 } from '../src/main/resources/static/js/tags.js';
 
@@ -132,5 +132,71 @@ describe('render', () => {
     const p = renderGamePreview(tr, validateTags('', tr));
     assert.ok(p.includes('tag-err'));
     assert.ok(p.includes('data-err="1"'));
+  });
+});
+
+describe('anon', () => {
+  const game = '(-Polite Hyuran Male-)I have come, <if(gnum4,Mistress,Master)>.';
+  it('парсит скрытое имя в начале строки', () => {
+    const a = parseAnon(game);
+    assert.equal(a.length, 1);
+    assert.equal(a[0].text, '(-Polite Hyuran Male-)');
+    assert.equal(a[0].inner, 'Polite Hyuran Male');
+    assert.equal(a[0].start, 0);
+  });
+  it('теги рядом целы, distinct идёт первым чипом', () => {
+    assert.deepEqual(tagSequence(game), ['<if(gnum4,Mistress,Master)>']);
+    assert.deepEqual(distinctAnon(game), ['(-Polite Hyuran Male-)']);
+  });
+  it('внутренность с тегами и скобками', () => {
+    const v = '(-<italic(1)>Title (Revision 34)<italic(0)>-)Body';
+    assert.equal(parseAnon(v)[0].text, '(-<italic(1)>Title (Revision 34)<italic(0)>-)');
+    assert.equal(parseTags(v).length, 2);
+  });
+  it('экраны и скобки без текста не токены', () => {
+    assert.deepEqual(parseAnon(String.raw`Say \(-hi-) now`), []);
+    assert.deepEqual(parseAnon('(- -) and (...) and (-...-)'), []);
+  });
+  it('незакрытая конструкция — ошибка с позицией', () => {
+    const errs = validateTags('', '(-Mikoto, hello');
+    assert.equal(errs.length, 1);
+    assert.equal(errs[0].pos, 0);
+    assert.match(errs[0].message, /незакрытую конструкцию/);
+    assert.deepEqual(validateAnon('Say (-5 hi').length, 1);
+  });
+  it('проза со скобками тихая', () => {
+    assert.deepEqual(validateTags('', 'Smile (-: bye'), []);
+    assert.deepEqual(validateTags('', 'a (- b'), []);
+    assert.deepEqual(validateTags('', '(-???-)Hello'), []);
+  });
+  it('предупреждения по наличию, перевод внутренности тих', () => {
+    assert.match(warnTags('(-Narrator-)Hello', 'Привет')[0], /нет конструкции \(-Narrator-\)/);
+    assert.match(warnTags('Hello', '(-Рассказчик-)Привет')[0], /новая конструкция/);
+    assert.deepEqual(warnTags('(-Narrator-)Hello', '(-Рассказчик-)Привет'), []);
+    assert.deepEqual(warnAnon('A', ''), []);
+  });
+  it('missing подсвечивает исходный чип', () => {
+    assert.deepEqual(findMissingTags('(-Mikoto-)Hi', 'Привет'), ['(-Mikoto-)']);
+    assert.deepEqual(findMissingTags('(-A-)x', '(-Б-)у'), []);
+  });
+  it('вид — пилюля скрытого имени', () => {
+    assert.equal(tagKindOf('(-Mikoto-)'), 'anon');
+    assert.equal(tagKindLabel('anon'), 'Скрытое имя');
+    const h = highlightTags(game, ['(-Polite Hyuran Male-)']);
+    assert.ok(h.includes('tk-anon'));
+    assert.ok(h.includes('tk-missing'));
+    assert.ok(h.includes('Скрытое имя'));
+  });
+  it('превью — плашка имени плюс тело', () => {
+    const p = renderGamePreview(game);
+    assert.ok(p.includes('<span class="anplate"'));
+    assert.ok(p.includes('Polite Hyuran Male'));
+    assert.equal(p.split('(-Polite').length, 2);
+    assert.ok(p.includes('I have come'));
+  });
+  it('превью чистит макросы из плашки', () => {
+    const p = renderGamePreview('(-<italic(1)>Title<italic(0)>-)Body');
+    assert.ok(!p.includes('<italic'));
+    assert.ok(p.includes('Title'));
   });
 });
