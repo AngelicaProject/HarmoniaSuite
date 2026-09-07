@@ -310,7 +310,8 @@ public class UpdateService {
                 + "lg.Close" + nl
                 + "fso.DeleteFile WScript.ScriptFullName" + nl;
         Path script = Files.createTempFile("harmonia-update-", ".vbs");
-        Files.writeString(script, body, StandardCharsets.UTF_8);
+        // wscript без BOM читает .vbs как ANSI и портит не-ASCII пути
+        Files.write(script, ((char) 0xFEFF + body).getBytes(StandardCharsets.UTF_16LE));
         return script;
     }
 

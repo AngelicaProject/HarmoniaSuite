@@ -191,6 +191,7 @@ const App = {
         const upd = ref({supported: false, mode: '', version: '', needsToolchain: false, currentSha: '', latestSha: '', behindBy: 0, subjects: [], updateAvailable: false});
         const updModal = ref(false);
         const updRestarting = ref(false);
+        const updRestartDead = ref(false);
         async function loadUpdateStatus() {
             try {
                 upd.value = await api.updateStatus();
@@ -752,6 +753,7 @@ const App = {
         function onUpdateGone() {
             updRestarting.value = true;
             if (updWatch) return;
+            let updWatchFails = 0;
             updWatch = setInterval(async () => {
                 try {
                     await api.version();
@@ -759,11 +761,17 @@ const App = {
                     updWatch = null;
                     location.reload();
                 } catch (e) {
+                    if (++updWatchFails >= 40) {
+                        clearInterval(updWatch);
+                        updWatch = null;
+                        updRestartDead.value = true;
+                    }
                 }
             }, 3000);
         }
         function startJob(d) {
             updRestarting.value = false;
+            updRestartDead.value = false;
             if (updWatch) {
                 clearInterval(updWatch);
                 updWatch = null;
@@ -1621,6 +1629,7 @@ const App = {
             upd,
             updModal,
             updRestarting,
+            updRestartDead,
             updLabel,
             updTitle,
             loadUpdateStatus,
@@ -1841,7 +1850,7 @@ const App = {
       <div class="set-actions"><button class="primary" @click="runUpdate">Обновить сейчас</button><button class="ghost" @click="updModal=false">Возможно позже</button></div>
     </div>
   </div>
-  <div v-if="updRestarting" class="overlay"><div class="modal upd-modal"><div class="upd-title">Перезапуск…</div><div class="muted">Новая версия поднимается — страница обновится сама</div></div></div>
+  <div v-if="updRestarting" class="overlay"><div class="modal upd-modal"><div class="upd-title">Перезапуск…</div><div class="muted">Новая версия поднимается — страница обновится сама</div><div v-if="updRestartDead" class="muted">Не поднялось за 2 минуты — запусти приложение вручную</div></div></div>
   <div v-if="toast" class="toast">{{toast}}</div>`
 };
 const app = createApp(App);

@@ -7,6 +7,7 @@ import org.junit.jupiter.api.io.TempDir;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 
@@ -98,15 +99,20 @@ class UpdateServiceTest {
     }
 
     @Test
-    @DisplayName("vbs relaunch contains pid, paths and self-delete")
+    @DisplayName("vbs relaunch is utf-16 and keeps non-ascii paths")
     void relaunchVbsContent(@TempDir Path dir) throws Exception {
+        Path ndir = dir.resolve("тест-каталог");
+        Files.createDirectories(ndir);
         Path vbs = UpdateService.writeRelaunchVbs(12345,
-                dir.resolve("built.jar"), dir.resolve("app.jar"), dir.resolve("app.exe"));
-        String body = Files.readString(vbs);
+                ndir.resolve("built.jar"), ndir.resolve("app.jar"), ndir.resolve("app.exe"));
+        byte[] raw = Files.readAllBytes(vbs);
+        assertTrue(raw.length > 2 && raw[0] == (byte) 0xFF && raw[1] == (byte) 0xFE);
+        String body = new String(raw, StandardCharsets.UTF_16LE);
         assertTrue(body.contains("12345"));
         assertTrue(body.contains("built.jar"));
         assertTrue(body.contains("app.jar"));
         assertTrue(body.contains("app.exe"));
+        assertTrue(body.contains("тест-каталог"));
         assertTrue(body.contains("DeleteFile WScript.ScriptFullName"));
         assertTrue(body.contains("lg.WriteLine"));
         assertTrue(body.contains("HARMONIA_NO_BROWSER"));
