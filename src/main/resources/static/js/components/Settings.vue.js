@@ -259,7 +259,7 @@ export default {
     },
     fmtInterval(min) {
       min = Number(min || 0);
-      if (!min) return 'выключен';
+      if (!min) return 'выключено';
       if (min % 1440 === 0) return 'каждые ' + (min / 1440) + ' сут';
       if (min % 60 === 0) return 'каждые ' + (min / 60) + ' ч';
       return 'каждые ' + min + ' мин';
@@ -288,7 +288,7 @@ export default {
       try {
         await api.createBackup();
         await this.bkReload();
-        this.bkSaved = 'Бэкап создан';
+        this.bkSaved = 'Резервная копия создана';
       } catch (e) {
         this.bkError = e.message;
       }
@@ -343,7 +343,7 @@ export default {
       }
     },
     async bkDelete(name) {
-      if (!confirm('Удалить бэкап ' + name + '?')) return;
+      if (!confirm('Удалить резервную копию ' + name + '?')) return;
       this.bkError = '';
       this.bkSaved = '';
       try {
@@ -447,7 +447,7 @@ export default {
           <template v-else-if="section==='backup'">
             <div class="set-field">
               <span class="set-label">Резервные копии базы данных</span>
-              <div class="set-row"><button class="subtle" @click="bkCreate" :disabled="bkBusy">Создать бэкап</button><button class="subtle" @click="bkOpenFolder">Открыть папку</button></div>
+              <div class="set-row"><button class="subtle" @click="bkCreate" :disabled="bkBusy">Создать резервную копию</button><button class="subtle" @click="bkOpenFolder">Открыть папку</button></div>
               <div class="set-hint">Снимок базы целиком; хранится в каталоге backups рядом с базой</div>
             </div>
             <div class="set-field">
@@ -456,14 +456,14 @@ export default {
               <div class="set-hint">≈ {{fmtBytes(liveEstimate)}} при {{bkInput}} копиях (сейчас занято {{fmtBytes(bkUsed)}})</div>
             </div>
             <div class="set-field">
-              <span class="set-label">Автобэкап</span>
-              <div class="set-row" style="align-items:center"><input v-model="bkAutoInput" type="number" min="0" max="10080" step="1" class="grow" style="max-width:110px" @change="bkSaveAuto"><span class="set-hint" style="margin:0">мин, 0 — выкл</span></div>
-              <div class="set-hint">Автобэкап {{fmtInterval(bkAuto)}} · проверка раз в минуту от самого нового снимка (ручной тоже сбрасывает таймер)</div>
+              <span class="set-label">Автоматическое создание резервных копий</span>
+              <div class="set-row" style="align-items:center"><input v-model="bkAutoInput" type="number" min="0" max="10080" step="1" class="grow bk-num" style="max-width:84px" @change="bkSaveAuto"><span class="set-hint" style="margin:0">мин, 0 — выкл</span></div>
+              <div class="set-hint">Автоматическое создание {{fmtInterval(bkAuto)}} · создание копии вручную сбрасывает таймер</div>
             </div>
             <div v-if="bkError" class="form-error">{{bkError}}</div>
             <div v-else-if="bkSaved" class="set-ok">{{bkSaved}}</div>
             <div v-for="b in bkItems" :key="b.name" class="set-row" style="align-items:center;margin-top:4px"><span class="grow" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap" :title="b.name">{{b.name}} · {{fmtBytes(b.size)}}</span><a class="subtle" style="text-decoration:none;padding:4px 10px" :href="dlUrl(b.name)" download>Скачать</a><button class="ghost" @click="bkDelete(b.name)">Удалить</button></div>
-            <div v-if="!bkItems.length && !bkError" class="set-hint">Бэкапов пока нет</div>
+            <div v-if="!bkItems.length && !bkError" class="set-hint">Резервных копий пока нет</div>
           </template>
         </div>
       </div>

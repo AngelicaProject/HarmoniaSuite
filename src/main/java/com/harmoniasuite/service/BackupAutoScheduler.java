@@ -51,9 +51,9 @@ public class BackupAutoScheduler {
                 return;
             }
             Path created = backups.create();
-            log.info("Автобэкап создан: {}", created.getFileName());
+            log.info("Автоматически создана резервная копия: {}", created.getFileName());
         } catch (Exception e) {
-            log.warn("Автобэкап не создан: {}", e.getMessage());
+            log.warn("Автоматическое создание резервной копии не удалось: {}", e.getMessage());
         }
     }
 }

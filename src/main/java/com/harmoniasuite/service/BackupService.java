@@ -168,7 +168,7 @@ public class BackupService implements BackupOps {
         try {
             java.awt.Desktop.getDesktop().open(backupDir.toFile());
         } catch (Exception e) {
-            log.warn("Не открыта папка бэкапов: {}", e.getMessage());
+            log.warn("Не открыта папка резервных копий: {}", e.getMessage());
             throw new HarmoniaSuiteBadRequestException("cannot open folder on this system");
         }
     }
