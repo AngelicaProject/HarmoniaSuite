@@ -81,7 +81,7 @@ node --test tools/test-tags.mjs      # FFXIV tag checks
 
 The stack is Spring Boot 3.4.3 and Java 21, SQLite by default with a PostgreSQL profile for real deploys.
 
-If you touch `js` or `css`, bump `?v=` in `index.html` and every import, or stale files stick in cache. Commits follow Conventional Commits on `main`; tests carry Russian `@DisplayName`; fixtures stay invented (`example.com`, `pack-one`).
+If you touch `js` or `css`, bump `?v=` in `index.html` and every import, or stale files stick in cache. Commits follow Conventional Commits on `main`; fixtures stay invented (`example.com`, `pack-one`).
 
 ## Release
 
