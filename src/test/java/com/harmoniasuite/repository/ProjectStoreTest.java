@@ -61,7 +61,7 @@ class ProjectStoreTest {
     }
 
     @Test
-    @DisplayName("проект: создание и чтение, id генерит БД в формате v6")
+    @DisplayName("project round trip, DB generates v6 id")
     void projectRoundTrip() {
         ProjectRepository.ProjectRow row = projects.findById(projectId);
         assertEquals(projectId.toString(), projects.findByName("pack-one").id());
@@ -73,7 +73,7 @@ class ProjectStoreTest {
     }
 
     @Test
-    @DisplayName("без перевода исключается из pending и считается разобранным")
+    @DisplayName("no-translation is excluded from pending and counts as resolved")
     void noTranslationIsResolved() {
         String now = Instant.now().toString();
         Map<String, String> fileIds = projects.fileIdMap(projectId);
@@ -85,7 +85,7 @@ class ProjectStoreTest {
     }
 
     @Test
-    @DisplayName("строки к переводу группируются по файлам")
+    @DisplayName("pending rows group by file")
     void pendingByFile() {
         String now = Instant.now().toString();
         projects.upsertFiles(projectId, List.of("pack-two.csv"), now);
@@ -101,7 +101,7 @@ class ProjectStoreTest {
     }
 
     @Test
-    @DisplayName("записи: вставка, фильтры и пагинация")
+    @DisplayName("entries: insert, filters and pagination")
     void entriesFilterAndPage() {
         String now = Instant.now().toString();
         Map<String, String> fileIds = projects.fileIdMap(projectId);
@@ -136,7 +136,7 @@ class ProjectStoreTest {
     }
 
     @Test
-    @DisplayName("повторный extract сохраняет id записей")
+    @DisplayName("re-extract keeps entry ids")
     void reupsertKeepsUuids() {
         String first = Instant.now().toString();
         Map<String, String> fileIds = projects.fileIdMap(projectId);
@@ -151,7 +151,7 @@ class ProjectStoreTest {
     }
 
     @Test
-    @DisplayName("сводка проектов живыми запросами")
+    @DisplayName("project summaries via live queries")
     void liveSummaries() {
         String now = Instant.now().toString();
         Map<String, String> fileIds = projects.fileIdMap(projectId);
@@ -167,7 +167,7 @@ class ProjectStoreTest {
     }
 
     @Test
-    @DisplayName("id, не совпадающий с ячейкой, отклоняется")
+    @DisplayName("cell-mismatched id is rejected")
     void rejectsCellMismatch() {
         String now = Instant.now().toString();
         Map<String, String> fileIds = projects.fileIdMap(projectId);
@@ -178,7 +178,7 @@ class ProjectStoreTest {
     }
 
     @Test
-    @DisplayName("обновление перевода и история")
+    @DisplayName("translation update and history")
     void updateAndHistory() {
         String now = Instant.now().toString();
         Map<String, String> fileIds = projects.fileIdMap(projectId);
@@ -193,7 +193,7 @@ class ProjectStoreTest {
     }
 
     @Test
-    @DisplayName("прогресс по файлам одним запросом")
+    @DisplayName("per-file progress in one query")
     void progressByFile() {
         String now = Instant.now().toString();
         Map<String, String> fileIds = projects.fileIdMap(projectId);
@@ -208,7 +208,7 @@ class ProjectStoreTest {
     }
 
     @Test
-    @DisplayName("пак: сохранение и чтение")
+    @DisplayName("pack round trip")
     void packRoundTrip() {
         String now = Instant.now().toString();
         PackMeta pack = new PackMeta();
@@ -227,7 +227,7 @@ class ProjectStoreTest {
     }
 
     @Test
-    @DisplayName("прогоны сборки: старт и финиш")
+    @DisplayName("merge runs: start and finish")
     void mergeRunLifecycle() {
         String runId = merges.start(projectId, Instant.now().toString(), "in", "out", 3);
         assertNotNull(runId);

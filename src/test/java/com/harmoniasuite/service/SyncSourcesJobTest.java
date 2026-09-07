@@ -50,7 +50,7 @@ class SyncSourcesJobTest {
     }
 
     @Test
-    @DisplayName("sync-sources стартует без projectId")
+    @DisplayName("sync-sources starts without a projectId")
     void syncSourcesStartsWithoutProjectId(@TempDir Path workspace, @TempDir Path dbDir) {
         Fixture fixture = seed(workspace, dbDir);
         JobDto job = fixture.jobs()
@@ -59,7 +59,7 @@ class SyncSourcesJobTest {
     }
 
     @Test
-    @DisplayName("проектные экшены без projectId отклоняются")
+    @DisplayName("project actions without a projectId are rejected")
     void projectActionsRequireProjectId(@TempDir Path workspace, @TempDir Path dbDir) {
         Fixture fixture = seed(workspace, dbDir);
         assertThrows(HarmoniaSuiteBadRequestException.class, () -> fixture.jobs()

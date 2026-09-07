@@ -98,7 +98,7 @@ class DeltaServiceTest {
     }
 
     @Test
-    @DisplayName("экспорт пропускает нетронутые строки")
+    @DisplayName("export skips untouched rows")
     void exportSkipsUntouchedRows() {
         DeltaExportDto page = delta.exportDelta(projectId, "", "", "", 100, "Author One");
         assertTrue(page.rows().isEmpty());
@@ -106,7 +106,7 @@ class DeltaServiceTest {
     }
 
     @Test
-    @DisplayName("экспорт без автора отклоняется")
+    @DisplayName("export without an author is rejected")
     void exportWithoutAuthorIsRejected() {
         assertThrows(HarmoniaSuiteBadRequestException.class, () ->
                 delta.exportDelta(projectId, "", "", "", 100, null));
@@ -115,7 +115,7 @@ class DeltaServiceTest {
     }
 
     @Test
-    @DisplayName("экспорт идёт по кортежу и собирает все строки")
+    @DisplayName("export walks the tuple and collects all rows")
     void exportWalksTuplePagesToComplete() {
         translateAll();
         List<String> seen = new ArrayList<>();
@@ -138,7 +138,7 @@ class DeltaServiceTest {
     }
 
     @Test
-    @DisplayName("экспорт с фильтром файлов оставляет только свои")
+    @DisplayName("export with a file filter keeps only its own files")
     void exportWithFilesFilterKeepsOwnFiles() {
         translateAll();
         DeltaExportDto page = delta.exportDelta(projectId, "", "", "b.csv", 100, "Author One");
@@ -147,7 +147,7 @@ class DeltaServiceTest {
     }
 
     @Test
-    @DisplayName("preview считает, но ничего не пишет")
+    @DisplayName("preview counts but writes nothing")
     void previewCountsWithoutWriting() {
         String cell = EntryIds.ofCell("a.csv", "10", 1);
         DeltaImportResultDto result = delta.preview(projectId,
@@ -158,7 +158,7 @@ class DeltaServiceTest {
     }
 
     @Test
-    @DisplayName("импорт применяет чистые строки и сходится в статистике")
+    @DisplayName("import applies clean rows and reconciles stats")
     void importAppliesCleanRows() {
         String cell = EntryIds.ofCell("a.csv", "10", 1);
         DeltaImportResultDto result = delta.importDelta(projectId,
@@ -174,7 +174,7 @@ class DeltaServiceTest {
     }
 
     @Test
-    @DisplayName("повторный влив той же дельты даёт noop")
+    @DisplayName("reimporting the same delta is a noop")
     void reimportSameDeltaGivesNoop() {
         String cell = EntryIds.ofCell("a.csv", "10", 1);
         DeltaImportRequest req = request(List.of(row(cell, "a.csv", "Hello", "Привет", "needs_human_review")));
@@ -185,7 +185,7 @@ class DeltaServiceTest {
     }
 
     @Test
-    @DisplayName("чужой отпечаток отклоняет весь запрос")
+    @DisplayName("foreign fingerprint rejects the whole request")
     void foreignFingerprintRejectsWholeRequest() {
         String cell = EntryIds.ofCell("a.csv", "10", 1);
         DeltaImportRequest req = new DeltaImportRequest("Author One",
@@ -196,7 +196,7 @@ class DeltaServiceTest {
     }
 
     @Test
-    @DisplayName("разъехавшийся source уходит в skipped без записи")
+    @DisplayName("mismatched source goes to skipped without writing")
     void sourceMismatchGoesToSkipped() {
         String cell = EntryIds.ofCell("a.csv", "10", 1);
         DeltaImportResultDto result = delta.importDelta(projectId,
@@ -208,7 +208,7 @@ class DeltaServiceTest {
     }
 
     @Test
-    @DisplayName("повторная правка человеческой ячейки даёт конфликт без перезаписи")
+    @DisplayName("re-editing a human cell gives a conflict without overwrite")
     void humanOverwriteGivesConflictWithoutOverwrite() {
         String cell = EntryIds.ofCell("a.csv", "10", 1);
         delta.importDelta(projectId,
@@ -223,7 +223,7 @@ class DeltaServiceTest {
     }
 
     @Test
-    @DisplayName("allowlist отсекает чужие файлы")
+    @DisplayName("allowlist cuts foreign files")
     void allowlistCutsForeignFiles() {
         String cell = EntryIds.ofCell("b.csv", "10", 1);
         DeltaImportRequest req = new DeltaImportRequest("Author One",
@@ -235,7 +235,7 @@ class DeltaServiceTest {
     }
 
     @Test
-    @DisplayName("статус выше капа и неизвестный статус уходят в skipped")
+    @DisplayName("over-cap and unknown statuses go to skipped")
     void statusCapAndUnknownStatusGoToSkipped() {
         String approved = EntryIds.ofCell("a.csv", "10", 1);
         String unknown = EntryIds.ofCell("a.csv", "11", 1);

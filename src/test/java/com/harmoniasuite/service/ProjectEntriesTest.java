@@ -79,7 +79,7 @@ class ProjectEntriesTest {
     }
 
     @Test
-    @DisplayName("entries без фильтров возвращает всё")
+    @DisplayName("entries without filters returns everything")
     void entriesWithoutFiltersReturnsEverything() throws Exception {
         EntriesPageDto payload = projects.entries(projectId, all(), 0, 0);
         assertEquals(2L, payload.total());
@@ -87,7 +87,7 @@ class ProjectEntriesTest {
     }
 
     @Test
-    @DisplayName("неизвестный UUID проекта отклоняется")
+    @DisplayName("unknown project UUID is rejected")
     void unknownProjectIdRejected() throws Exception {
         assertThrows(HarmoniaSuiteNotFoundException.class, () ->
                 projects.entries(UUID.randomUUID(), all(), 0, 0));
@@ -96,7 +96,7 @@ class ProjectEntriesTest {
     }
 
     @Test
-    @DisplayName("фильтр непереведённых")
+    @DisplayName("untranslated filter")
     void entriesFiltersUntranslated() throws Exception {
         EntryRepository.EntryFilter filter =
                 new EntryRepository.EntryFilter(null, List.of(), null, null, true);
@@ -104,7 +104,7 @@ class ProjectEntriesTest {
     }
 
     @Test
-    @DisplayName("поиск q ищет по оригиналу и переводу, rowKey точный")
+    @DisplayName("q search covers source and translation, rowKey is exact")
     void entriesSearchesByQueryAndRowKey() throws Exception {
         EntryRepository.EntryFilter byQuery =
                 new EntryRepository.EntryFilter(null, List.of(), null, "ell", false);
@@ -124,7 +124,7 @@ class ProjectEntriesTest {
     }
 
     @Test
-    @DisplayName("фильтр статусов точный, неизвестный статус отклоняется")
+    @DisplayName("status filter is exact, unknown status is rejected")
     void entriesFiltersByExactStatus() throws Exception {
         assertEquals(1L, projects.entries(projectId,
                 new EntryRepository.EntryFilter(null, List.of("untranslated"), null, null, false),
@@ -138,7 +138,7 @@ class ProjectEntriesTest {
     }
 
     @Test
-    @DisplayName("пагинация всегда ограничена сверху")
+    @DisplayName("pagination is always capped")
     void entriesPaginationIsBounded() throws Exception {
         EntriesPageDto page = projects.entries(projectId, all(), 0, 1);
         assertEquals(2L, page.total());
@@ -153,7 +153,7 @@ class ProjectEntriesTest {
     }
 
     @Test
-    @DisplayName("overview отдаёт id, имя, сводку и выбор")
+    @DisplayName("overview returns id, name, summary and selection")
     void overviewReturnsIdNameSummaryAndSelection() throws Exception {
         OverviewDto overview = projects.overview(projectId);
         assertEquals(projectId.toString(), overview.id());
@@ -165,7 +165,7 @@ class ProjectEntriesTest {
     }
 
     @Test
-    @DisplayName("files: поиск, пагинация и скрытие готовых")
+    @DisplayName("files search, pagination and hiding ready files")
     void filesSearchPaginateAndHideReady() throws Exception {
         String now = Instant.now().toString();
         projectRepository.upsertFiles(projectId, List.of("b.csv", "c.csv"), now);
@@ -197,7 +197,7 @@ class ProjectEntriesTest {
     }
 
     @Test
-    @DisplayName("пустые файлы ни готовые, ни недопереведённые")
+    @DisplayName("empty files are neither ready nor needy")
     void emptyFilesAreNeitherReadyNorNeed() throws Exception {
         String now = Instant.now().toString();
         projectRepository.upsertFiles(projectId, List.of("empty.csv"), now);
@@ -211,7 +211,7 @@ class ProjectEntriesTest {
     }
 
     @Test
-    @DisplayName("дерево отдаёт все файлы с живыми счётчиками")
+    @DisplayName("tree returns all files with live counts")
     void fileTreeReturnsAllWithLiveCounts() throws Exception {
         String now = Instant.now().toString();
         projectRepository.upsertFiles(projectId, List.of("sub/empty.csv"), now);
@@ -225,7 +225,7 @@ class ProjectEntriesTest {
     }
 
     @Test
-    @DisplayName("files с readyOnly отдаёт только файлы с переводами")
+    @DisplayName("files with readyOnly returns only translated files")
     void filesReadyOnlyReturnsTranslatedFilesOnly() {
         ProjectFilesDto ready = projects.listFiles(projectId, null, false, true, 0, 10);
         assertEquals(1L, ready.total());
@@ -234,7 +234,7 @@ class ProjectEntriesTest {
     }
 
     @Test
-    @DisplayName("files отдаёт построчную статистику и сводку")
+    @DisplayName("files returns per-file stats and summary")
     void filesReturnsPerFileStats() throws Exception {
         ProjectFilesDto files = projects.listFiles(projectId, null, false, 0, 0);
         assertEquals(1, files.files().size());
@@ -246,7 +246,7 @@ class ProjectEntriesTest {
     }
 
     @Test
-    @DisplayName("одиночная запись находится по cell id и по uuid")
+    @DisplayName("single entry found by cell id and by uuid")
     void singleEntryByCellAndUuid() throws Exception {
         EntryDto byCell = projects.entryByCell(projectId, EntryIds.ofCell("a.csv", "10", 1));
         assertEquals("Hello", byCell.source());
@@ -255,7 +255,7 @@ class ProjectEntriesTest {
     }
 
     @Test
-    @DisplayName("неизвестная запись отклоняется")
+    @DisplayName("unknown entry is rejected")
     void unknownEntryRejected() throws Exception {
         assertThrows(HarmoniaSuiteNotFoundException.class, () ->
                 projects.entryByCell(projectId, "c_0000000000000000"));
@@ -264,7 +264,7 @@ class ProjectEntriesTest {
     }
 
     @Test
-    @DisplayName("запись чужого проекта недоступна")
+    @DisplayName("foreign project entry is out of reach")
     void entryScopedToProject() throws Exception {
         UUID other = projectRepository.insert(
                 "other", "rawexd/en", "dir", "out", "en", "ru", Instant.now().toString());
@@ -275,7 +275,7 @@ class ProjectEntriesTest {
     }
 
     @Test
-    @DisplayName("создание с дублем имени и удаление по id")
+    @DisplayName("duplicate-name create rejected, delete by id")
     void createDuplicateNameRejectedDeleteById() throws Exception {
         assertThrows(IllegalArgumentException.class, () ->
                 projects.createProject("t", "rawexd/en"));
@@ -286,7 +286,7 @@ class ProjectEntriesTest {
     }
 
     @Test
-    @DisplayName("удаление отчитывается по батчам и чистит всё")
+    @DisplayName("delete reports per batch and cleans everything")
     void deleteReportsBatchesAndCleansAll() throws Exception {
         List<String> log = new ArrayList<>();
         projects.deleteProject(projectId, log::add);
@@ -297,7 +297,7 @@ class ProjectEntriesTest {
     }
 
     @Test
-    @DisplayName("отмена удаления оставляет проект и чинит счётчики")
+    @DisplayName("cancelled delete keeps the project and repairs counts")
     void deleteCancelledKeepsProject() throws Exception {
         Thread.currentThread().interrupt();
         try {
@@ -317,7 +317,7 @@ class ProjectEntriesTest {
     }
 
     @Test
-    @DisplayName("сохранение перевода обновляет сводку")
+    @DisplayName("saving a translation updates the summary")
     void updateEntryPersistsTranslation() throws Exception {
         var res = projects.updateEntry(projectId, entryUuid("a.csv", "11", 1), "Пока", null);
         assertTrue(res.ok());
@@ -327,7 +327,7 @@ class ProjectEntriesTest {
     }
 
     @Test
-    @DisplayName("сохранение перевода обновляет счётчики файла без ре-экстракта")
+    @DisplayName("saving a translation updates file counters without re-extract")
     void updateEntryRefreshesFileCounters() throws Exception {
         ProjectFilesDto before = projects.listFiles(projectId, null, false, 0, 0);
         assertEquals(1L, before.files().get(0).translated());
@@ -340,7 +340,7 @@ class ProjectEntriesTest {
     }
 
     @Test
-    @DisplayName("сохранение с неизвестным статусом отклоняется")
+    @DisplayName("saving with an unknown status is rejected")
     void updateEntryRejectsUnknownStatus() throws Exception {
         assertThrows(IllegalArgumentException.class, () -> projects.updateEntry(
                 projectId, entryUuid("a.csv", "11", 1), "Пока", "bogus-status"));

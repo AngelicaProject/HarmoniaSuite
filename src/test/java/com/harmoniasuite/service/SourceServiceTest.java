@@ -43,7 +43,7 @@ class SourceServiceTest {
     }
 
     @Test
-    @DisplayName("версия игры читается из ffxivgame.ver")
+    @DisplayName("game version reads from ffxivgame.ver")
     void gameVersionReadsVerFile(@TempDir Path workspace, @TempDir Path dbDir) throws Exception {
         Fixture fixture = seed(workspace, dbDir);
         Path game = fakeGame(workspace);
@@ -53,7 +53,7 @@ class SourceServiceTest {
     }
 
     @Test
-    @DisplayName("битый путь игры невалиден")
+    @DisplayName("broken game path is invalid")
     void brokenGamePathIsInvalid(@TempDir Path workspace, @TempDir Path dbDir) {
         Fixture fixture = seed(workspace, dbDir);
         assertFalse(fixture.sources().isValidGamePath(""));
@@ -61,7 +61,7 @@ class SourceServiceTest {
     }
 
     @Test
-    @DisplayName("обновление отклоняет несуществующий путь игры")
+    @DisplayName("update rejects a missing game path")
     void updateRejectsMissingGamePath(@TempDir Path workspace, @TempDir Path dbDir) {
         Fixture fixture = seed(workspace, dbDir);
         assertThrows(HarmoniaSuiteBadRequestException.class, () -> fixture.sources()
@@ -69,7 +69,7 @@ class SourceServiceTest {
     }
 
     @Test
-    @DisplayName("активный корень без источников бросает 400")
+    @DisplayName("active root without sources throws 400")
     void activeRootWithoutSourcesThrows(@TempDir Path workspace, @TempDir Path dbDir) {
         Fixture fixture = seed(workspace, dbDir);
         assertThrows(HarmoniaSuiteBadRequestException.class,
@@ -77,7 +77,7 @@ class SourceServiceTest {
     }
 
     @Test
-    @DisplayName("legacy rawexd подхватывается до первой синхронизации")
+    @DisplayName("legacy rawexd covers the transition until first sync")
     void legacyRootCoversTransition(@TempDir Path workspace, @TempDir Path dbDir) throws Exception {
         Fixture fixture = seed(workspace, dbDir);
         Path legacy = workspace.resolve("rawexd").resolve("en");
@@ -86,7 +86,7 @@ class SourceServiceTest {
     }
 
     @Test
-    @DisplayName("кэш версии предпочитается legacy")
+    @DisplayName("version cache beats legacy")
     void versionCacheBeatsLegacy(@TempDir Path workspace, @TempDir Path dbDir) throws Exception {
         Fixture fixture = seed(workspace, dbDir);
         Files.createDirectories(workspace.resolve("rawexd").resolve("en"));
@@ -99,7 +99,7 @@ class SourceServiceTest {
     }
 
     @Test
-    @DisplayName("config unpackerа содержит путь игры и ./en")
+    @DisplayName("unpacker config contains the game path and ./en")
     void unpackerConfigContent(@TempDir Path dir) throws Exception {
         SourceService.writeUnpackerConfig(dir, "C:\\game\\FFXIV");
         String content = Files.readString(dir.resolve("config.yml"), StandardCharsets.UTF_8);
@@ -108,7 +108,7 @@ class SourceServiceTest {
     }
 
     @Test
-    @DisplayName("cacheDir отклоняет версию с разделителями")
+    @DisplayName("cacheDir rejects versions with separators")
     void cacheDirRejectsSeparators(@TempDir Path workspace, @TempDir Path dbDir) {
         Fixture fixture = seed(workspace, dbDir);
         assertThrows(HarmoniaSuiteBadRequestException.class,
@@ -116,7 +116,7 @@ class SourceServiceTest {
     }
 
     @Test
-    @DisplayName("домашний фолбэк — Release раньше Debug")
+    @DisplayName("home fallback prefers Release over Debug")
     void homeFallbackOrder(@TempDir Path workspace, @TempDir Path dbDir) {
         seed(workspace, dbDir);
         List<String> candidates = SourceService.homeCandidates("C:/Users/pack-one");
@@ -126,7 +126,7 @@ class SourceServiceTest {
     }
 
     @Test
-    @DisplayName("статус отражает готовность")
+    @DisplayName("status reflects readiness")
     void statusReflectsReadiness(@TempDir Path workspace, @TempDir Path dbDir) {
         Fixture fixture = seed(workspace, dbDir);
         Map<String, Object> before = fixture.sources().status();

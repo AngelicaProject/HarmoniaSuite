@@ -10,7 +10,7 @@
 
 ## Tests & Style
 
-- Unit tests under `src/test/java` (JUnit 5, no Spring context). Every test carries a Russian `@DisplayName`; new tests follow. Fixtures use abstract data only (`example.com`, `pack-one`, `Author One`) — never real vendor, author, or customer names. Code comments minimal, only the non-obvious. No lint, typecheck, or pre-commit configuration.
+- Unit tests under `src/test/java` (JUnit 5, no Spring context). Every test carries an English `@DisplayName`; new tests follow. Fixtures use abstract data only (`example.com`, `pack-one`, `Author One`) — never real vendor, author, or customer names. Code comments minimal, only the non-obvious. No lint, typecheck, or pre-commit configuration.
 - Git: branch `main`, `core.autocrlf=true`. Ignored: `data/` (CSV cache + SQLite), `projects/` (work state), `target/`, `.idea/`. Releases are `vX.Y.Z` tags (see §Release). Commits follow Conventional Commits: `type(scope): subject` (`feat`, `fix`, `docs`, `refactor`, `test`, `chore`, `build`). Committed files stay machine-neutral: no usernames, absolute local paths, IDE versions, secrets, or prompt fragments — generic paths, `%USERPROFILE%`/env placeholders, neutral examples only. Co-authors via PR to `main` only; CI (`ci.yml`) runs tests on push/PR and builds the versioned dist on `v*` tags; `release.yml` builds the stable MSI on tags and the rolling MSI prerelease on every `main` push. New files meant for commit are staged explicitly (`git add <path>`); never leave intended files untracked. Coverage: JaCoCo XML → Codecov on every CI run (report only, no gates yet). Vulns: CodeQL (`codeql.yml`, push/PR + weekly) + Dependabot (maven, github-actions, weekly PRs).
 
 ## State & Sources

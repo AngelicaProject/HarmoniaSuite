@@ -22,7 +22,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 class LlmProviderTest {
 
     @Test
-    @DisplayName("gemini отклоняет модель вне allowlist")
+    @DisplayName("gemini rejects a model outside the allowlist")
     void geminiRejectsUnknownModel() {
         GeminiProvider provider = new GeminiProvider(null, new HarmoniaProperties(), null);
         assertEquals("gemini-3.5-flash-lite", provider.resolveModel(null));
@@ -31,7 +31,7 @@ class LlmProviderTest {
     }
 
     @Test
-    @DisplayName("openrouter принимает любую модель, по умолчанию — из настроек")
+    @DisplayName("openrouter accepts any model, default from settings")
     void openrouterAcceptsAnyModel(@TempDir Path dbDir) {
         HarmoniaProperties properties = new HarmoniaProperties();
         JdbcTemplate jdbc = TestDatabases.sqlite(dbDir);
@@ -45,7 +45,7 @@ class LlmProviderTest {
     }
 
     @Test
-    @DisplayName("каталог читает имена, reasoning и сортировку")
+    @DisplayName("catalog reads names, reasoning and ordering")
     void parseModelsReadsCatalog() throws Exception {
         ObjectMapper om = new ObjectMapper();
         JsonNode root = om.readTree("{\"data\":["
@@ -65,7 +65,7 @@ class LlmProviderTest {
     }
 
     @Test
-    @DisplayName("окно пачек openrouter растёт от зонда до потолка")
+    @DisplayName("openrouter batch window grows from probe to ceiling")
     void openrouterWindowGrowsFromProbe(@TempDir Path dbDir) {
         HarmoniaProperties properties = new HarmoniaProperties();
         JdbcTemplate jdbc = TestDatabases.sqlite(dbDir);
@@ -83,7 +83,7 @@ class LlmProviderTest {
     }
 
     @Test
-    @DisplayName("тело запроса openrouter в формате chat completions")
+    @DisplayName("openrouter request body uses chat completions format")
     void openrouterRequestBodyUsesContent() throws Exception {
         ObjectMapper om = new ObjectMapper();
         var body = OpenRouterApiClient.requestBody(om, "pack-one/a", "sys", "[{\"i\":0}]", 1024, "");
@@ -105,7 +105,7 @@ class LlmProviderTest {
     }
 
     @Test
-    @DisplayName("замер обрезания сужает выход и сбрасывается сменой маршрута")
+    @DisplayName("truncation measurement narrows output and resets on route change")
     void openrouterTruncationNarrowsOutput(@TempDir Path dbDir) {
         HarmoniaProperties properties = new HarmoniaProperties();
         JdbcTemplate jdbc = TestDatabases.sqlite(dbDir);
@@ -127,7 +127,7 @@ class LlmProviderTest {
     }
 
     @Test
-    @DisplayName("session reasoning проверяется и нормализуется")
+    @DisplayName("session reasoning is validated and normalized")
     void openrouterReasoningOverride(@TempDir Path dbDir) {
         HarmoniaProperties properties = new HarmoniaProperties();
         JdbcTemplate jdbc = TestDatabases.sqlite(dbDir);
@@ -146,7 +146,7 @@ class LlmProviderTest {
     }
 
     @Test
-    @DisplayName("подготовка openrouter сбрасывает окно и не ставит потолков")
+    @DisplayName("openrouter prepare resets the window and sets no caps")
     void openrouterPrepareResetsWindowWithoutCaps(@TempDir Path dbDir) {
         HarmoniaProperties properties = new HarmoniaProperties();
         JdbcTemplate jdbc = TestDatabases.sqlite(dbDir);

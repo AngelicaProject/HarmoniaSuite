@@ -12,21 +12,21 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class TagSupportTest {
 
     @Test
-    @DisplayName("простые теги извлекаются по порядку")
+    @DisplayName("simple tags are extracted in order")
     void parseSimpleTagsInOrder() {
         var tags = TagSupport.parse("A<br>B<colortype(504)>C");
         assertEquals(List.of("<br>", "<colortype(504)>"), tags.stream().map(TagSupport.Tag::text).toList());
     }
 
     @Test
-    @DisplayName("сравнение внутри условия не разрывает тег")
+    @DisplayName("comparison inside a condition does not split the tag")
     void parseComparisonInsideCondition() {
         var tags = TagSupport.parse("Potency <if([gnum72>=94],220,150)>.");
         assertEquals(List.of("<if([gnum72>=94],220,150)>"), tags.stream().map(TagSupport.Tag::text).toList());
     }
 
     @Test
-    @DisplayName("вложенные теги разбираются как один внешний")
+    @DisplayName("nested tags parse as a single outer tag")
     void parseNestedTagsAsSingleOuter() {
         String outer = "<if([gnum68==19],<if([gnum72>=84],200,150)>,150)>";
         var tags = TagSupport.parse("Deal " + outer + " damage.");
@@ -34,28 +34,28 @@ class TagSupportTest {
     }
 
     @Test
-    @DisplayName("экранированный тег текстом не считается")
+    @DisplayName("escaped tag does not count as text")
     void parseIgnoresEscapedTags() {
         assertTrue(TagSupport.parse("Say \\<sigh> now").isEmpty());
         assertEquals(List.of("<br>"), TagSupport.parse("A\\<sigh><br>").stream().map(TagSupport.Tag::text).toList());
     }
 
     @Test
-    @DisplayName("глубокий разбор находит вложенные теги")
+    @DisplayName("deep parse finds nested tags")
     void parseDeepFindsNested() {
         var texts = TagSupport.parseDeep("A<if(X,<br>)>B").stream().map(TagSupport.Tag::text).toList();
         assertEquals(List.of("<if(X,<br>)>", "<br>"), texts);
     }
 
     @Test
-    @DisplayName("вложенные теги не считаются незакрытыми")
+    @DisplayName("nested tags do not count as unclosed")
     void nestedTagsAreNotStrays() {
         String tr = "Да<br>Нет<if([gnum1==2],<br>Да)>";
         assertTrue(TagSupport.validate(tr).isEmpty());
     }
 
     @Test
-    @DisplayName("одна опечатка даёт одну ошибку с позицией")
+    @DisplayName("one typo gives one positioned error")
     void singleTypoGivesSinglePositionedError() {
         String tr = "Дарует <colortype(506)>Бред<edgecolortype:507>!";
         List<String> errors = TagSupport.validate(tr);
@@ -65,14 +65,14 @@ class TagSupportTest {
     }
 
     @Test
-    @DisplayName("переведённые ветки if не дают предупреждений")
+    @DisplayName("translated if branches produce no warnings")
     void translatedIfBranchesAreQuiet() {
         String src = "A<if([gnum1==2],Yes,No)>B";
         assertTrue(TagSupport.warnings(src, "А<if([gnum1==2],Да,Нет)>Б").isEmpty());
     }
 
     @Test
-    @DisplayName("изменённое условие if даёт предупреждение")
+    @DisplayName("changed if condition produces a warning")
     void changedIfConditionWarns() {
         List<String> warnings = TagSupport.warnings(
                 "A<if([gnum1==2],Yes,No)>", "А<if([gnum1==3],Да,Нет)>");
@@ -81,14 +81,14 @@ class TagSupportTest {
     }
 
     @Test
-    @DisplayName("условия составного if нормализуются без веток")
+    @DisplayName("compound if conditions normalize without branches")
     void multiConditionIfNormalizesToConditions() {
         assertEquals("<if(gnum68==19)if(gnum72>=54)>",
                 TagSupport.normalizedTag("<if(gnum68==19),if(gnum72>=54),<br>X,,)>"));
     }
 
     @Test
-    @DisplayName("правка условий составного if даёт предупреждение")
+    @DisplayName("editing compound if conditions produces a warning")
     void changedMultiConditionIfWarns() {
         List<String> warnings = TagSupport.warnings(
                 "A<if(gnum68==19),if(gnum72>=54),<br>X,,)>",
@@ -102,7 +102,7 @@ class TagSupportTest {
     }
 
     @Test
-    @DisplayName("неизвестный код разбирается как непрозрачный payload-тег")
+    @DisplayName("unknown code parses as an opaque payload tag")
     void parsePayloadTag() {
         var tags = TagSupport.parse("A<payload: 02>B");
         assertEquals(List.of("<payload: 02>"), tags.stream().map(TagSupport.Tag::text).toList());
@@ -110,48 +110,48 @@ class TagSupportTest {
     }
 
     @Test
-    @DisplayName("предупреждение при изменённом payload-теге")
+    @DisplayName("warning on a changed payload tag")
     void warningsOnChangedPayload() {
         List<String> warnings = TagSupport.warnings("A<payload: 02>", "А<payload: 03>");
         assertEquals(2, warnings.size());
     }
 
     @Test
-    @DisplayName("незакрытые скобки тегом не считаются")
+    @DisplayName("unclosed brackets do not count as a tag")
     void parseIgnoresUnclosedTags() {
         assertTrue(TagSupport.parse("Broken <colortype(504> text").isEmpty());
         assertTrue(TagSupport.parse("Plain a < b comparison").isEmpty());
     }
 
     @Test
-    @DisplayName("distinct убирает повторы для отображения")
+    @DisplayName("distinct removes duplicates for display")
     void distinctDedupes() {
         assertEquals(List.of("<br>", "<colortype(0)>"),
                 TagSupport.distinct("A<br>B<colortype(0)>C<br>D<colortype(0)>"));
     }
 
     @Test
-    @DisplayName("валидация пропускает совпадающие теги")
+    @DisplayName("validation accepts matching tags")
     void validateAcceptsMatchingTags() {
         assertTrue(TagSupport.validate("А <br> Б<colortype(1)>").isEmpty());
     }
 
     @Test
-    @DisplayName("валидация пропускает пустой перевод")
+    @DisplayName("validation accepts a blank translation")
     void validateAcceptsBlankTranslation() {
         assertTrue(TagSupport.validate("").isEmpty());
         assertTrue(TagSupport.validate(null).isEmpty());
     }
 
     @Test
-    @DisplayName("валидация не ругается на другой набор тегов")
+    @DisplayName("validation ignores a different tag set")
     void validateIgnoresTagSetDifference() {
         assertTrue(TagSupport.validate("А<colortype(506)>Б<br>").isEmpty());
         assertTrue(TagSupport.validate("А<BR>Б").isEmpty());
     }
 
     @Test
-    @DisplayName("предупреждения находят отсутствующие и новые теги")
+    @DisplayName("warnings report missing and extra tags")
     void warningsReportMissingAndExtra() {
         List<String> warnings = TagSupport.warnings(
                 "A<colortype(506)>B<edgecolortype(507)>", "А<colortype(506)>Б<br>");
@@ -161,7 +161,7 @@ class TagSupportTest {
     }
 
     @Test
-    @DisplayName("предупреждения молчат при совпадающих тегах")
+    @DisplayName("warnings stay silent on matching tags")
     void warningsEmptyWhenMatching() {
         assertTrue(TagSupport.warnings("A <br> B<colortype(1)>", "А <br> Б<colortype(1)>").isEmpty());
         assertTrue(TagSupport.warnings("A<br>B<colortype(0)>", "А<colortype(0)>Б<br>").isEmpty());
@@ -169,20 +169,20 @@ class TagSupportTest {
     }
 
     @Test
-    @DisplayName("валидация принимает другой порядок тегов")
+    @DisplayName("validation accepts reordered tags")
     void validateAcceptsReorderedTags() {
         assertTrue(TagSupport.validate("А<colortype(0)>Б<br>").isEmpty());
     }
 
     @Test
-    @DisplayName("валидация замечает незакрытый тег в переводе")
+    @DisplayName("validation reports an unclosed tag in the translation")
     void validateReportsStrayBracket() {
         List<String> issues = TagSupport.validate("Привет <colortype(504");
         assertTrue(issues.stream().anyMatch(m -> m.contains("незакрытый тег")));
     }
 
     @Test
-    @DisplayName("починка регистра подставляет теги оригинала")
+    @DisplayName("case repair substitutes source tags")
     void repairCasingFixesCase() {
         assertEquals("Дарует <colortype(506)>Бред<edgecolortype(0)>",
                 TagSupport.repairCasing("Grants <colortype(506)>Delirium<edgecolortype(0)>",
@@ -190,7 +190,7 @@ class TagSupportTest {
     }
 
     @Test
-    @DisplayName("починка регистра не трогает несовпадающие наборы")
+    @DisplayName("case repair leaves mismatched sets alone")
     void repairCasingKeepsUnaligned() {
         String translation = "А<br>Б";
         assertEquals(translation, TagSupport.repairCasing("A<colortype(0)>", translation));
@@ -198,7 +198,7 @@ class TagSupportTest {
     }
 
     @Test
-    @DisplayName("починка регистра не затирает переведённые ветки if")
+    @DisplayName("case repair keeps translated if branches")
     void repairCasingKeepsTranslatedBranches() {
         String translation = "А <if(x==1,Да,Нет)> Д";
         assertEquals(translation,
@@ -206,7 +206,7 @@ class TagSupportTest {
     }
 
     @Test
-    @DisplayName("парсер покрывает if с несколькими условиями целиком")
+    @DisplayName("parser spans a multi-condition if as a whole")
     void parseSpansMultiConditionIf() {
         String value = "20s <if(gnum68==19),if(gnum72>=54),<br><colortype(504)>X<colortype(0)>,,)>";
         List<TagSupport.Tag> tags = TagSupport.parseTopLevel(value);
@@ -217,7 +217,7 @@ class TagSupportTest {
     }
 
     @Test
-    @DisplayName("валидация не флагает игровой if как незакрытый")
+    @DisplayName("validation does not flag a game if as unclosed")
     void validateAcceptsGameIf() {
         assertTrue(TagSupport.validate(
                 "20s <if(gnum68==19),if(gnum72>=54),<br><colortype(504)>X<colortype(0)>,,)>!")

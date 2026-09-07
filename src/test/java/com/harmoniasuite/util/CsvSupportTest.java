@@ -18,7 +18,7 @@ class CsvSupportTest {
     private final CsvSupport csv = new CsvSupport();
 
     @Test
-    @DisplayName("CSV round-trip сохраняет спецсимволы")
+    @DisplayName("CSV round-trip preserves special characters")
     void roundTripPreservesSpecialCharacters(@TempDir Path dir) throws Exception {
         Path file = dir.resolve("a.csv");
         List<List<String>> rows = new ArrayList<>();
@@ -33,7 +33,7 @@ class CsvSupportTest {
     }
 
     @Test
-    @DisplayName("поиск String-колонок по строке типов")
+    @DisplayName("String column lookup by type row")
     void stringColumnsDetectsStringTypeRow() {
         List<List<String>> rows = new ArrayList<>();
         rows.add(new ArrayList<>(List.of("a", "b")));
@@ -45,7 +45,7 @@ class CsvSupportTest {
     }
 
     @Test
-    @DisplayName("чисто-теговые строки не переводятся")
+    @DisplayName("tag-only cells are not translated")
     void isTranslatableSkipsTagOnlyCells() {
         assertFalse(csv.isTranslatable("<if([Inum1>9999],9\\,999+,<kilo(Inum1,\\,)>)>"));
         assertFalse(csv.isTranslatable("<br><colortype(504)>"));
@@ -55,7 +55,7 @@ class CsvSupportTest {
     }
 
     @Test
-    @DisplayName("отсев идентификаторов: ACTOR, quest id, caps-снейки")
+    @DisplayName("identifier filtering: ACTOR, quest id, caps snake case")
     void isTranslatableSkipsIdentifiers() {
         assertFalse(csv.isTranslatable("ACTOR0"));
         assertFalse(csv.isTranslatable("SEQ_0_ACTOR1"));
@@ -68,7 +68,7 @@ class CsvSupportTest {
     }
 
     @Test
-    @DisplayName("отсев путей: battle/battle_start, normal/idle")
+    @DisplayName("path filtering: battle/battle_start, normal/idle")
     void isTranslatableSkipsPaths() {
         assertFalse(csv.isTranslatable("battle/battle_start"));
         assertFalse(csv.isTranslatable("normal/idle"));
@@ -76,7 +76,7 @@ class CsvSupportTest {
     }
 
     @Test
-    @DisplayName("живой текст с похожими символами остаётся: и/или, YES, теги")
+    @DisplayName("real text with lookalike symbols stays: and/or, YES, tags")
     void isTranslatableKeepsRealText() {
         assertTrue(csv.isTranslatable("A Good Adventurer Is Hard to Find"));
         assertTrue(csv.isTranslatable("Deal damage to target."));
@@ -85,7 +85,7 @@ class CsvSupportTest {
     }
 
     @Test
-    @DisplayName("отсев мусора: пустые, цифры, техключи")
+    @DisplayName("noise filtering: blanks, digits, tech keys")
     void isTranslatableFiltersNoise() {
         assertTrue(csv.isTranslatable("Hello world"));
         assertTrue(csv.isTranslatable("  Привет  "));
@@ -97,14 +97,14 @@ class CsvSupportTest {
     }
 
     @Test
-    @DisplayName("извлечение тегов <...>")
+    @DisplayName("tag extraction <...>")
     void protectedTokensExtractsTags() {
         assertEquals(List.of("<settime(1)>", "<if>"), csv.protectedTokens("A<settime(1)>B<if>C"));
         assertTrue(csv.protectedTokens("plain").isEmpty());
     }
 
     @Test
-    @DisplayName("токены без повторов, экранированные не считаются")
+    @DisplayName("tokens deduplicated, escaped ones excluded")
     void protectedTokensDistinctWithoutEscaped() {
         assertEquals(List.of("<br>"), csv.protectedTokens("A<br>B<br>\\<sigh>"));
         assertEquals(List.of("<if([gnum72>=94],220,150)>"),
@@ -112,14 +112,14 @@ class CsvSupportTest {
     }
 
     @Test
-    @DisplayName("внешние пробелы оригинала сохраняются")
+    @DisplayName("source outer whitespace is preserved")
     void preserveOuterWhitespaceKeepsPadding() {
         assertEquals("  перевод ", csv.preserveOuterWhitespace("  source ", "перевод"));
         assertEquals("перевод", csv.preserveOuterWhitespace("source", "перевод"));
     }
 
     @Test
-    @DisplayName("смена формы (строки/колонки/ключи) отклоняется")
+    @DisplayName("shape change (rows/columns/keys) is rejected")
     void validateStructureRejectsShapeChanges() {
         List<List<String>> original = new ArrayList<>();
         original.add(new ArrayList<>(List.of("1", "a")));

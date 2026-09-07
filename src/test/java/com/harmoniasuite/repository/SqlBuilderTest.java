@@ -9,7 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 class SqlBuilderTest {
 
     @Test
-    @DisplayName("первое условие идёт после WHERE, остальные через AND")
+    @DisplayName("first condition follows WHERE, the rest join with AND")
     void whereThenAnd() {
         SqlBuilder builder = SqlBuilder.where("project_id = ?", "p1")
                 .and("status = ?", "untranslated");
@@ -18,7 +18,7 @@ class SqlBuilderTest {
     }
 
     @Test
-    @DisplayName("пустой IN превращается в ложное условие")
+    @DisplayName("empty IN becomes a false condition")
     void emptyInIsFalse() {
         SqlBuilder builder = SqlBuilder.where("project_id = ?", "p1")
                 .andIn("file_path", List.of());
@@ -26,7 +26,7 @@ class SqlBuilderTest {
     }
 
     @Test
-    @DisplayName("IN раскрывается в плейсхолдеры по числу значений")
+    @DisplayName("IN expands to one placeholder per value")
     void inExpandsPlaceholders() {
         SqlBuilder builder = SqlBuilder.where("project_id = ?", "p1")
                 .andIn("file_path", List.of("a.csv", "b.csv"))

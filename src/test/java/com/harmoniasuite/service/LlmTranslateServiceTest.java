@@ -34,7 +34,7 @@ class LlmTranslateServiceTest {
     }
 
     @Test
-    @DisplayName("разбиение держит бюджет символов")
+    @DisplayName("partitioning respects the char budget")
     void partitionRespectsCharBudget() {
         LlmTranslateService svc = service(100, 40000);
         List<TranslationEntry> pending = new ArrayList<>();
@@ -49,7 +49,7 @@ class LlmTranslateServiceTest {
     }
 
     @Test
-    @DisplayName("разбиение держит бюджет выходных токенов модели")
+    @DisplayName("partitioning respects the model output token budget")
     void partitionRespectsOutputBudget() {
         LlmTranslateService svc = service(1000000, 100);
         List<TranslationEntry> pending = new ArrayList<>();
@@ -64,7 +64,7 @@ class LlmTranslateServiceTest {
     }
 
     @Test
-    @DisplayName("пачка режется лимитом фраз провайдера")
+    @DisplayName("batches are cut by the provider item limit")
     void partitionRespectsItemCap() {
         LlmTranslateService svc = service(1000000, 40000);
         LlmTranslateService capped = new LlmTranslateService(null, null, new PromptResources("p")) {
@@ -95,7 +95,7 @@ class LlmTranslateServiceTest {
     }
 
     @Test
-    @DisplayName("размыкатель срабатывает после серии ошибок и сбрасывается успехом")
+    @DisplayName("breaker trips after consecutive errors and resets on success")
     void breakerTripsAfterConsecutiveFails() {
         LlmTranslateService svc = service(1000000, 40000);
         for (int i = 0; i < LlmTranslateService.MAX_CONSECUTIVE_FAILS - 1; i++) {

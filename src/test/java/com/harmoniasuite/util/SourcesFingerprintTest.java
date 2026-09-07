@@ -17,7 +17,7 @@ class SourcesFingerprintTest {
     Path root;
 
     @Test
-    @DisplayName("отпечаток стабилен и выглядит как sha256-hex")
+    @DisplayName("fingerprint is stable and looks like sha256-hex")
     void fingerprintIsStableSha256Hex() throws Exception {
         Files.writeString(root.resolve("pack-one.csv"), "a");
         String first = SourcesFingerprint.of(List.of(root.resolve("pack-one.csv")), root);
@@ -26,7 +26,7 @@ class SourcesFingerprintTest {
     }
 
     @Test
-    @DisplayName("порядок файлов на отпечаток не влияет")
+    @DisplayName("file order does not affect the fingerprint")
     void fileOrderDoesNotAffectFingerprint() throws Exception {
         Path one = root.resolve("pack-one.csv");
         Path two = root.resolve("pack-two.csv");
@@ -38,7 +38,7 @@ class SourcesFingerprintTest {
     }
 
     @Test
-    @DisplayName("размер файла меняет отпечаток, имя без размера — нет")
+    @DisplayName("file size changes the fingerprint, name without size does not")
     void sizeChangeAffectsFingerprint() throws Exception {
         Path one = root.resolve("pack-one.csv");
         Files.writeString(one, "a");
@@ -48,7 +48,7 @@ class SourcesFingerprintTest {
     }
 
     @Test
-    @DisplayName("пустой корень даёт отпечаток пустого списка")
+    @DisplayName("empty root gives an empty-list fingerprint")
     void emptyRootGivesEmptyFingerprint() throws Exception {
         assertEquals(
                 SourcesFingerprint.of(List.of(), root),

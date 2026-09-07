@@ -32,7 +32,7 @@ class AiSettingsServiceTest {
     }
 
     @Test
-    @DisplayName("по умолчанию провайдер gemini, ключ не задан")
+    @DisplayName("default provider is gemini, no key set")
     void defaultsAreEmpty(@TempDir Path dbDir) {
         Fixture fixture = seed(dbDir);
         assertEquals("gemini", fixture.ai().provider());
@@ -41,7 +41,7 @@ class AiSettingsServiceTest {
     }
 
     @Test
-    @DisplayName("ключ из окружения подхватывается")
+    @DisplayName("env key is picked up")
     void envKeyIsEffective(@TempDir Path dbDir) {
         Fixture fixture = seed(dbDir);
         fixture.properties().getGemini().setApiKey("env-one");
@@ -52,7 +52,7 @@ class AiSettingsServiceTest {
     }
 
     @Test
-    @DisplayName("сохранённый ключ важнее окружения и маскируется")
+    @DisplayName("stored key wins over env and is masked")
     void storedKeyWinsAndMasks(@TempDir Path dbDir) {
         Fixture fixture = seed(dbDir);
         fixture.properties().getGemini().setApiKey("env-one");
@@ -65,7 +65,7 @@ class AiSettingsServiceTest {
     }
 
     @Test
-    @DisplayName("пустая строка стирает сохранённый ключ")
+    @DisplayName("blank string clears the stored key")
     void blankClearsStoredKey(@TempDir Path dbDir) {
         Fixture fixture = seed(dbDir);
         fixture.properties().getGemini().setApiKey("env-one");
@@ -76,7 +76,7 @@ class AiSettingsServiceTest {
     }
 
     @Test
-    @DisplayName("неизвестный провайдер отклоняется")
+    @DisplayName("unknown provider is rejected")
     void unknownProviderIsRejected(@TempDir Path dbDir) {
         Fixture fixture = seed(dbDir);
         assertThrows(HarmoniaSuiteBadRequestException.class, () -> fixture.ai()
@@ -84,7 +84,7 @@ class AiSettingsServiceTest {
     }
 
     @Test
-    @DisplayName("openrouter принимается и хранит свой ключ")
+    @DisplayName("openrouter is accepted and stores its own key")
     void openrouterProviderStoresKey(@TempDir Path dbDir) {
         Fixture fixture = seed(dbDir);
         Map<String, Object> status = fixture.ai()
@@ -96,7 +96,7 @@ class AiSettingsServiceTest {
     }
 
     @Test
-    @DisplayName("reasoning сохраняется и отклоняет мусор")
+    @DisplayName("reasoning is stored and rejects junk")
     void reasoningStoredAndValidated(@TempDir Path dbDir) {
         Fixture fixture = seed(dbDir);
         assertEquals("", fixture.ai().openRouterReasoning());
@@ -109,7 +109,7 @@ class AiSettingsServiceTest {
     }
 
     @Test
-    @DisplayName("проверка без ключа не ходит в сеть")
+    @DisplayName("check without a key stays offline")
     void checkWithoutKeyStaysOffline(@TempDir Path dbDir) {
         Fixture fixture = seed(dbDir);
         Map<String, Object> res = fixture.ai().checkAccess("gemini", null);

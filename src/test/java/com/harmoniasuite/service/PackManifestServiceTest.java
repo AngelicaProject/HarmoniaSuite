@@ -19,7 +19,7 @@ class PackManifestServiceTest {
     private final PackManifestService packs = new PackManifestService();
 
     @Test
-    @DisplayName("валидация перечисляет все пустые поля")
+    @DisplayName("validation lists all blank fields")
     void validateReportsAllMissingFields() {
         List<String> errors = packs.validate(new PackMeta());
         assertFalse(errors.isEmpty());
@@ -32,7 +32,7 @@ class PackManifestServiceTest {
     }
 
     @Test
-    @DisplayName("невалидный slug отклоняется")
+    @DisplayName("invalid slug is rejected")
     void validateRejectsBadSlug() {
         PackMeta pack = validPack();
         pack.setPackId("bad id!");
@@ -40,7 +40,7 @@ class PackManifestServiceTest {
     }
 
     @Test
-    @DisplayName("дефолты эффективного пака")
+    @DisplayName("effective pack defaults")
     void effectivePackAppliesDefaults() {
         TranslationDocument document = new TranslationDocument();
         document.setPack(new PackMeta());
@@ -50,7 +50,7 @@ class PackManifestServiceTest {
     }
 
     @Test
-    @DisplayName("вью пака не подменяет пустой id")
+    @DisplayName("pack view keeps a blank id")
     void storedViewKeepsBlankId() {
         PackMeta stored = new PackMeta();
         stored.setPackId("  ");
@@ -60,7 +60,7 @@ class PackManifestServiceTest {
     }
 
     @Test
-    @DisplayName("минимальный валидный манифест")
+    @DisplayName("minimal valid manifest")
     void buildProducesMinimalManifest() throws Exception {
         Map<String, Object> manifest = packs.build(validPack());
         assertEquals(1, manifest.get("manifestVersion"));

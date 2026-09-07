@@ -12,7 +12,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class Uuid6Test {
 
     @Test
-    @DisplayName("формат v6: версия, вариант, длина")
+    @DisplayName("v6 format: version, variant, length")
     void versionAndVariant() {
         String id = Uuid6.generate();
         assertEquals(36, id.length());
@@ -24,7 +24,7 @@ class Uuid6Test {
     }
 
     @Test
-    @DisplayName("генерация уникальна, метка времени неубывающая")
+    @DisplayName("generation is unique, timestamp is non-decreasing")
     void uniqueAndOrdered() {
         Set<String> seen = new HashSet<>();
         String prev = "";

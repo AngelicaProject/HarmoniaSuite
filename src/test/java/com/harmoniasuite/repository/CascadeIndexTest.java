@@ -15,7 +15,7 @@ class CascadeIndexTest {
     java.nio.file.Path dbDir;
 
     @Test
-    @DisplayName("каскадные ключи удаления покрыты индексами")
+    @DisplayName("cascade delete keys are covered by indexes")
     void cascadeKeysAreIndexed() {
         JdbcTemplate jdbc = TestDatabases.sqlite(dbDir);
         assertEquals(List.of("file_id"), jdbc.query(

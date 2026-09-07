@@ -17,7 +17,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class UpdateServiceTest {
 
     @Test
-    @DisplayName("sha из ls-remote — первый токен первой строки")
+    @DisplayName("ls-remote sha is the first token of the first line")
     void parsesLsRemoteSha() {
         assertEquals("e916062abc", UpdateService.parseLsRemote("e916062abc\trefs/heads/main\n"));
         assertEquals("", UpdateService.parseLsRemote(""));
@@ -25,7 +25,7 @@ class UpdateServiceTest {
     }
 
     @Test
-    @DisplayName("короткий sha — первые 7 символов")
+    @DisplayName("short sha is the first 7 characters")
     void shortensSha() {
         assertEquals("e916062", UpdateService.shortSha("e916062abc123"));
         assertEquals("abc", UpdateService.shortSha("abc"));
@@ -33,14 +33,14 @@ class UpdateServiceTest {
     }
 
     @Test
-    @DisplayName("режим по classpath: target/classes — dev, иначе jar")
+    @DisplayName("classpath mode: target/classes means dev, else jar")
     void detectsLaunchMode() {
         assertEquals("dev", UpdateService.launchMode("target/classes;C:/lib/app.jar"));
         assertEquals("jar", UpdateService.launchMode("C:/dist/harmonia-suite.jar"));
     }
 
     @Test
-    @DisplayName("неподставленный коммит даёт пусто")
+    @DisplayName("unresolved commit gives empty")
     void blankCommitResolvesEmpty() {
         assertEquals("", UpdateService.resolveCommit(null));
         assertEquals("", UpdateService.resolveCommit("  "));
@@ -49,7 +49,7 @@ class UpdateServiceTest {
     }
 
     @Test
-    @DisplayName("мажор javac парсится из вывода версии")
+    @DisplayName("javac major parses from version output")
     void parsesJavaMajor() {
         assertEquals(21, UpdateService.parseJavaMajor("javac 21.0.3"));
         assertEquals(11, UpdateService.parseJavaMajor("javac 11.0.24"));
@@ -58,7 +58,7 @@ class UpdateServiceTest {
     }
 
     @Test
-    @DisplayName("MinGit выбирается из ассетов релиза")
+    @DisplayName("MinGit is picked from release assets")
     void picksMinGitAsset() {
         assertEquals("https://example.com/m.zip", UpdateService.pickMinGitUrl(List.of(
                 Map.of("name", "MinGit-2.51.0-busybox-64-bit.zip", "browser_download_url", "https://example.com/bb.zip"),
@@ -70,7 +70,7 @@ class UpdateServiceTest {
     }
 
     @Test
-    @DisplayName("перезапуск через -jar меняет только jar")
+    @DisplayName("jar relaunch replaces only the jar")
     void relaunchReplacesJar() {
         List<String> command = UpdateService.relaunchCommand(
                 Paths.get("D:/repo"), "C:/java/bin/java.exe",
@@ -80,7 +80,7 @@ class UpdateServiceTest {
     }
 
     @Test
-    @DisplayName("перезапуск exe идёт через bundled runtime и собранный jar")
+    @DisplayName("exe relaunch uses the bundled runtime and built jar")
     void relaunchExeUsesRuntime() {
         List<String> command = UpdateService.relaunchCommand(
                 Paths.get("D:/repo"), "C:/install/HarmoniaSuite.exe",
@@ -90,7 +90,7 @@ class UpdateServiceTest {
     }
 
     @Test
-    @DisplayName("перезапуск без jar повторяет команду как есть")
+    @DisplayName("relaunch without a jar replays the command as is")
     void relaunchFallsBackToReplay() {
         List<String> command = UpdateService.relaunchCommand(
                 Paths.get("D:/repo"), "C:/java/bin/java.exe", List.of("-version"), null);
@@ -98,7 +98,7 @@ class UpdateServiceTest {
     }
 
     @Test
-    @DisplayName("vbs-релонч содержит pid, пути и самоудаление")
+    @DisplayName("vbs relaunch contains pid, paths and self-delete")
     void relaunchVbsContent(@TempDir Path dir) throws Exception {
         Path vbs = UpdateService.writeRelaunchVbs(12345,
                 dir.resolve("built.jar"), dir.resolve("app.jar"), dir.resolve("app.exe"));
@@ -114,7 +114,7 @@ class UpdateServiceTest {
     }
 
     @Test
-    @DisplayName("вне установки exe-пути нет")
+    @DisplayName("no exe path outside install")
     void noExeOutsideInstall() {
         assertNull(UpdateService.exeInstallPath());
     }

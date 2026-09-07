@@ -94,7 +94,7 @@ class PatchWorkflowTest {
     }
 
     @Test
-    @DisplayName("повторный extract без изменений пропускается, force идёт до конца")
+    @DisplayName("unchanged re-extract skips, force runs to the end")
     void reextractWithoutChangesSkipsUnlessForced(@TempDir Path tmp) throws Exception {
         Path input = tmp.resolve("in");
         Files.createDirectories(input);
@@ -115,7 +115,7 @@ class PatchWorkflowTest {
     }
 
     @Test
-    @DisplayName("авто: трогает только изменённые, чужое нетронуто")
+    @DisplayName("auto touches only changed files, foreign ones intact")
     void autoTouchesOnlyChanged(@TempDir Path tmp) throws Exception {
         Path input = tmp.resolve("in");
         Files.createDirectories(input);
@@ -146,7 +146,7 @@ class PatchWorkflowTest {
     }
 
     @Test
-    @DisplayName("авто: пропавший файл удаляется, чужой цел")
+    @DisplayName("auto deletes only its own vanished file")
     void autoVanishedDeletesOnlyItsOwn(@TempDir Path tmp) throws Exception {
         Path input = tmp.resolve("in");
         Files.createDirectories(input);
@@ -163,7 +163,7 @@ class PatchWorkflowTest {
     }
 
     @Test
-    @DisplayName("авто без изменений пропускается")
+    @DisplayName("auto skips without changes")
     void autoWithoutChangesSkips(@TempDir Path tmp) throws Exception {
         Path input = tmp.resolve("in");
         Files.createDirectories(input);
@@ -178,7 +178,7 @@ class PatchWorkflowTest {
     }
 
     @Test
-    @DisplayName("авто ловит правку того же размера через хеш")
+    @DisplayName("auto catches same-size edits via hash")
     void autoDetectsSameSizeChange(@TempDir Path tmp) throws Exception {
         Path input = tmp.resolve("in");
         Files.createDirectories(input);
@@ -200,7 +200,7 @@ class PatchWorkflowTest {
     }
 
     @Test
-    @DisplayName("патч: перенос, stale, новые, удалённые")
+    @DisplayName("patch carryover, stale, new and deleted rows")
     void reextractCarriesStaleAndNew(@TempDir Path tmp) throws Exception {
         Path input = tmp.resolve("in");
         Files.createDirectories(input);
@@ -253,7 +253,7 @@ class PatchWorkflowTest {
     }
 
     @Test
-    @DisplayName("сборка пропускает stale")
+    @DisplayName("merge skips stale")
     void mergeSkipsStale(@TempDir Path tmp) throws Exception {
         Path input = tmp.resolve("in");
         Files.createDirectories(input);
@@ -283,7 +283,7 @@ class PatchWorkflowTest {
     }
 
     @Test
-    @DisplayName("вставка колонки не даёт ложного stale")
+    @DisplayName("column insert causes no false stale")
     void columnInsertPreventsFalseStale(@TempDir Path tmp) throws Exception {
         Path input = tmp.resolve("in");
         Files.createDirectories(input);
@@ -317,7 +317,7 @@ class PatchWorkflowTest {
     }
 
     @Test
-    @DisplayName("сборка пропускает ячейки с изменившимся исходником")
+    @DisplayName("merge skips cells with changed source")
     void mergeSkipsChangedSource(@TempDir Path tmp) throws Exception {
         Path input = tmp.resolve("in");
         Files.createDirectories(input);
@@ -349,7 +349,7 @@ class PatchWorkflowTest {
     }
 
     @Test
-    @DisplayName("сборка не пишет в колонку, ставшую не-String")
+    @DisplayName("merge skips columns turned non-String")
     void mergeSkipsColumnTurnedNonString(@TempDir Path tmp) throws Exception {
         Path input = tmp.resolve("in");
         Files.createDirectories(input);
@@ -381,7 +381,7 @@ class PatchWorkflowTest {
     }
 
     @Test
-    @DisplayName("сборка пишет только файлы с переводами")
+    @DisplayName("merge writes only files with translations")
     void mergeWritesOnlyTranslatedFiles(@TempDir Path tmp) throws Exception {
         Path input = tmp.resolve("in");
         Files.createDirectories(input);
@@ -407,7 +407,7 @@ class PatchWorkflowTest {
     }
 
     @Test
-    @DisplayName("сборка без переводов ничего не пишет")
+    @DisplayName("merge without translations writes nothing")
     void mergeWithoutTranslationsWritesNothing(@TempDir Path tmp) throws Exception {
         Path input = tmp.resolve("in");
         Files.createDirectories(input);

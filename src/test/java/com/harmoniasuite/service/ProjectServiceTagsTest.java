@@ -54,7 +54,7 @@ class ProjectServiceTagsTest {
     }
 
     @Test
-    @DisplayName("сохранение отклоняет перевод с битыми тегами")
+    @DisplayName("save rejects a translation with broken tags")
     void updateEntryRejectsBrokenTags(@TempDir Path tmp, @TempDir Path dbDir) {
         Fixture fixture = seed(tmp, dbDir, "Grants <colortype(506)>Delirium<br>");
 
@@ -65,7 +65,7 @@ class ProjectServiceTagsTest {
     }
 
     @Test
-    @DisplayName("сохранение пропускает другой набор тегов с предупреждением")
+    @DisplayName("save accepts a different tag set with a warning")
     @SuppressWarnings("unchecked")
     void updateEntryWarnsOnDifferentTagSet(@TempDir Path tmp, @TempDir Path dbDir) {
         Fixture fixture = seed(tmp, dbDir, "Grants <colortype(506)>Delirium<br>");
@@ -78,7 +78,7 @@ class ProjectServiceTagsTest {
     }
 
     @Test
-    @DisplayName("сохранение принимает совпадающие теги и пустой перевод")
+    @DisplayName("save accepts matching tags and a blank translation")
     void updateEntryAcceptsMatchingTags(@TempDir Path tmp, @TempDir Path dbDir) {
         Fixture fixture = seed(tmp, dbDir, "Grants <colortype(506)>Delirium<br>");
 

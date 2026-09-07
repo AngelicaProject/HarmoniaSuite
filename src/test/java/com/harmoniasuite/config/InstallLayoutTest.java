@@ -13,7 +13,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 class InstallLayoutTest {
 
     @Test
-    @DisplayName("родитель jar — первая jar-запись classpath")
+    @DisplayName("jar parent is the first jar entry of the classpath")
     void jarParentPicksFirstJar(@TempDir Path cwd, @TempDir Path app) throws Exception {
         Files.createFile(app.resolve("harmonia-suite.jar"));
         String cp = app.resolve("other").toString() + File.pathSeparator
@@ -22,7 +22,7 @@ class InstallLayoutTest {
     }
 
     @Test
-    @DisplayName("без jar-записей баз нет")
+    @DisplayName("no jar entries means no bases")
     void noJarNoBase(@TempDir Path cwd) {
         assertNull(InstallLayout.jarParent("target/classes", cwd));
         assertNull(InstallLayout.jarParent("", cwd));
@@ -30,7 +30,7 @@ class InstallLayoutTest {
     }
 
     @Test
-    @DisplayName("относительный jar резолвится от cwd")
+    @DisplayName("relative jar resolves from cwd")
     void relativeJarFromCwd(@TempDir Path cwd) throws Exception {
         Path app = cwd.resolve("app");
         Files.createDirectories(app);

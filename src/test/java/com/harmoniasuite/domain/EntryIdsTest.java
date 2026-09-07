@@ -10,7 +10,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class EntryIdsTest {
 
     @Test
-    @DisplayName("id ячейки стабилен и имеет префикс c_")
+    @DisplayName("cell id is stable and has c_ prefix")
     void cellIdIsStableAndPrefixed() {
         String first = EntryIds.ofCell("pack-one.csv", "10", 2);
         assertEquals(first, EntryIds.ofCell("pack-one.csv", "10", 2));
@@ -20,7 +20,7 @@ class EntryIdsTest {
     }
 
     @Test
-    @DisplayName("разные ячейки дают разные id")
+    @DisplayName("different cells give different ids")
     void differentCellsGiveDifferentIds() {
         String base = EntryIds.ofCell("pack-one.csv", "10", 2);
         assertNotEquals(base, EntryIds.ofCell("pack-two.csv", "10", 2));
@@ -29,7 +29,7 @@ class EntryIdsTest {
     }
 
     @Test
-    @DisplayName("текст на id не влияет — только координаты")
+    @DisplayName("text does not affect id, only coordinates")
     void textDoesNotAffectId() {
         assertEquals(EntryIds.ofCell("pack-one.csv", "10", 2), EntryIds.ofCell("pack-one.csv", "10", 2));
     }

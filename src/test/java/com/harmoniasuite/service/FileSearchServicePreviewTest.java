@@ -40,7 +40,7 @@ class FileSearchServicePreviewTest {
     }
 
     @Test
-    @DisplayName("Краткое превью не возвращает полную таблицу")
+    @DisplayName("short preview does not return the full table")
     void shortPreviewHasNoFullTable() throws Exception {
         SourcePreviewDto res = files.previewFile("rawexd/en", "pack-one.csv");
         assertFalse(res.preview().isEmpty());
@@ -49,7 +49,7 @@ class FileSearchServicePreviewTest {
     }
 
     @Test
-    @DisplayName("Полное превью возвращает шапку и все строки данных")
+    @DisplayName("full preview returns the header and all data rows")
     void fullPreviewReturnsHeadAndData() throws Exception {
         SourcePreviewDto res = files.previewFile("rawexd/en", "pack-one.csv", true);
         assertEquals(List.of("key,#,offset", "0,0,0", "1,1,1", "Int32,String,String"),
@@ -59,7 +59,7 @@ class FileSearchServicePreviewTest {
     }
 
     @Test
-    @DisplayName("Список исходников отдаёт только имена csv")
+    @DisplayName("source listing returns only csv names")
     void sourceFilesListsCsvNames() throws Exception {
         assertEquals(List.of("pack-one.csv"), files.listCsvFiles("rawexd/en").files());
     }
