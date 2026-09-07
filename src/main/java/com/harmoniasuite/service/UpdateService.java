@@ -629,9 +629,11 @@ public class UpdateService {
         builder.environment().putAll(env);
         builder.environment().put("GIT_TERMINAL_PROMPT", "0");
         builder.environment().put("GCM_INTERACTIVE", "never");
-        builder.environment().put("GIT_CONFIG_COUNT", "1");
+        builder.environment().put("GIT_CONFIG_COUNT", "2");
         builder.environment().put("GIT_CONFIG_KEY_0", "credential.helper");
         builder.environment().put("GIT_CONFIG_VALUE_0", "");
+        builder.environment().put("GIT_CONFIG_KEY_1", "http.https://github.com/.extraheader");
+        builder.environment().put("GIT_CONFIG_VALUE_1", "");
         Process process = builder.start();
         try {
             process.getOutputStream().close();
