@@ -2,7 +2,7 @@ import {computed, createApp, nextTick, onMounted, ref, shallowRef, watch} from '
 import {api} from './api.js?v=30';
 import Picker from './components/Picker.vue.js?v=17';
 import Editor from './components/Editor.vue.js?v=46';
-import Settings from './components/Settings.vue.js?v=18';
+import Settings from './components/Settings.vue.js?v=20';
 import TranslateView from './components/TranslateView.vue.js?v=29';
 import SearchView from './components/SearchView.vue.js?v=9';
 import TagsView from './components/TagsView.vue.js?v=22';

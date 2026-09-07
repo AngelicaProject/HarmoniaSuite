@@ -13,7 +13,7 @@ export default {
       orModels: [], orComboOpen: false, orComboQ: '',
       checkBusy: '', checkMsg: {gemini: null, openrouter: null},
       bkItems: [], bkRetention: 10, bkInput: '10', bkUsed: 0, bkEstimate: 0,
-      bkError: '', bkSaved: '', bkBusy: false, bkSaving: false,
+      bkError: '', bkSaved: '', bkBusy: false,
     };
   },
   computed: {
@@ -54,6 +54,12 @@ export default {
     fillPct() {
       const n = Math.min(Math.max(parseInt(this.bkInput, 10) || 1, 1), 100);
       return ((n - 1) / 99 * 100).toFixed(1);
+    },
+    bkSlide(e) {
+      const el = e && e.target;
+      if (!el || !el.style) return;
+      const n = Math.min(Math.max(parseInt(el.value, 10) || 1, 1), 100);
+      el.style.setProperty('--fill', ((n - 1) / 99 * 100).toFixed(1) + '%');
     },
     keyPlaceholder() {
       if (this.aiSt.geminiKeySet) return this.aiSt.geminiKeyHint || '••••';
@@ -278,22 +284,22 @@ export default {
       }
       this.bkBusy = false;
     },
-    async bkSaveRetention() {
+    async bkSaveRetention(quiet) {
       this.bkError = '';
       this.bkSaved = '';
-      this.bkSaving = true;
+      const sent = parseInt(this.bkInput, 10);
       try {
-        const d = await api.saveBackupSettings(parseInt(this.bkInput, 10));
+        const d = await api.saveBackupSettings(sent);
+        if (parseInt(this.bkInput, 10) !== sent) return;
         this.bkItems = d.backups || [];
         this.bkRetention = d.retention;
         this.bkInput = String(d.retention);
         this.bkUsed = d.usedBytes;
         this.bkEstimate = d.estimatedBytes;
-        this.bkSaved = 'Сохранено — перезапуск не нужен';
+        if (!quiet) this.bkSaved = 'Сохранено — перезапуск не нужен';
       } catch (e) {
         this.bkError = e.message;
       }
-      this.bkSaving = false;
     },
     async bkDelete(name) {
       if (!confirm('Удалить бэкап ' + name + '?')) return;
@@ -405,7 +411,7 @@ export default {
             </div>
             <div class="set-field">
               <span class="set-label">Хранить копий</span>
-              <div class="set-row" style="align-items:center"><input v-model="bkInput" type="range" min="1" max="100" step="1" class="grow bk-range" :style="{'--fill': fillPct + '%'}" :disabled="bkSaving" @change="bkSaveRetention"><b style="min-width:36px;text-align:right">{{bkInput}}</b></div>
+              <div class="set-row" style="align-items:center"><input v-model="bkInput" type="range" min="1" max="100" step="1" class="grow bk-range" :style="{'--fill': fillPct + '%'}" @input="bkSlide" @change="bkSaveRetention(true)"><b style="min-width:36px;text-align:right;user-select:none;-webkit-user-select:none" @mousedown.prevent>{{bkInput}}</b></div>
               <div class="set-hint">≈ {{fmtBytes(liveEstimate)}} при {{bkInput}} копиях (сейчас занято {{fmtBytes(bkUsed)}})</div>
             </div>
             <div v-if="bkError" class="form-error">{{bkError}}</div>
