@@ -2,13 +2,17 @@ package com.harmoniasuite.service;
 
 import com.harmoniasuite.config.StartupLink;
 import jakarta.annotation.PreDestroy;
+import java.awt.Graphics2D;
 import java.awt.GraphicsEnvironment;
+import java.awt.Image;
 import java.awt.MenuItem;
 import java.awt.PopupMenu;
 import java.awt.SystemTray;
 import java.awt.TrayIcon;
+import java.awt.RenderingHints;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
+import java.awt.image.BufferedImage;
 import javax.imageio.ImageIO;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -54,8 +58,8 @@ public class TrayService implements ApplicationListener<ApplicationReadyEvent> {
             menu.add(open);
             menu.addSeparator();
             menu.add(exit);
-            icon = new TrayIcon(image, "Harmonia Suite");
-            icon.setImageAutoSize(true);
+            icon = new TrayIcon(scaleIcon(image), "Harmonia Suite");
+            icon.setImageAutoSize(false);
             icon.setPopupMenu(menu);
             icon.addMouseListener(new MouseAdapter() {
                 @Override
@@ -74,6 +78,23 @@ public class TrayService implements ApplicationListener<ApplicationReadyEvent> {
     private String link() {
         String port = environment.getProperty("local.server.port");
         return "http://127.0.0.1:" + (port == null || port.isBlank() ? "8765" : port);
+    }
+
+    private Image scaleIcon(BufferedImage source) {
+        var size = SystemTray.getSystemTray().getTrayIconSize();
+        int width = Math.max(16, size.width);
+        int height = Math.max(16, size.height);
+        if (source.getWidth() == width && source.getHeight() == height) {
+            return source;
+        }
+        BufferedImage scaled = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
+        Graphics2D g = scaled.createGraphics();
+        g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BICUBIC);
+        g.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY);
+        g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+        g.drawImage(source, 0, 0, width, height, null);
+        g.dispose();
+        return scaled;
     }
 
     private void close() {
