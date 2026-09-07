@@ -47,7 +47,8 @@ export default {
     },
     liveEstimate() {
       const n = parseInt(this.bkInput, 10) || 0;
-      const per = (this.bkItems.length && this.bkItems[0].size) || 0;
+      const per = this.bkItems.length ? (this.bkItems[0].size || 0)
+        : (this.bkRetention ? Math.round((this.bkEstimate || 0) / this.bkRetention) : 0);
       return n * per;
     },
     keyPlaceholder() {
