@@ -401,7 +401,7 @@ export default {
             </div>
             <div class="set-field">
               <span class="set-label">Хранить копий</span>
-              <div class="set-row"><input v-model="bkInput" type="number" min="1" max="100" style="max-width:90px"><button class="subtle" @click="bkSaveRetention" :disabled="bkSaving">Сохранить</button></div>
+              <div class="set-row" style="align-items:center"><input v-model="bkInput" type="range" min="1" max="100" step="1" class="grow" :disabled="bkSaving" @change="bkSaveRetention"><b style="min-width:36px;text-align:right">{{bkInput}}</b></div>
               <div class="set-hint">≈ {{fmtBytes(liveEstimate)}} при {{bkInput}} копиях (сейчас занято {{fmtBytes(bkUsed)}})</div>
             </div>
             <div v-if="bkError" class="form-error">{{bkError}}</div>
