@@ -31,7 +31,7 @@ const App = {
             hideEmpty.value = !hideEmpty.value;
             try { localStorage.setItem('hs-hide-empty', hideEmpty.value ? 'on' : 'off'); } catch (e) {}
         }
-        const fileSort = ref((() => { try { return localStorage.getItem('hs-sort') || 'need'; } catch (e) { return 'need'; } })());
+        const fileSort = ref((() => { try { return localStorage.getItem('hs-sort') || 'name'; } catch (e) { return 'name'; } })());
         function setSort(v) {
             fileSort.value = v;
             try { localStorage.setItem('hs-sort', v); } catch (e) {}
