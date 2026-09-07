@@ -9,7 +9,7 @@ import TagsView from './components/TagsView.vue.js?v=22';
 import SummaryView from './components/SummaryView.vue.js?v=13';
 import PackView from './components/PackView.vue.js?v=16';
 import ExportView from './components/ExportView.vue.js?v=30';
-import DeltaView from './components/DeltaView.vue.js?v=23';
+import DeltaView from './components/DeltaView.vue.js?v=24';
 import LogView from './components/LogView.vue.js?v=8';
 import Dropdown from './components/Dropdown.vue.js?v=2';
 
