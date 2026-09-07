@@ -374,6 +374,7 @@ input[type="checkbox"]:disabled:checked,input[type="checkbox"]:disabled:indeterm
 .bk-range::-moz-range-thumb{width:12px;height:12px;border-radius:4px;background:var(--primary);border:none}
 .bk-range:disabled{opacity:.5;cursor:default}
 .bk-range:focus{box-shadow:none}
+.bk-range:focus-visible{outline:none}
 .export-badge{min-width:78px;text-align:center;font-size:11px;white-space:nowrap;flex-shrink:0}
 
 /* ---------- Start screen (picker) ---------- */
