@@ -395,7 +395,7 @@ export default {
     <div v-if="expInfo" class="muted" style="font-size:12px;margin-top:6px">{{expInfo}}</div>
 
     <div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.08em;font-weight:700;margin-top:12px">Вливание</div>
-    <div style="display:flex;gap:8px;margin:8px 0;align-items:center;flex-wrap:wrap"><label class="sm" style="cursor:pointer">Выбрать файл дельты<input type="file" accept=".json,application/json" @change="onFile" style="display:none"></label><span class="muted" style="font-size:12px">{{impFileName||'файл не выбран'}}</span></div>
+    <div style="display:flex;gap:8px;margin:8px 0;align-items:center;flex-wrap:wrap"><label class="subtle" style="cursor:pointer">Выбрать файл дельты<input type="file" accept=".json,application/json" @change="onFile" style="display:none"></label><span class="muted" style="font-size:12px">{{impFileName||'файл не выбран'}}</span></div>
     <div v-if="impParsed" class="muted" style="font-size:12px;margin-bottom:8px">Строк: {{impParsed.rows.length}} · sources_fp: {{((impParsed.header||{}).sources_fp||'—').slice(0,12)}} · автор: {{(impParsed.header||{}).author||'—'}}</div>
     <div v-if="impParsed" style="margin:8px 0"><div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.08em;font-weight:700">Файлы в дельте — вливать отмеченные</div><div style="display:flex;flex-direction:column;gap:4px;max-height:200px;overflow-y:auto;margin-top:4px">
       <div v-for="r in impRows" :key="r.key">
