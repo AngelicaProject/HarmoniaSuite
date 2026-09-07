@@ -10,6 +10,8 @@ public interface BackupOps {
     void delete(String name) throws Exception;
     int retention();
     void setRetention(int n);
+    int autoIntervalMinutes();
+    void setAutoIntervalMinutes(int minutes);
     long usedBytes() throws Exception;
     long estimatedBytes() throws Exception;
     void openFolder() throws Exception;

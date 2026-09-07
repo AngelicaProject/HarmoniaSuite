@@ -28,6 +28,10 @@ public class BackupService implements BackupOps {
     public static final String KEY_RETENTION = "backup.retention";
     private static final int DEFAULT_KEEP = 10;
     private static final int MAX_KEEP = 100;
+    public static final String KEY_AUTO_INTERVAL = "backup.interval-minutes";
+    private static final int DEFAULT_AUTO_INTERVAL = 0;
+    private static final int MIN_AUTO_INTERVAL = 5;
+    private static final int MAX_AUTO_INTERVAL = 10080;
 
     private final JdbcTemplate jdbc;
     private final Path dbFile;
@@ -74,6 +78,31 @@ public class BackupService implements BackupOps {
         } catch (Exception e) {
             throw new IllegalStateException("retention prune failed", e);
         }
+    }
+
+    @Override
+    public int autoIntervalMinutes() {
+        String raw = settings.get(KEY_AUTO_INTERVAL);
+        if (raw == null) {
+            return DEFAULT_AUTO_INTERVAL;
+        }
+        try {
+            int n = Integer.parseInt(raw.trim());
+            if (n == 0) {
+                return 0;
+            }
+            return Math.min(Math.max(n, MIN_AUTO_INTERVAL), MAX_AUTO_INTERVAL);
+        } catch (NumberFormatException e) {
+            return DEFAULT_AUTO_INTERVAL;
+        }
+    }
+
+    @Override
+    public void setAutoIntervalMinutes(int minutes) {
+        if (minutes != 0 && (minutes < MIN_AUTO_INTERVAL || minutes > MAX_AUTO_INTERVAL)) {
+            throw new HarmoniaSuiteBadRequestException("auto interval must be 0 or 5..10080");
+        }
+        settings.set(KEY_AUTO_INTERVAL, String.valueOf(minutes));
     }
 
     @Override

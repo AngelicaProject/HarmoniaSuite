@@ -47,6 +47,16 @@ public class UnsupportedBackupService implements BackupOps {
     }
 
     @Override
+    public int autoIntervalMinutes() {
+        throw unsupported();
+    }
+
+    @Override
+    public void setAutoIntervalMinutes(int minutes) {
+        throw unsupported();
+    }
+
+    @Override
     public long usedBytes() throws Exception {
         throw unsupported();
     }

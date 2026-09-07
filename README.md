@@ -73,7 +73,7 @@ If two people edit the same cell, it shows up as a conflict. Incoming edits neve
 
 ## Database backups
 
-Settings → Database: create a full snapshot, download or delete copies, set how many to keep (default 10, range 1–100; shrinking deletes the excess right away). Snapshots live in `backups/` next to `harmonia.db` (`data/backups/` from source, `%APPDATA%/HarmoniaSuite/backups/` installed). The list shows the estimate for the chosen retention (≈ copies × newest snapshot).
+Settings → Database: create a full snapshot, download or delete copies, set how many to keep (default 10, range 1–100; shrinking deletes the excess right away). Automatic backups: every N minutes (default 0 = off, range 0 or 5–10080); the check runs once a minute from the newest snapshot, so a manual backup also resets the timer. Snapshots live in `backups/` next to `harmonia.db` (`data/backups/` from source, `%APPDATA%/HarmoniaSuite/backups/` installed). The list shows the estimate for the chosen retention (≈ copies × newest snapshot).
 
 Restore is manual, with the app stopped:
 

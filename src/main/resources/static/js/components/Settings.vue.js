@@ -1,4 +1,4 @@
-import {api} from '../api.js?v=33';
+import {api} from '../api.js?v=34';
 export default {
   props: ['initial', 'forced'],
   emits: ['close', 'changed'],
@@ -13,6 +13,7 @@ export default {
       orModels: [], orComboOpen: false, orComboQ: '',
       checkBusy: '', checkMsg: {gemini: null, openrouter: null},
       bkItems: [], bkRetention: 10, bkInput: '10', bkUsed: 0, bkEstimate: 0,
+      bkAuto: 0, bkAutoInput: '0',
       bkError: '', bkSaved: '', bkBusy: false,
     };
   },
@@ -256,6 +257,13 @@ export default {
       if (n < 1073741824) return (n / 1048576).toFixed(1).replace('.', ',') + ' МБ';
       return (n / 1073741824).toFixed(1).replace('.', ',') + ' ГБ';
     },
+    fmtInterval(min) {
+      min = Number(min || 0);
+      if (!min) return 'выключен';
+      if (min % 1440 === 0) return 'каждые ' + (min / 1440) + ' сут';
+      if (min % 60 === 0) return 'каждые ' + (min / 60) + ' ч';
+      return 'каждые ' + min + ' мин';
+    },
     dlUrl(name) {
       return api.backupDownloadUrl(name);
     },
@@ -265,6 +273,8 @@ export default {
         this.bkItems = d.backups || [];
         this.bkRetention = d.retention;
         this.bkInput = String(d.retention);
+        this.bkAuto = d.autoIntervalMinutes ?? 0;
+        this.bkAutoInput = String(this.bkAuto);
         this.bkUsed = d.usedBytes;
         this.bkEstimate = d.estimatedBytes;
       } catch (e) {
@@ -294,9 +304,32 @@ export default {
         this.bkItems = d.backups || [];
         this.bkRetention = d.retention;
         this.bkInput = String(d.retention);
+        this.bkAuto = d.autoIntervalMinutes ?? this.bkAuto;
+        this.bkAutoInput = String(this.bkAuto);
         this.bkUsed = d.usedBytes;
         this.bkEstimate = d.estimatedBytes;
         if (!quiet) this.bkSaved = 'Сохранено — перезапуск не нужен';
+      } catch (e) {
+        this.bkError = e.message;
+      }
+    },
+    async bkSaveAuto() {
+      this.bkError = '';
+      this.bkSaved = '';
+      const sent = parseInt(this.bkAutoInput, 10);
+      if (isNaN(sent)) {
+        this.bkAutoInput = String(this.bkAuto);
+        return;
+      }
+      try {
+        const d = await api.saveBackupSettings(undefined, sent);
+        if (parseInt(this.bkAutoInput, 10) !== sent) return;
+        this.bkItems = d.backups || [];
+        this.bkAuto = d.autoIntervalMinutes ?? 0;
+        this.bkAutoInput = String(this.bkAuto);
+        this.bkUsed = d.usedBytes;
+        this.bkEstimate = d.estimatedBytes;
+        this.bkSaved = 'Сохранено — перезапуск не нужен';
       } catch (e) {
         this.bkError = e.message;
       }
@@ -421,6 +454,11 @@ export default {
               <span class="set-label">Хранить копий</span>
               <div class="set-row" style="align-items:center"><input v-model="bkInput" type="range" min="1" max="100" step="1" class="grow bk-range" :style="{'--fill': fillPct + '%'}" @input="bkSlide" @change="bkSaveRetention(true)"><b style="min-width:36px;text-align:right;user-select:none;-webkit-user-select:none" @mousedown.prevent>{{bkInput}}</b></div>
               <div class="set-hint">≈ {{fmtBytes(liveEstimate)}} при {{bkInput}} копиях (сейчас занято {{fmtBytes(bkUsed)}})</div>
+            </div>
+            <div class="set-field">
+              <span class="set-label">Автобэкап</span>
+              <div class="set-row" style="align-items:center"><input v-model="bkAutoInput" type="number" min="0" max="10080" step="1" class="grow" style="max-width:110px" @change="bkSaveAuto"><span class="set-hint" style="margin:0">мин, 0 — выкл</span></div>
+              <div class="set-hint">Автобэкап {{fmtInterval(bkAuto)}} · проверка раз в минуту от самого нового снимка (ручной тоже сбрасывает таймер)</div>
             </div>
             <div v-if="bkError" class="form-error">{{bkError}}</div>
             <div v-else-if="bkSaved" class="set-ok">{{bkSaved}}</div>

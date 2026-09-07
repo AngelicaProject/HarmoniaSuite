@@ -36,15 +36,21 @@ public class BackupController {
     @GetMapping
     public BackupListDto list() throws Exception {
         List<BackupDto> items = backups.list().stream().map(BackupController::toDto).toList();
-        return new BackupListDto(items, backups.retention(), backups.usedBytes(), backups.estimatedBytes());
+        return new BackupListDto(items, backups.retention(), backups.autoIntervalMinutes(),
+                backups.usedBytes(), backups.estimatedBytes());
     }
 
     @PutMapping("/settings")
     public BackupListDto settings(@RequestBody UpdateBackupSettingsRequest body) throws Exception {
-        if (body.retention() == null) {
-            throw new HarmoniaSuiteBadRequestException("retention is required");
+        if (body.retention() == null && body.autoIntervalMinutes() == null) {
+            throw new HarmoniaSuiteBadRequestException("retention or auto_interval_minutes is required");
         }
-        backups.setRetention(body.retention());
+        if (body.retention() != null) {
+            backups.setRetention(body.retention());
+        }
+        if (body.autoIntervalMinutes() != null) {
+            backups.setAutoIntervalMinutes(body.autoIntervalMinutes());
+        }
         return list();
     }
 

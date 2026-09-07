@@ -61,4 +61,23 @@ class BackupServiceTest {
         service.create();
         assertEquals(2, service.list().size());
     }
+
+    @Test
+    @DisplayName("auto interval defaults to off and rejects out-of-range values")
+    void autoIntervalValidation() throws Exception {
+        JdbcTemplate jdbc = TestDatabases.sqlite(tmp.resolve("live4"));
+        SettingsRepository settings = new SettingsRepository(jdbc);
+        BackupService service = new BackupService(jdbc, tmp.resolve("live4/test.db"), tmp.resolve("backups4"),
+                settings);
+        assertEquals(0, service.autoIntervalMinutes());
+        assertThrows(IllegalArgumentException.class, () -> service.setAutoIntervalMinutes(-1));
+        assertThrows(IllegalArgumentException.class, () -> service.setAutoIntervalMinutes(4));
+        assertThrows(IllegalArgumentException.class, () -> service.setAutoIntervalMinutes(10081));
+        service.setAutoIntervalMinutes(0);
+        assertEquals(0, service.autoIntervalMinutes());
+        service.setAutoIntervalMinutes(60);
+        assertEquals(60, service.autoIntervalMinutes());
+        settings.set(BackupService.KEY_AUTO_INTERVAL, "not-a-number");
+        assertEquals(0, service.autoIntervalMinutes());
+    }
 }

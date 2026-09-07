@@ -14,7 +14,7 @@ async function req(url,opt){
   }
 }
 const enc=encodeURIComponent;
-const mapBackupList=(d)=>({backups:d.backups,retention:d.retention,usedBytes:d.used_bytes,estimatedBytes:d.estimated_bytes});
+const mapBackupList=(d)=>({backups:d.backups,retention:d.retention,autoIntervalMinutes:d.auto_interval_minutes,usedBytes:d.used_bytes,estimatedBytes:d.estimated_bytes});
 export const api={
   projects:()=>req('/api/projects'),
   createProject:(name,root)=>req('/api/projects',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:name,root})}),
@@ -68,7 +68,7 @@ export const api={
   detectSettings:()=>req('/api/settings/detect'),
   backups:()=>req('/api/backup').then(mapBackupList),
   createBackup:()=>req('/api/backup',{method:'POST'}),
-  saveBackupSettings:(retention)=>req('/api/backup/settings',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({retention})}).then(mapBackupList),
+  saveBackupSettings:(retention,autoIntervalMinutes)=>req('/api/backup/settings',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({retention,auto_interval_minutes:autoIntervalMinutes})}).then(mapBackupList),
   deleteBackup:(name)=>req('/api/backup/'+encodeURIComponent(name),{method:'DELETE'}),
   openBackupFolder:()=>req('/api/backup/open-folder',{method:'POST'}),
   backupDownloadUrl:(name)=>'/api/backup/'+encodeURIComponent(name),
