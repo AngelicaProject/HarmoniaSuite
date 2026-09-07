@@ -627,7 +627,16 @@ public class UpdateService {
                 .directory(dir.toFile())
                 .redirectErrorStream(true);
         builder.environment().putAll(env);
+        builder.environment().put("GIT_TERMINAL_PROMPT", "0");
+        builder.environment().put("GCM_INTERACTIVE", "never");
+        builder.environment().put("GIT_CONFIG_COUNT", "1");
+        builder.environment().put("GIT_CONFIG_KEY_0", "credential.helper");
+        builder.environment().put("GIT_CONFIG_VALUE_0", "");
         Process process = builder.start();
+        try {
+            process.getOutputStream().close();
+        } catch (IOException ignored) {
+        }
         try (BufferedReader reader = new BufferedReader(
                 new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
             reader.lines().forEach(log);
