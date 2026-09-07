@@ -114,6 +114,14 @@ class UpdateServiceTest {
     }
 
     @Test
+    @DisplayName("update build skips tests like release builds")
+    void updateBuildSkipsTests() {
+        List<String> command = UpdateService.buildCommand(Paths.get("D:/repo"));
+        assertTrue(command.get(0).contains("mvnw"));
+        assertEquals(List.of("-B", "-DskipTests", "package"), command.subList(1, command.size()));
+    }
+
+    @Test
     @DisplayName("no exe path outside install")
     void noExeOutsideInstall() {
         assertNull(UpdateService.exeInstallPath());

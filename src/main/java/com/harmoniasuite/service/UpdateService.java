@@ -205,6 +205,11 @@ public class UpdateService {
         }
     }
 
+    static List<String> buildCommand(Path root) {
+        Path mvn = root.resolve(isWindows() ? "mvnw.cmd" : "mvnw");
+        return List.of(mvn.toString(), "-B", "-DskipTests", "package");
+    }
+
     private void runGitUpdate(Path root, Consumer<String> log, String gitBin, String javaHome) throws Exception {
         if (!out(root, gitBin, "status", "--porcelain").isBlank()) {
             throw new HarmoniaSuiteBadRequestException("Обновление отменено: есть локальные изменения");
@@ -222,9 +227,8 @@ public class UpdateService {
             if (code != 0) {
                 throw new IOException("git pull завершился с кодом " + code);
             }
-            Path mvn = root.resolve(isWindows() ? "mvnw.cmd" : "mvnw");
             log.accept("Сборка");
-            code = run(root, List.of(mvn.toString(), "-B", "package"), log,
+            code = run(root, buildCommand(root), log,
                     Map.of("JAVA_HOME", javaHome));
             if (code != 0) {
                 throw new IOException("Сборка завершилась с кодом " + code);
