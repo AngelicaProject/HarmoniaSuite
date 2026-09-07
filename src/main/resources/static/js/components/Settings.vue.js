@@ -254,13 +254,12 @@ export default {
         </div>
         <div class="set-content">
           <template v-if="section==='sources'">
-            <p class="set-intro">CSV генерируются из установленной игры через XivExdUnpacker и кэшируются в <span class="mono">data/sources/‹версия›/en</span>. После патча игры синхронизируйтесь заново — старые версии кэша остаются рядом.</p>
             <div class="set-field">
               <span class="set-label">Путь к игре</span>
               <div class="set-row"><input class="grow" v-model="gamePath" placeholder="C:/Program Files (x86)/Steam/steamapps/common/FINAL FANTASY XIV Online"><button class="subtle" @click="detect">Найти</button></div>
               <div class="set-hint">Версия: {{srcSt.gameVersion||'—'}}</div>
             </div>
-            <div class="set-hint">Активный корень: <span class="mono">{{srcSt.activeRoot||'—'}}</span></div>
+            <div class="set-hint">Источники: {{srcSt.ready?'готовы':'не синхронизированы'}}</div>
             <div v-if="srcError" class="form-error">{{srcError}}</div>
             <div v-else-if="srcSaved" class="set-ok">{{srcSaved}}</div>
             <div class="set-actions"><button class="primary" @click="srcSave" :disabled="srcSaving">Сохранить</button><button @click="runSync" :disabled="syncRunning">Синхронизировать</button></div>
