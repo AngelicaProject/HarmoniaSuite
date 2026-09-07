@@ -74,29 +74,54 @@ public final class IcoSupport {
         if (isPng(raw)) {
             return ImageIO.read(new ByteArrayInputStream(raw));
         }
-        return ImageIO.read(new ByteArrayInputStream(wrapBmp(raw)));
+        return dibToImage(raw);
     }
 
     private static boolean isPng(byte[] raw) {
         return raw.length > 8 && raw[0] == (byte) 0x89 && raw[1] == 'P' && raw[2] == 'N' && raw[3] == 'G';
     }
 
-    private static byte[] wrapBmp(byte[] dib) throws IOException {
+    private static BufferedImage dibToImage(byte[] dib) throws IOException {
         if (dib.length < 40) {
             throw new IOException("too small for DIB");
         }
         ByteBuffer buf = ByteBuffer.wrap(dib).order(ByteOrder.LITTLE_ENDIAN);
-        int headerSize = buf.getInt(0);
+        int width = buf.getInt(4);
+        int fullHeight = buf.getInt(8);
         int bitCount = buf.getShort(14) & 0xFFFF;
-        int colors = buf.getInt(32);
-        int palette = (colors != 0 ? colors : bitCount <= 8 ? 1 << bitCount : 0) * 4;
-        byte[] bmp = new byte[14 + dib.length];
-        ByteBuffer out = ByteBuffer.wrap(bmp).order(ByteOrder.LITTLE_ENDIAN);
-        out.put((byte) 'B').put((byte) 'M');
-        out.putInt(bmp.length);
-        out.putInt(0);
-        out.putInt(14 + headerSize + palette);
-        System.arraycopy(dib, 0, bmp, 14, dib.length);
-        return bmp;
+        int compression = buf.getInt(16);
+        if (width <= 0 || width > 256 || bitCount != 32 || compression != 0) {
+            throw new IOException("unsupported DIB");
+        }
+        int height = Math.abs(fullHeight);
+        boolean bottomUp = fullHeight > 0;
+        int stride = ((width + 31) / 32) * 4;
+        int pixels = height / 2;
+        boolean masked = height % 2 == 0
+                && dib.length >= 40L + (long) width * pixels * 4 + (long) stride * pixels;
+        if (!masked) {
+            pixels = height;
+            if (dib.length < 40L + (long) width * pixels * 4) {
+                throw new IOException("truncated DIB");
+            }
+        }
+        BufferedImage image = new BufferedImage(width, pixels, BufferedImage.TYPE_INT_ARGB);
+        int maskBase = 40 + width * pixels * 4;
+        for (int y = 0; y < pixels; y++) {
+            int row = bottomUp ? pixels - 1 - y : y;
+            for (int x = 0; x < width; x++) {
+                int at = 40 + (row * width + x) * 4;
+                int alpha = dib[at + 3] & 0xFF;
+                if (masked) {
+                    int bit = (dib[maskBase + row * stride + x / 8] >> (7 - x % 8)) & 1;
+                    alpha = bit == 1 ? 0 : alpha == 0 ? 0xFF : alpha;
+                } else if (alpha == 0) {
+                    alpha = 0xFF;
+                }
+                int argb = alpha << 24 | (dib[at + 2] & 0xFF) << 16 | (dib[at + 1] & 0xFF) << 8 | dib[at] & 0xFF;
+                image.setRGB(x, y, argb);
+            }
+        }
+        return image;
     }
 }
