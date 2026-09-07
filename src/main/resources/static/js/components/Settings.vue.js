@@ -1,4 +1,4 @@
-import {api} from '../api.js?v=29';
+import {api} from '../api.js?v=31';
 export default {
   props: ['initial', 'forced'],
   emits: ['close', 'changed'],
@@ -12,11 +12,13 @@ export default {
       openrouterReasoning: '', aiSt: {}, aiError: '', aiSaved: '', aiSaving: false,
       orModels: [], orComboOpen: false, orComboQ: '',
       checkBusy: '', checkMsg: {gemini: null, openrouter: null},
+      bkItems: [], bkRetention: 10, bkInput: '10', bkUsed: 0, bkEstimate: 0,
+      bkError: '', bkSaved: '', bkBusy: false, bkSaving: false,
     };
   },
   computed: {
     sections() {
-      return [{id: 'sources', title: 'Источники данных'}, {id: 'ai', title: 'ИИ-перевод'}];
+      return [{id: 'sources', title: 'Источники данных'}, {id: 'ai', title: 'ИИ-перевод'}, {id: 'backup', title: 'База данных'}];
     },
     syncRunning() {
       return !!this.syncJob && (this.syncJob.status === 'running' || this.syncJob.status === 'queued');
@@ -43,6 +45,11 @@ export default {
       const n = q ? all.filter(m => (m.id + ' ' + (m.name || '')).toLowerCase().includes(q)).length : all.length;
       return n > 80 ? n - 80 : 0;
     },
+    liveEstimate() {
+      const n = parseInt(this.bkInput, 10) || 0;
+      const per = (this.bkItems.length && this.bkItems[0].size) || 0;
+      return n * per;
+    },
     keyPlaceholder() {
       if (this.aiSt.geminiKeySet) return this.aiSt.geminiKeyHint || '••••';
       return this.aiSt.geminiKeySource === 'env' ? 'Ключ из окружения (GEMINI_API_KEY)' : 'Не задан';
@@ -61,7 +68,7 @@ export default {
     }
   },
   async mounted() {
-    await Promise.all([this.srcReload(), this.aiReload()]);
+    await Promise.all([this.srcReload(), this.aiReload(), this.bkReload()]);
     try {
       this.orModels = await api.aiModels();
     } catch (e) {}
@@ -231,6 +238,69 @@ export default {
       await this.srcSave();
       await this.aiSave();
     },
+    fmtBytes(n) {
+      n = Number(n || 0);
+      if (n < 1024) return n + ' Б';
+      if (n < 1048576) return (n / 1024).toFixed(1).replace('.', ',') + ' КБ';
+      if (n < 1073741824) return (n / 1048576).toFixed(1).replace('.', ',') + ' МБ';
+      return (n / 1073741824).toFixed(1).replace('.', ',') + ' ГБ';
+    },
+    dlUrl(name) {
+      return api.backupDownloadUrl(name);
+    },
+    async bkReload() {
+      try {
+        const d = await api.backups();
+        this.bkItems = d.backups || [];
+        this.bkRetention = d.retention;
+        this.bkInput = String(d.retention);
+        this.bkUsed = d.usedBytes;
+        this.bkEstimate = d.estimatedBytes;
+      } catch (e) {
+        this.bkError = e.message;
+      }
+    },
+    async bkCreate() {
+      this.bkError = '';
+      this.bkSaved = '';
+      this.bkBusy = true;
+      try {
+        await api.createBackup();
+        await this.bkReload();
+        this.bkSaved = 'Бэкап создан';
+      } catch (e) {
+        this.bkError = e.message;
+      }
+      this.bkBusy = false;
+    },
+    async bkSaveRetention() {
+      this.bkError = '';
+      this.bkSaved = '';
+      this.bkSaving = true;
+      try {
+        const d = await api.saveBackupSettings(parseInt(this.bkInput, 10));
+        this.bkItems = d.backups || [];
+        this.bkRetention = d.retention;
+        this.bkInput = String(d.retention);
+        this.bkUsed = d.usedBytes;
+        this.bkEstimate = d.estimatedBytes;
+        this.bkSaved = 'Сохранено — перезапуск не нужен';
+      } catch (e) {
+        this.bkError = e.message;
+      }
+      this.bkSaving = false;
+    },
+    async bkDelete(name) {
+      if (!confirm('Удалить бэкап ' + name + '?')) return;
+      this.bkError = '';
+      this.bkSaved = '';
+      try {
+        await api.deleteBackup(name);
+        await this.bkReload();
+      } catch (e) {
+        this.bkError = e.message;
+      }
+    },
     async ok() {
       await this.applyAll();
       if (this.srcError) {
@@ -250,7 +320,7 @@ export default {
       <div class="set-head"><h2 class="set-title">Настройки</h2><button v-if="!forced" class="ghost icon-btn sm" @click="$emit('close')" title="Закрыть"><svg class="icon" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
       <div class="set-body">
         <div class="set-nav">
-          <button v-for="s in sections" :key="s.id" class="set-nav-i" :class="{active:section===s.id}" @click="section=s.id"><svg v-if="s.id==='sources'" class="icon" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h3l2 2h9a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></svg><svg v-else class="icon" viewBox="0 0 24 24"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/><path d="M19 15l.9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9z"/></svg>{{s.title}}</button>
+          <button v-for="s in sections" :key="s.id" class="set-nav-i" :class="{active:section===s.id}" @click="section=s.id"><svg v-if="s.id==='sources'" class="icon" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h3l2 2h9a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></svg><svg v-else-if="s.id==='ai'" class="icon" viewBox="0 0 24 24"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/><path d="M19 15l.9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9z"/></svg><svg v-else class="icon" viewBox="0 0 24 24"><path d="M4 6c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3zm0 0v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></svg>{{s.title}}</button>
         </div>
         <div class="set-content">
           <template v-if="section==='sources'">
@@ -269,7 +339,7 @@ export default {
               <div class="set-actions"><button v-if="syncRunning" class="ghost" @click="cancelSync">Отмена</button></div>
             </div>
           </template>
-          <template v-else>
+          <template v-else-if="section==='ai'">
             <p class="set-intro">Провайдер нейроперевода и ключи. Ключ из настроек важнее переменной окружения; пустое поле оставляет сохранённый ключ как есть, стереть — кнопкой «Стереть».</p>
             <div class="set-field">
               <span class="set-label">Провайдер</span>
@@ -321,6 +391,22 @@ export default {
             </template>
             <div v-if="aiError" class="form-error">{{aiError}}</div>
             <div v-else-if="aiSaved" class="set-ok">{{aiSaved}}</div>
+          </template>
+          <template v-else-if="section==='backup'">
+            <div class="set-field">
+              <span class="set-label">Резервные копии базы данных</span>
+              <div class="set-row"><button class="subtle" @click="bkCreate" :disabled="bkBusy">Создать бэкап</button></div>
+              <div class="set-hint">Снимок базы целиком; хранится в каталоге backups рядом с базой</div>
+            </div>
+            <div class="set-field">
+              <span class="set-label">Хранить копий</span>
+              <div class="set-row"><input v-model="bkInput" type="number" min="1" max="100" style="max-width:90px"><button class="subtle" @click="bkSaveRetention" :disabled="bkSaving">Сохранить</button></div>
+              <div class="set-hint">≈ {{fmtBytes(liveEstimate)}} при {{bkInput}} копиях (сейчас занято {{fmtBytes(bkUsed)}})</div>
+            </div>
+            <div v-if="bkError" class="form-error">{{bkError}}</div>
+            <div v-else-if="bkSaved" class="set-ok">{{bkSaved}}</div>
+            <div v-for="b in bkItems" :key="b.name" class="set-row" style="align-items:center;margin-top:4px"><span class="grow" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap" :title="b.name">{{b.name}} · {{fmtBytes(b.size)}}</span><a class="subtle" style="text-decoration:none;padding:4px 10px" :href="dlUrl(b.name)" download>Скачать</a><button class="ghost" @click="bkDelete(b.name)">Удалить</button></div>
+            <div v-if="!bkItems.length && !bkError" class="set-hint">Бэкапов пока нет</div>
           </template>
         </div>
       </div>
