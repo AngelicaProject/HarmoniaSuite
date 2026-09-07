@@ -71,6 +71,20 @@ Everyone keeps their own database and the work splits by file. Deltas carry edit
 
 If two people edit the same cell, it shows up as a conflict. Incoming edits never overwrite yours silently.
 
+## Database backups
+
+Settings → Database: create a full snapshot, download or delete copies, set how many to keep (default 10, range 1–100; shrinking deletes the excess right away). Snapshots live in `backups/` next to `harmonia.db` (`data/backups/` from source, `%APPDATA%/HarmoniaSuite/backups/` installed). The list shows the estimate for the chosen retention (≈ copies × newest snapshot).
+
+Restore is manual, with the app stopped:
+
+1. Stop the app. Never replace the file while it runs (one process per `.db`).
+2. If the app still starts, create a fresh backup first, so the restore itself can be undone.
+3. Delete `harmonia.db` plus `harmonia.db-wal` / `harmonia.db-shm` if present (stale WAL sidecars over a replaced main file corrupt data).
+4. Copy the chosen `harmonia-YYYYMMDD-HHmmss.db` to `harmonia.db` and start the app; Flyway replays migrations on boot. A snapshot from a newer app version will not start — pick one from the matching version.
+5. Optional integrity check: `sqlite3 <file> "PRAGMA integrity_check;"` → `ok`.
+
+PostgreSQL profile: backups are embedded-SQLite only there (`400`); use `pg_dump`.
+
 ## Development
 
 ```bash
