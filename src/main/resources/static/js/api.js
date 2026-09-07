@@ -70,6 +70,7 @@ export const api={
   createBackup:()=>req('/api/backup',{method:'POST'}),
   saveBackupSettings:(retention)=>req('/api/backup/settings',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({retention})}).then(mapBackupList),
   deleteBackup:(name)=>req('/api/backup/'+encodeURIComponent(name),{method:'DELETE'}),
+  openBackupFolder:()=>req('/api/backup/open-folder',{method:'POST'}),
   backupDownloadUrl:(name)=>'/api/backup/'+encodeURIComponent(name),
   _previewCache:new Map(),
   preview(root,file){

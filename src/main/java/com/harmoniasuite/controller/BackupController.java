@@ -53,6 +53,11 @@ public class BackupController {
         return toDto(backups.create());
     }
 
+    @PostMapping("/open-folder")
+    public void openFolder() throws Exception {
+        backups.openFolder();
+    }
+
     @GetMapping("/{name}")
     public ResponseEntity<Resource> download(@PathVariable String name) throws Exception {
         Path file = backups.resolve(name);

@@ -12,4 +12,5 @@ public interface BackupOps {
     void setRetention(int n);
     long usedBytes() throws Exception;
     long estimatedBytes() throws Exception;
+    void openFolder() throws Exception;
 }

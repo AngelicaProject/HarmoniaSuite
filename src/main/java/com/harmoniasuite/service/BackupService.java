@@ -15,6 +15,8 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Profile;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 @Service
 @Profile("!postgres")
@@ -22,6 +24,7 @@ public class BackupService implements BackupOps {
 
     private static final DateTimeFormatter STAMP = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss");
     private static final String VACUUM_INTO = "VACUUM INTO ?";
+    private static final Logger log = LoggerFactory.getLogger(BackupService.class);
     public static final String KEY_RETENTION = "backup.retention";
     private static final int DEFAULT_KEEP = 10;
     private static final int MAX_KEEP = 100;
@@ -125,6 +128,20 @@ public class BackupService implements BackupOps {
     @Override
     public void delete(String name) throws Exception {
         Files.deleteIfExists(resolve(name));
+    }
+
+    @Override
+    public void openFolder() throws Exception {
+        Files.createDirectories(backupDir);
+        if (!java.awt.Desktop.isDesktopSupported()) {
+            throw new HarmoniaSuiteBadRequestException("cannot open folder on this system");
+        }
+        try {
+            java.awt.Desktop.getDesktop().open(backupDir.toFile());
+        } catch (Exception e) {
+            log.warn("Не открыта папка бэкапов: {}", e.getMessage());
+            throw new HarmoniaSuiteBadRequestException("cannot open folder on this system");
+        }
     }
 
     private void prune() throws Exception {

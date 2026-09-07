@@ -1,4 +1,4 @@
-import {api} from '../api.js?v=32';
+import {api} from '../api.js?v=33';
 export default {
   props: ['initial', 'forced'],
   emits: ['close', 'changed'],
@@ -301,6 +301,14 @@ export default {
         this.bkError = e.message;
       }
     },
+    async bkOpenFolder() {
+      this.bkError = '';
+      try {
+        await api.openBackupFolder();
+      } catch (e) {
+        this.bkError = e.message;
+      }
+    },
     async bkDelete(name) {
       if (!confirm('Удалить бэкап ' + name + '?')) return;
       this.bkError = '';
@@ -406,7 +414,7 @@ export default {
           <template v-else-if="section==='backup'">
             <div class="set-field">
               <span class="set-label">Резервные копии базы данных</span>
-              <div class="set-row"><button class="subtle" @click="bkCreate" :disabled="bkBusy">Создать бэкап</button></div>
+              <div class="set-row"><button class="subtle" @click="bkCreate" :disabled="bkBusy">Создать бэкап</button><button class="subtle" @click="bkOpenFolder">Открыть папку</button></div>
               <div class="set-hint">Снимок базы целиком; хранится в каталоге backups рядом с базой</div>
             </div>
             <div class="set-field">

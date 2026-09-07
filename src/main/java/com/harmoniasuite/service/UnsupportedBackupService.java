@@ -55,4 +55,9 @@ public class UnsupportedBackupService implements BackupOps {
     public long estimatedBytes() throws Exception {
         throw unsupported();
     }
+
+    @Override
+    public void openFolder() throws Exception {
+        throw unsupported();
+    }
 }
