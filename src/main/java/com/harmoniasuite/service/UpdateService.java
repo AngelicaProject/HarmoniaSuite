@@ -296,7 +296,9 @@ public class UpdateService {
                 + "Next" + nl
                 + "If Err.Number = 0 Then" + nl
                 + "  lg.WriteLine Now & \" start\"" + nl
-                + "  CreateObject(\"WScript.Shell\").Run \"\"\""
+                + "  Set sh = CreateObject(\"WScript.Shell\")" + nl
+                + "  sh.Environment(\"PROCESS\")(\"HARMONIA_NO_BROWSER\") = \"1\"" + nl
+                + "  sh.Run \"\"\""
                 + exe.toString().replace("\"", "") + "\"\"\", 1, False" + nl
                 + "Else" + nl
                 + "  lg.WriteLine Now & \" copy failed\"" + nl

@@ -4,6 +4,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class StartupLinkTest {
 
@@ -18,5 +20,14 @@ class StartupLinkTest {
     void urlDefaultsTo8765() {
         assertEquals("http://127.0.0.1:8765", StartupLink.url(null));
         assertEquals("http://127.0.0.1:8765", StartupLink.url(""));
+    }
+
+    @Test
+    @DisplayName("вкладка открывается только в установке и не при релонче")
+    void openOnlyForFreshInstall() {
+        assertTrue(StartupLink.shouldOpen("C:/exa/app.exe", null));
+        assertTrue(StartupLink.shouldOpen("C:/exa/app.exe", ""));
+        assertFalse(StartupLink.shouldOpen("C:/exa/app.exe", "1"));
+        assertFalse(StartupLink.shouldOpen(null, null));
     }
 }

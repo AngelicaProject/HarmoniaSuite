@@ -109,6 +109,7 @@ class UpdateServiceTest {
         assertTrue(body.contains("app.exe"));
         assertTrue(body.contains("DeleteFile WScript.ScriptFullName"));
         assertTrue(body.contains("lg.WriteLine"));
+        assertTrue(body.contains("HARMONIA_NO_BROWSER"));
         Files.deleteIfExists(vbs);
     }
 

@@ -22,7 +22,7 @@ public class StartupLink implements ApplicationListener<ApplicationReadyEvent> {
     public void onApplicationEvent(ApplicationReadyEvent event) {
         String link = url(environment.getProperty("local.server.port"));
         log.info("Откройте в браузере: {}", link);
-        if (System.getProperty("jpackage.app-path") != null) {
+        if (shouldOpen(System.getProperty("jpackage.app-path"), System.getenv("HARMONIA_NO_BROWSER"))) {
             openBrowser(link);
         }
     }
@@ -35,6 +35,10 @@ public class StartupLink implements ApplicationListener<ApplicationReadyEvent> {
         } catch (Exception e) {
             log.warn("Не открыт браузер: {}", e.getMessage());
         }
+    }
+
+    static boolean shouldOpen(String appPath, String noBrowser) {
+        return appPath != null && (noBrowser == null || noBrowser.isBlank());
     }
 
     static String url(String port) {
