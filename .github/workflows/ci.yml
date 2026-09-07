@@ -20,7 +20,7 @@ jobs:
           java-version: '21'
           cache: maven
       - run: ./mvnw -B -q test
-      - run: node --test tools/test-tags.mjs
+      - run: node --test tools/test-tags.mjs tools/test-release-notes.mjs
       - uses: codecov/codecov-action@v5
         with:
           use_oidc: true

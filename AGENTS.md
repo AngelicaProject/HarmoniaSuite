@@ -40,7 +40,7 @@
 ## Frontend
 
 - Scope-based loading, never the whole table: open = `overview` + first files page; files list server-paged with server search (100 per page, need-first); per-file entries on open (`entries?file=`, cap 5000, client-side union cache); editor works on the focused file only (row-grouped cards); phrase search in the Search tab (`entries?q=`, jump by id), Ctrl+K file jump. Case-insensitive search relies on `source_lc`/`translation_lc` columns (SQLite `LOWER()` is ASCII-only).
-- Static cache-busting is manual `?v=`: bump in `index.html` and every `import ... from '...?v='` on any `js/`/`css` change. Deliberate — build-time substitution breaks IntelliJ live serving. `index.html` itself has no buster: after static changes hard-refresh (Ctrl+F5) or a stale cached copy hides the new `?v=` refs. Self-update UI: version chip in the statusbar (check on open + hourly), Hermes-style modal, restart overlay.
+- Static cache-busting is manual `?v=`: bump in `index.html` and every `import ... from '...?v='` on any `js/`/`css` change. Deliberate — build-time substitution breaks IntelliJ live serving. `index.html` itself has no buster: after static changes hard-refresh (Ctrl+F5) or a stale cached copy hides the new `?v=` refs. Self-update UI: version chip in the statusbar (check on open + hourly), update modal, restart overlay.
 - Settings → Database section: snake_case→camelCase mapping lives in `api.js` (`mapBackupList`) — components never read raw wire keys. Range slider `.bk-range` (thin bar, `--primary` fill via `--fill` var set synchronously in `@input`, silent save on `@change`, no focus ring, `user-select:none` on the value).
 
 ## Layering & SQL
@@ -63,7 +63,7 @@
 
 - Single pom `<version>` (SemVer, dev on `*-SNAPSHOT`); dist = `harmonia-suite-<version>.zip` with `VERSION.txt`; release = `versions:set` + tag `vX.Y.Z` + `package` (README §Release). On future front/back split: backend keeps the pom version, frontend gets its own, contract pinned via `/api/version`.
 - Distribution (Windows): per-user MSI on `v*` tags only (`release.yml`: extractor from `AngelicaProject/HarmoniaExtractor` self-contained, Temurin 21 + MinGit bundled under `toolchain/`, repo snapshot under `src/`, WiX via choco). Installed state defaults to `%APPDATA%/HarmoniaSuite`; game-only sources (no csvdir mode), unpacker always bundled.
-- Self-update (`UpdateService`, `POST /api/update` as `update` job): always from source — `git pull --ff-only` + full local `mvnw package` (toolchain: install-bundled → system → `%LOCALAPPDATA%` cache → download; dirty tree refused; auto-rollback via `reset --hard` on failure). Relaunch targets the freshly built jar (bundled runtime for the installed exe). UI: version chip (check on open + hourly) + Hermes-style modal + restart overlay.
+- Self-update (`UpdateService`, `POST /api/update` as `update` job): always from source — `git pull --ff-only` + full local `mvnw package` (toolchain: install-bundled → system → `%LOCALAPPDATA%` cache → download; dirty tree refused; auto-rollback via `reset --hard` on failure). Relaunch targets the freshly built jar (bundled runtime for the installed exe). UI: version chip (check on open + hourly) + update modal + restart overlay.
 
 ## Goal
 

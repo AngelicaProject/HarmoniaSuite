@@ -69,9 +69,15 @@ jobs:
             --app-version $tag --win-per-user-install --win-shortcut --win-menu --win-menu-group AngelicaProject `
             --java-options "-Djava.awt.headless=false" `
             --icon app/src/main/dist/yuki.ico --input staging --main-jar harmonia-suite.jar
+      - name: Generate release notes
+        working-directory: app
+        shell: pwsh
+        run: node tools/generate-release-notes.cjs --tag $env:GITHUB_REF_NAME --out release-notes.md
       - uses: softprops/action-gh-release@v2
         with:
+          name: Harmonia Suite ${{ github.ref_name }}
+          body_path: app/release-notes.md
+          draft: true
           files: |
             installer/*.msi
             app/target/harmonia-suite-*.zip
-          generate_release_notes: true
