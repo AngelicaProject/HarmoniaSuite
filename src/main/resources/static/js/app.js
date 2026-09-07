@@ -1810,7 +1810,7 @@ const App = {
     <span class="sb-item" @click="openSettings('sources')" :title="(sourceStatus.activeRoot||'')+' — настроить источники'"><span class="status-dot" :class="sourceStatus.ready?'on':'off'"></span>{{sourceLabel}}</span>
     <span class="grow"></span>
     <span class="sb-item sb-ai" @click="openSettings('ai')" :title="aiTitle"><span class="status-dot" :class="geminiStatus.configured?'on':'off'"></span>Gemini<span class="sb-sep">·</span><span class="status-dot" :class="geminiStatus.openrouterConfigured?'on':'off'"></span>OpenRouter</span>
-    <span v-if="upd.supported||upd.version" class="sb-item" :class="{'sb-warn':upd.updateAvailable}" @click="upd.updateAvailable||upd.needsToolchain?updModal=true:loadUpdateStatus()" :title="updTitle">{{updLabel}}</span>
+    <span v-if="upd.supported||upd.version" class="sb-item sb-upd" :class="{'sb-warn':upd.updateAvailable}" @click="upd.updateAvailable||upd.needsToolchain?updModal=true:loadUpdateStatus()" :title="updTitle">{{updLabel}}</span>
   </footer>
 
   <div v-if="paletteOpen" class="overlay" @click.self="paletteOpen=false">

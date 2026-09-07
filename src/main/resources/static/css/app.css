@@ -670,6 +670,9 @@ input.invalid,textarea.invalid{border-color:var(--danger)}
 
 /* ---------- Self-update ---------- */
 .sb-warn{color:var(--warning)}
+.sb-upd{cursor:pointer;border-radius:6px;padding:2px 8px}
+.sb-upd:hover{background:var(--hover);color:var(--primary)}
+.sb-upd.sb-warn:hover{color:var(--warning)}
 .upd-modal{width:460px;max-width:94vw}
 .upd-title{margin:0 0 6px;font-size:17px;font-weight:750}
 .upd-sec{margin:12px 0 6px;font-size:11px;font-weight:700;letter-spacing:.07em;color:var(--head)}
