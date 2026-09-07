@@ -1,5 +1,6 @@
 package com.harmoniasuite.service;
 
+import com.harmoniasuite.config.InstallLayout;
 import com.harmoniasuite.config.WorkspacePaths;
 import com.harmoniasuite.dto.UpdateSourceSettingsRequest;
 import com.harmoniasuite.exception.HarmoniaSuiteBadRequestException;
@@ -236,6 +237,10 @@ public class SourceService {
 
     static List<Path> bundledBases() {
         List<Path> bases = new ArrayList<>();
+        Path app = InstallLayout.appDir();
+        if (app != null) {
+            bases.add(app);
+        }
         for (String entry : System.getProperty("java.class.path", "").split(Pattern.quote(File.pathSeparator))) {
             if (entry.isBlank()) {
                 continue;

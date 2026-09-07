@@ -3,6 +3,7 @@ package com.harmoniasuite.service;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.harmoniasuite.config.AppVersion;
 import com.harmoniasuite.config.HarmoniaProperties;
+import com.harmoniasuite.config.InstallLayout;
 import com.harmoniasuite.exception.HarmoniaSuiteBadRequestException;
 import java.io.BufferedReader;
 import java.io.IOException;
@@ -248,19 +249,13 @@ public class UpdateService {
     }
 
     private static Path bundledRuntimeJava() {
-        try {
-            Path code = Paths.get(UpdateService.class.getProtectionDomain()
-                    .getCodeSource().getLocation().toURI());
-            Path dir = Files.isDirectory(code) ? code : code.getParent();
-            if (dir == null || dir.getParent() == null) {
-                return null;
-            }
-            Path java = dir.getParent().resolve("runtime").resolve("bin")
-                    .resolve(isWindows() ? "java.exe" : "java");
-            return Files.isRegularFile(java) ? java : null;
-        } catch (Exception e) {
+        Path app = InstallLayout.appDir();
+        if (app == null || app.getParent() == null) {
             return null;
         }
+        Path java = app.getParent().resolve("runtime").resolve("bin")
+                .resolve(isWindows() ? "java.exe" : "java");
+        return Files.isRegularFile(java) ? java : null;
     }
 
     private static String probeGit() {
@@ -293,18 +288,12 @@ public class UpdateService {
         if ("dev".equals(launchMode(System.getProperty("java.class.path", "")))) {
             return null;
         }
-        try {
-            Path code = Paths.get(UpdateService.class.getProtectionDomain()
-                    .getCodeSource().getLocation().toURI());
-            Path dir = Files.isDirectory(code) ? code : code.getParent();
-            if (dir == null || dir.getParent() == null) {
-                return null;
-            }
-            Path toolchain = dir.getParent().resolve("toolchain");
-            return Files.isDirectory(toolchain) ? toolchain : null;
-        } catch (Exception e) {
+        Path app = InstallLayout.appDir();
+        if (app == null) {
             return null;
         }
+        Path toolchain = app.resolve("toolchain");
+        return Files.isDirectory(toolchain) ? toolchain : null;
     }
 
     private static String ensureGit(Consumer<String> log, ObjectMapper objectMapper) throws IOException {
@@ -568,14 +557,10 @@ public class UpdateService {
 
     private static List<Path> candidateRoots() {
         List<Path> bases = new ArrayList<>();
-        try {
-            Path code = Paths.get(UpdateService.class.getProtectionDomain()
-                    .getCodeSource().getLocation().toURI());
-            Path dir = Files.isDirectory(code) ? code : code.getParent();
-            if (dir != null) {
-                bases.add(dir);
-            }
-        } catch (Exception ignored) {
+        Path app = InstallLayout.appDir();
+        if (app != null) {
+            bases.add(app.resolve("src"));
+            bases.add(app);
         }
         bases.add(Paths.get(System.getProperty("user.dir")));
         return bases;
