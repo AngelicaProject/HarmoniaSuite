@@ -1,6 +1,6 @@
 import {api} from '../api.js?v=29';
 export default {
-  props: ['projectId', 'job', 'scope'],
+  props: ['projectId', 'job', 'scope', 'dataRev'],
   emits: ['build', 'build-download', 'toast', 'toggle-scope', 'clear-scope'],
   data() {
     return {candidates: [], built: {}, manifestBuilt: false, loading: false, error: '', page: 0, pageSize: 50};
@@ -21,6 +21,9 @@ export default {
   },
   watch: {
     projectId() {
+      this.load();
+    },
+    dataRev() {
       this.load();
     },
     job(nv) {

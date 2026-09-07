@@ -8,7 +8,7 @@ import SearchView from './components/SearchView.vue.js?v=9';
 import TagsView from './components/TagsView.vue.js?v=22';
 import SummaryView from './components/SummaryView.vue.js?v=13';
 import PackView from './components/PackView.vue.js?v=16';
-import ExportView from './components/ExportView.vue.js?v=30';
+import ExportView from './components/ExportView.vue.js?v=31';
 import DeltaView from './components/DeltaView.vue.js?v=24';
 import LogView from './components/LogView.vue.js?v=8';
 import Dropdown from './components/Dropdown.vue.js?v=2';
@@ -1532,6 +1532,7 @@ const App = {
             runPalette,
             onPaletteKey,
             job,
+            dataRev,
             treeRows,
             treeFileCount,
             treeReadyCount,
@@ -1796,7 +1797,7 @@ const App = {
       <PackView :project-id="projectId" :pack="pack" :errors="packErrors" :manifest="packManifest" :msg="packMsg" :compat="packCompat" :langs="packLangs" @update:compat="packCompat=$event" @update:langs="packLangs=$event" @save="savePack" @add-author="packAddAuthor" @del-author="packDelAuthor" @toast="showToast"/>
       </Teleport>
       <Teleport v-if="hostEl('export')" :to="hostEl('export')">
-      <ExportView :project-id="projectId" :job="job" :scope="selExportSet" @build="buildPack" @build-download="buildAndDownloadPack" @toast="showToast" @toggle-scope="toggleExport" @clear-scope="clearExportScope"/>
+      <ExportView :project-id="projectId" :job="job" :scope="selExportSet" :data-rev="dataRev" @build="buildPack" @build-download="buildAndDownloadPack" @toast="showToast" @toggle-scope="toggleExport" @clear-scope="clearExportScope"/>
     </Teleport>
       <Teleport v-if="hostEl('delta')" :to="hostEl('delta')">
       <DeltaView ref="deltaRef" :project-id="projectId" @toast="showToast" @refresh="loadProject" @open-conflict="openConflict"/>
