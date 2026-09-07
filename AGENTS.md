@@ -6,7 +6,7 @@
 - Run commands from the repo root: `harmonia.workspace` defaults to the cwd, so the cwd defines all relative data paths.
 - Build/verify: `./mvnw.cmd -q -DskipTests compile`, `./mvnw.cmd test`, `./mvnw.cmd package`.
 - git-bash on Windows: export a JDK 21+ `JAVA_HOME` plus native temp dirs (`TMPDIR`/`TMP`/`TEMP` as plain Windows paths, unset lowercase `tmp`); the wrapper dist is pre-seeded under `.m2/wrapper/dists`, no download needed. Known-good `JAVA_HOME`: IntelliJ JBR 21+ (`<ide-home>/jbr`).
-- Local UI via `./mvnw.cmd spring-boot:run`; binds `127.0.0.1:8765`. The user normally runs the app from IntelliJ IDEA — a stale instance may already hold port 8765; probe the live instance before starting a second one. Run the project only via IntelliJ IDEA.
+- Local UI via `./mvnw.cmd spring-boot:run`; binds `127.0.0.1:8765`. The user normally runs the app from IntelliJ IDEA — a stale instance may already hold port 8765; probe the live instance before starting a second one. Run the project only via IntelliJ IDEA. A Spring bean with 2+ constructors needs explicit `@Autowired` on the injection one, else boot fails with `NoSuchMethodException: <init>()` — no unit test catches it, only a live boot does (verify with an isolated `--server.port` + temp-workspace instance, never a second 8765).
 
 ## Tests & Style
 
@@ -19,6 +19,7 @@
 (dev fallback, silent: `HARMONIA_UNPACKER_EXE` env, then VS-default `~/source/repos` build).
 - Project state lives in SQLite (`harmonia.db-path`, default `data/harmonia.db` in the workspace — workspace is the repo root in dev, `%APPDATA%/HarmoniaSuite` when installed; Flyway migrations in `db/migration/sqlite`, hand-written SQL via JdbcTemplate, no ORM). PostgreSQL profile (`-Dspring.profiles.active=postgres`, migrations in `db/migration/postgresql`, `PG_URL/PG_USER/PG_PASSWORD`) for real deploys.
 - `projects/<name>/` keeps only `exported_csv/`. No `project.json` anywhere (no import, no fallback).
+- DB backups (`BackupService`, SQLite profile only): consistent snapshots via `VACUUM INTO` into `backups/` beside the DB file — never raw-copy the live DB (torn `db`+`-wal` pair). Retention in `app_settings` (`backup.retention`, default 10, range 1–100, prune on create + on shrink); restore is manual file replace with the app stopped (README §Database backups, delete `-wal`/`-shm` sidecars); postgres profile answers 400.
 
 ## Jobs, Status, Version
 
@@ -33,12 +34,14 @@
 - `GET/PUT .../pack`; `GET .../exports/csv?file=` + `/exports/zip` + `/exports/manifest` + `/exports` (built-CSV listing + manifest flag).
 - Team deltas under `.../{projectId}/delta`: `GET` export (`sinceUpdatedAt,sinceCellId,files,limit,author`; `cell_id`-keyed rows + sources-fingerprint header, fingerprint mismatch rejected), `POST .../preview` + `POST .../import` (conflict = own human-edited cell vs differing incoming; incoming never overwrites silently).
 - AI settings `GET/PUT /api/settings/ai` (+ `/models`, `/check`); source settings `GET/PUT /api/settings`.
+- DB backups (synchronous, no job — one `VACUUM INTO`): `GET/POST /api/backup` (list `{backups,retention,used_bytes,estimated_bytes}` / create), `PUT /api/backup/settings{retention}`, `GET/DELETE /api/backup/{name}` (download/delete; names are server-generated timestamps, allowlist-validated — never client paths), `POST /api/backup/open-folder` (`Desktop.open`, local UI only).
 - Filesystem browse (pre-extract source picking, raw CSV preview): `GET /api/source/files?root=`, `GET /api/source/preview?root=&file=&full=`; no server-side file-content search — search is DB-backed via `entries?q=`.
 
 ## Frontend
 
 - Scope-based loading, never the whole table: open = `overview` + first files page; files list server-paged with server search (100 per page, need-first); per-file entries on open (`entries?file=`, cap 5000, client-side union cache); editor works on the focused file only (row-grouped cards); phrase search in the Search tab (`entries?q=`, jump by id), Ctrl+K file jump. Case-insensitive search relies on `source_lc`/`translation_lc` columns (SQLite `LOWER()` is ASCII-only).
-- Static cache-busting is manual `?v=`: bump in `index.html` and every `import ... from '...?v='` on any `js/`/`css` change. Deliberate — build-time substitution breaks IntelliJ live serving. Self-update UI: version chip in the statusbar (check on open + hourly), Hermes-style modal, restart overlay.
+- Static cache-busting is manual `?v=`: bump in `index.html` and every `import ... from '...?v='` on any `js/`/`css` change. Deliberate — build-time substitution breaks IntelliJ live serving. `index.html` itself has no buster: after static changes hard-refresh (Ctrl+F5) or a stale cached copy hides the new `?v=` refs. Self-update UI: version chip in the statusbar (check on open + hourly), Hermes-style modal, restart overlay.
+- Settings → Database section: snake_case→camelCase mapping lives in `api.js` (`mapBackupList`) — components never read raw wire keys. Range slider `.bk-range` (thin bar, `--primary` fill via `--fill` var set synchronously in `@input`, silent save on `@change`, no focus ring, `user-select:none` on the value).
 
 ## Layering & SQL
 
