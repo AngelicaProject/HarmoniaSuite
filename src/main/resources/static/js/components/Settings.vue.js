@@ -1,4 +1,4 @@
-import {api} from '../api.js?v=31';
+import {api} from '../api.js?v=32';
 export default {
   props: ['initial', 'forced'],
   emits: ['close', 'changed'],
@@ -50,6 +50,10 @@ export default {
       const per = this.bkItems.length ? (this.bkItems[0].size || 0)
         : (this.bkRetention ? Math.round((this.bkEstimate || 0) / this.bkRetention) : 0);
       return n * per;
+    },
+    fillPct() {
+      const n = Math.min(Math.max(parseInt(this.bkInput, 10) || 1, 1), 100);
+      return ((n - 1) / 99 * 100).toFixed(1);
     },
     keyPlaceholder() {
       if (this.aiSt.geminiKeySet) return this.aiSt.geminiKeyHint || '••••';
@@ -401,7 +405,7 @@ export default {
             </div>
             <div class="set-field">
               <span class="set-label">Хранить копий</span>
-              <div class="set-row" style="align-items:center"><input v-model="bkInput" type="range" min="1" max="100" step="1" class="grow" :disabled="bkSaving" @change="bkSaveRetention"><b style="min-width:36px;text-align:right">{{bkInput}}</b></div>
+              <div class="set-row" style="align-items:center"><input v-model="bkInput" type="range" min="1" max="100" step="1" class="grow bk-range" :style="{'--fill': fillPct + '%'}" :disabled="bkSaving" @change="bkSaveRetention"><b style="min-width:36px;text-align:right">{{bkInput}}</b></div>
               <div class="set-hint">≈ {{fmtBytes(liveEstimate)}} при {{bkInput}} копиях (сейчас занято {{fmtBytes(bkUsed)}})</div>
             </div>
             <div v-if="bkError" class="form-error">{{bkError}}</div>

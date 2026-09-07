@@ -14,6 +14,7 @@ async function req(url,opt){
   }
 }
 const enc=encodeURIComponent;
+const mapBackupList=(d)=>({backups:d.backups,retention:d.retention,usedBytes:d.used_bytes,estimatedBytes:d.estimated_bytes});
 export const api={
   projects:()=>req('/api/projects'),
   createProject:(name,root)=>req('/api/projects',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:name,root})}),
@@ -65,9 +66,9 @@ export const api={
   checkAiKey:(b)=>req('/api/settings/ai/check',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({provider:b.provider,key:b.key})}),
   aiModels:()=>req('/api/settings/ai/models'),
   detectSettings:()=>req('/api/settings/detect'),
-  backups:()=>req('/api/backup').then(d=>({backups:d.backups,retention:d.retention,usedBytes:d.used_bytes,estimatedBytes:d.estimated_bytes})),
+  backups:()=>req('/api/backup').then(mapBackupList),
   createBackup:()=>req('/api/backup',{method:'POST'}),
-  saveBackupSettings:(retention)=>req('/api/backup/settings',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({retention})}),
+  saveBackupSettings:(retention)=>req('/api/backup/settings',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({retention})}).then(mapBackupList),
   deleteBackup:(name)=>req('/api/backup/'+encodeURIComponent(name),{method:'DELETE'}),
   backupDownloadUrl:(name)=>'/api/backup/'+encodeURIComponent(name),
   _previewCache:new Map(),

@@ -366,6 +366,13 @@ input[type="checkbox"]:disabled:checked,input[type="checkbox"]:disabled:indeterm
 .export-row{border:1px solid var(--border-soft);border-radius:10px;padding:10px 12px;display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:13px;background:var(--surface-2);transition:border-color .12s}
 .export-row:hover{border-color:rgba(95,141,240,.45)}
 .export-row input[type="checkbox"]{width:15px;height:15px;margin:0;flex-shrink:0;accent-color:var(--primary);cursor:pointer}
+.bk-range{-webkit-appearance:none;appearance:none;background:transparent;cursor:pointer;height:20px;--fill:10%}
+.bk-range::-webkit-slider-runnable-track{height:4px;border-radius:4px;background:linear-gradient(to right,var(--primary) 0 var(--fill),var(--surface-3) var(--fill) 100%)}
+.bk-range::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:12px;height:12px;margin-top:-4px;border-radius:4px;background:var(--primary);border:none}
+.bk-range::-moz-range-track{height:4px;border-radius:4px;background:var(--surface-3)}
+.bk-range::-moz-range-progress{height:4px;border-radius:4px;background:var(--primary)}
+.bk-range::-moz-range-thumb{width:12px;height:12px;border-radius:4px;background:var(--primary);border:none}
+.bk-range:disabled{opacity:.5;cursor:default}
 .export-badge{min-width:78px;text-align:center;font-size:11px;white-space:nowrap;flex-shrink:0}
 
 /* ---------- Start screen (picker) ---------- */
