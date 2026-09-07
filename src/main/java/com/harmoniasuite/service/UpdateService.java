@@ -242,10 +242,78 @@ public class UpdateService {
             log.accept("Готово. Перезапусти из IDEA (Stop+Run)");
             return;
         }
-        Path script = writeRelaunch(relaunchCommand(root));
-        log.accept("Перезапуск");
-        detach(script);
-        System.exit(0);
+        Path exe = exeInstallPath();
+        if (exe != null && InstallLayout.appDir() != null) {
+            Path vbs = writeRelaunchVbs(ProcessHandle.current().pid(),
+                    root.resolve("target").resolve(BUILT_JAR),
+                    InstallLayout.appDir().resolve(BUILT_JAR), exe);
+            log.accept("Перезапуск");
+            wdetach(vbs);
+        } else {
+            Path script = writeRelaunch(relaunchCommand(root));
+            log.accept("Перезапуск");
+            detach(script);
+        }
+        Runtime.getRuntime().halt(0);
+    }
+
+    static Path exeInstallPath() {
+        String appPath = System.getProperty("jpackage.app-path");
+        if (appPath == null || appPath.isBlank()) {
+            return null;
+        }
+        try {
+            Path exe = Paths.get(appPath);
+            return Files.isRegularFile(exe) ? exe : null;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    static Path writeRelaunchVbs(long pid, Path built, Path appJar, Path exe) throws IOException {
+        String log = Paths.get(System.getProperty("java.io.tmpdir"))
+                .resolve("harmonia-relaunch.log").toString().replace("\"", "");
+        String nl = "\r\n";
+        String body = "On Error Resume Next" + nl
+                + "Set fso = CreateObject(\"Scripting.FileSystemObject\")" + nl
+                + "Set lg = fso.OpenTextFile(\"" + log + "\", 8, True)" + nl
+                + "lg.WriteLine Now & \" wait " + pid + "\"" + nl
+                + "Set wmi = GetObject(\"winmgmts:\\\\.\\root\\cimv2\")" + nl
+                + "For i = 1 To 120" + nl
+                + "  If wmi.ExecQuery(\"SELECT ProcessId FROM Win32_Process WHERE ProcessId="
+                + pid + "\").Count = 0 Then Exit For" + nl
+                + "  WScript.Sleep 1000" + nl
+                + "Next" + nl
+                + "lg.WriteLine Now & \" copy\"" + nl
+                + "fso.CopyFile \"" + built.toString().replace("\"", "") + "\", \""
+                + appJar.toString().replace("\"", "") + "\", True" + nl
+                + "For i = 1 To 10" + nl
+                + "  If Err.Number = 0 Then Exit For" + nl
+                + "  Err.Clear" + nl
+                + "  WScript.Sleep 1000" + nl
+                + "  fso.CopyFile \"" + built.toString().replace("\"", "") + "\", \""
+                + appJar.toString().replace("\"", "") + "\", True" + nl
+                + "Next" + nl
+                + "If Err.Number = 0 Then" + nl
+                + "  lg.WriteLine Now & \" start\"" + nl
+                + "  CreateObject(\"WScript.Shell\").Run \"\"\""
+                + exe.toString().replace("\"", "") + "\"\"\", 1, False" + nl
+                + "Else" + nl
+                + "  lg.WriteLine Now & \" copy failed\"" + nl
+                + "End If" + nl
+                + "lg.Close" + nl
+                + "fso.DeleteFile WScript.ScriptFullName" + nl;
+        Path script = Files.createTempFile("harmonia-update-", ".vbs");
+        Files.writeString(script, body, StandardCharsets.UTF_8);
+        return script;
+    }
+
+    private static void wdetach(Path script) throws IOException {
+        new ProcessBuilder("wscript", "//Nologo", "//B", script.toString())
+                .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+                .redirectError(ProcessBuilder.Redirect.DISCARD)
+                .redirectInput(ProcessBuilder.Redirect.DISCARD)
+                .start();
     }
 
     private static Path bundledRuntimeJava() {

@@ -80,7 +80,7 @@ public class TrayService implements ApplicationListener<ApplicationReadyEvent> {
         try {
             ((ConfigurableApplicationContext) context).close();
         } finally {
-            System.exit(0);
+            Runtime.getRuntime().halt(0);
         }
     }
 
@@ -88,7 +88,14 @@ public class TrayService implements ApplicationListener<ApplicationReadyEvent> {
     public void remove() {
         try {
             if (icon != null) {
-                SystemTray.getSystemTray().remove(icon);
+                TrayIcon gone = icon;
+                icon = null;
+                java.awt.EventQueue.invokeLater(() -> {
+                    try {
+                        SystemTray.getSystemTray().remove(gone);
+                    } catch (Exception ignored) {
+                    }
+                });
             }
         } catch (Exception ignored) {
         }

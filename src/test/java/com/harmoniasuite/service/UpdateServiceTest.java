@@ -2,12 +2,17 @@ package com.harmoniasuite.service;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class UpdateServiceTest {
 
@@ -90,5 +95,26 @@ class UpdateServiceTest {
         List<String> command = UpdateService.relaunchCommand(
                 Paths.get("D:/repo"), "C:/java/bin/java.exe", List.of("-version"), null);
         assertEquals(List.of("C:/java/bin/java.exe", "-version"), command);
+    }
+
+    @Test
+    @DisplayName("vbs-релонч содержит pid, пути и самоудаление")
+    void relaunchVbsContent(@TempDir Path dir) throws Exception {
+        Path vbs = UpdateService.writeRelaunchVbs(12345,
+                dir.resolve("built.jar"), dir.resolve("app.jar"), dir.resolve("app.exe"));
+        String body = Files.readString(vbs);
+        assertTrue(body.contains("12345"));
+        assertTrue(body.contains("built.jar"));
+        assertTrue(body.contains("app.jar"));
+        assertTrue(body.contains("app.exe"));
+        assertTrue(body.contains("DeleteFile WScript.ScriptFullName"));
+        assertTrue(body.contains("lg.WriteLine"));
+        Files.deleteIfExists(vbs);
+    }
+
+    @Test
+    @DisplayName("вне установки exe-пути нет")
+    void noExeOutsideInstall() {
+        assertNull(UpdateService.exeInstallPath());
     }
 }
