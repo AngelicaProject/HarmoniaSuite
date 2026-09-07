@@ -1,6 +1,7 @@
 package com.harmoniasuite.service;
 
 import com.harmoniasuite.config.StartupLink;
+import com.harmoniasuite.util.IcoSupport;
 import jakarta.annotation.PreDestroy;
 import java.awt.Graphics2D;
 import java.awt.GraphicsEnvironment;
@@ -46,7 +47,7 @@ public class TrayService implements ApplicationListener<ApplicationReadyEvent> {
             return;
         }
         try {
-            var image = ImageIO.read(getClass().getResourceAsStream("/static/img/yuki-icon.png"));
+            var image = loadTrayImage();
             if (image == null) {
                 return;
             }
@@ -58,7 +59,7 @@ public class TrayService implements ApplicationListener<ApplicationReadyEvent> {
             menu.add(open);
             menu.addSeparator();
             menu.add(exit);
-            icon = new TrayIcon(scaleIcon(image), "Harmonia Suite");
+            icon = new TrayIcon(image, "Harmonia Suite");
             icon.setImageAutoSize(false);
             icon.setPopupMenu(menu);
             icon.addMouseListener(new MouseAdapter() {
@@ -73,6 +74,21 @@ public class TrayService implements ApplicationListener<ApplicationReadyEvent> {
         } catch (Exception e) {
             log.warn("Трей недоступен: {}", e.getMessage());
         }
+    }
+
+    private Image loadTrayImage() throws Exception {
+        var size = SystemTray.getSystemTray().getTrayIconSize();
+        try (var in = getClass().getResourceAsStream("/tray/yuki-tray-icon.ico")) {
+            if (in != null) {
+                try {
+                    return IcoSupport.readBest(in.readAllBytes(), size.width, size.height);
+                } catch (Exception e) {
+                    log.warn("ICO трея не прочиталась, использую PNG: {}", e.getMessage());
+                }
+            }
+        }
+        var fallback = ImageIO.read(getClass().getResourceAsStream("/static/img/yuki-icon.png"));
+        return fallback == null ? null : scaleIcon(fallback);
     }
 
     private String link() {
