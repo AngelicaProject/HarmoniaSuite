@@ -1,17 +1,17 @@
 import {computed, createApp, nextTick, onMounted, ref, shallowRef, watch} from 'vue';
-import {api} from './api.js?v=30';
-import Picker from './components/Picker.vue.js?v=17';
-import Editor from './components/Editor.vue.js?v=47';
-import Settings from './components/Settings.vue.js?v=25';
-import TranslateView from './components/TranslateView.vue.js?v=29';
-import SearchView from './components/SearchView.vue.js?v=9';
-import TagsView from './components/TagsView.vue.js?v=22';
-import SummaryView from './components/SummaryView.vue.js?v=13';
-import PackView from './components/PackView.vue.js?v=16';
-import ExportView from './components/ExportView.vue.js?v=31';
-import DeltaView from './components/DeltaView.vue.js?v=24';
-import LogView from './components/LogView.vue.js?v=8';
-import Dropdown from './components/Dropdown.vue.js?v=2';
+import {api} from './api.js';
+import Picker from './components/Picker.vue.js';
+import Editor from './components/Editor.vue.js';
+import Settings from './components/Settings.vue.js';
+import TranslateView from './components/TranslateView.vue.js';
+import SearchView from './components/SearchView.vue.js';
+import TagsView from './components/TagsView.vue.js';
+import SummaryView from './components/SummaryView.vue.js';
+import PackView from './components/PackView.vue.js';
+import ExportView from './components/ExportView.vue.js';
+import DeltaView from './components/DeltaView.vue.js';
+import LogView from './components/LogView.vue.js';
+import Dropdown from './components/Dropdown.vue.js';
 
 const App = {
     components: {Picker, Editor, TranslateView, SearchView, TagsView, SummaryView, PackView, ExportView, DeltaView, LogView, Settings, Dropdown},

@@ -1,4 +1,4 @@
-import {UI_COLORS} from './ui-colors.js?v=7';
+import {UI_COLORS} from './ui-colors.js';
 
 // Tag parser mirror of TagSupport.java. FFXIV Lumina macros as emitted by
 // ReadOnlySeString.ToMacroString() (<br>, <colortype(504)>, <if(cond,a,b)>

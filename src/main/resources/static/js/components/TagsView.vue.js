@@ -1,6 +1,6 @@
-import {TAG_CATALOG} from '../tag-catalog.js?v=8';
-import {tagKindLabel} from '../tags.js?v=12';
-import {UI_COLORS} from '../ui-colors.js?v=7';
+import {TAG_CATALOG} from '../tag-catalog.js';
+import {tagKindLabel} from '../tags.js';
+import {UI_COLORS} from '../ui-colors.js';
 
 const KINDS = ['break', 'color', 'fmt', 'logic', 'value', 'media', 'misc'];
 const UI_TAG_NAMES = ['colortype', 'edgecolortype'];

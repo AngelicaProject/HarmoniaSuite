@@ -1,5 +1,5 @@
-import {api} from '../api.js?v=29';
-import Dropdown from './Dropdown.vue.js?v=2';
+import {api} from '../api.js';
+import Dropdown from './Dropdown.vue.js';
 export default {
   components: {Dropdown},
   props: ['files', 'selected', 'trCount', 'estimate', 'pendingMap', 'mapReady', 'loading', 'error', 'root', 'gemini', 'job'],

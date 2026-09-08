@@ -1,4 +1,4 @@
-import {api} from '../api.js?v=29';
+import {api} from '../api.js';
 export default {
   props: ['modelValue', 'defaultRoot'], emits: ['update:modelValue', 'confirm'],
   data(){return{projects:[],pending:this.modelValue,newId:'',newRoot:'',error:'',q:'',loading:true,confirmId:'',deleteJob:null,deleteTimer:null}},

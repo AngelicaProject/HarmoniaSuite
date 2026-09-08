@@ -1,4 +1,4 @@
-import {api} from '../api.js?v=29';
+import {api} from '../api.js';
 export default {
   props: ['projectId', 'job', 'scope', 'dataRev'],
   emits: ['build', 'build-download', 'toast', 'toggle-scope', 'clear-scope'],

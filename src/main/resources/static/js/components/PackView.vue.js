@@ -1,4 +1,4 @@
-import {api} from '../api.js?v=29';
+import {api} from '../api.js';
 export default {
   props: ['projectId', 'pack', 'errors', 'manifest', 'msg', 'compat', 'langs'],
   emits: ['update:compat', 'update:langs', 'save', 'addAuthor', 'delAuthor', 'toast'],

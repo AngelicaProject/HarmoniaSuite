@@ -40,7 +40,7 @@
 ## Frontend
 
 - Scope-based loading, never the whole table: open = `overview` + first files page; files list server-paged with server search (100 per page, need-first); per-file entries on open (`entries?file=`, cap 5000, client-side union cache); editor works on the focused file only (row-grouped cards); phrase search in the Search tab (`entries?q=`, jump by id), Ctrl+K file jump. Case-insensitive search relies on `source_lc`/`translation_lc` columns (SQLite `LOWER()` is ASCII-only).
-- Static cache-busting is manual `?v=`: bump in `index.html` and every `import ... from '...?v='` on any `js/`/`css` change. Deliberate — build-time substitution breaks IntelliJ live serving. `index.html` itself has no buster: after static changes hard-refresh (Ctrl+F5) or a stale cached copy hides the new `?v=` refs. Self-update UI: version chip in the statusbar (check on open + hourly), update modal, restart overlay.
+- Static files are served with `Cache-Control: no-cache` (`web/NoCacheStaticFilter`): the browser revalidates every load (cheap 304 on localhost) and picks up changes immediately — no manual `?v=` bumps, no hard refresh. Deliberate — build-time substitution breaks IntelliJ live serving. Self-update UI: version chip in the statusbar (check on open + hourly), update modal, restart overlay.
 - Settings → Database section: snake_case→camelCase mapping lives in `api.js` (`mapBackupList`) — components never read raw wire keys. Range slider `.bk-range` (thin bar, `--primary` fill via `--fill` var set synchronously in `@input`, silent save on `@change`, no focus ring, `user-select:none` on the value).
 
 ## Layering & SQL

@@ -1,6 +1,6 @@
-import {highlightTags, renderGamePreview, validateTags, warnTags, distinctTags, distinctAnon, findMissingTags, normalizedTag as normTag, tagKindOf as kindOfTag, tagKindLabel as kindLabel} from '../tags.js?v=12';
-import {api} from '../api.js?v=29';
-import CsvPreview from './CsvPreview.vue.js?v=3';
+import {highlightTags, renderGamePreview, validateTags, warnTags, distinctTags, distinctAnon, findMissingTags, normalizedTag as normTag, tagKindOf as kindOfTag, tagKindLabel as kindLabel} from '../tags.js';
+import {api} from '../api.js';
+import CsvPreview from './CsvPreview.vue.js';
 export default {
   components: {CsvPreview},
   props: ['entries', 'focusId', 'storeKey', 'csvOpen', 'csvRoot', 'pinRequest'],

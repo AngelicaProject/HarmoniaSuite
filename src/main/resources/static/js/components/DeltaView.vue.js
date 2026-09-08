@@ -1,4 +1,4 @@
-import {api} from '../api.js?v=30';
+import {api} from '../api.js';
 export default {
   props: ['projectId'],
   emits: ['toast', 'refresh', 'open-conflict'],

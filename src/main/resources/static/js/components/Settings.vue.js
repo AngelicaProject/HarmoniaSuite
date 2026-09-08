@@ -1,4 +1,4 @@
-import {api} from '../api.js?v=34';
+import {api} from '../api.js';
 export default {
   props: ['initial', 'forced'],
   emits: ['close', 'changed'],
