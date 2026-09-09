@@ -37,7 +37,11 @@ const App = {
             try { localStorage.setItem('hs-sort', v); } catch (e) {}
         }
         const expandedDirs = ref({});
-        const loadedFiles = new Set();
+        const rowGroupPageSize = 60;
+        const fileRows = ref({file: '', q: '', page: 0, groups: [], totalGroups: 0, loading: false});
+        const filePreviewCache = new Map();
+        let rowRequest = 0;
+        let phraseSearchTimer = null;
         let statsTimer = null;
         function refreshStats() {
             clearTimeout(statsTimer);
@@ -808,14 +812,60 @@ const App = {
             }
         }
 
-        async function ensureFile(f) {
-            if (!f || loadedFiles.has(f) || !projectId.value) return;
-            const d = await api.entries(projectId.value, {file: f}, {limit: 5000});
-            const have = new Set((doc.value?.entries || []).map(e => e.id));
-            const fresh = (d.entries || []).filter(e => !have.has(e.id));
-            if (fresh.length) doc.value = {...doc.value, entries: [...(doc.value?.entries || []), ...fresh]};
-            if ((d.total ?? 0) > (d.entries || []).length) logText.value += '\nФайл ' + f + ': показано ' + (d.entries || []).length + ' из ' + d.total;
-            loadedFiles.add(f);
+        function mergeEntries(items) {
+            if (!items || !items.length) return;
+            const entries = new Map((doc.value?.entries || []).map(e => [e.id, e]));
+            for (const entry of items) if (entry && entry.id) entries.set(entry.id, entry);
+            doc.value = {...(doc.value || {}), entries: [...entries.values()]};
+            dataRev.value++;
+        }
+
+        function decorateRowGroups(groups, page) {
+            return (groups || []).map((group, i) => {
+                const pos = page * rowGroupPageSize + i;
+                return {...group, pos, section: Math.floor(pos / 100)};
+            });
+        }
+
+        async function loadFileRows(file, page = 0, q = '') {
+            if (!file || !projectId.value) return null;
+            const cleanPage = Math.max(0, page | 0);
+            const cleanQ = String(q || '').trim();
+            const previousPageIds = new Set((fileRows.value.groups || []).flatMap(g =>
+                (g.cells || []).map(cell => cell.id)));
+            const request = ++rowRequest;
+            fileRows.value = {file, q: cleanQ, page: cleanPage, groups: [], totalGroups: 0, loading: true};
+            try {
+                const d = await api.rowsPage(projectId.value, {
+                    file, offset: cleanPage * rowGroupPageSize, limit: rowGroupPageSize, q: cleanQ
+                });
+                if (request !== rowRequest) return null;
+                const groups = decorateRowGroups(d.groups || [], cleanPage);
+                const pageEntries = groups.flatMap(g => g.cells || []);
+                const entries = new Map();
+                for (const entry of (doc.value?.entries || [])) {
+                    if (entry && entry.id && !previousPageIds.has(entry.id)) entries.set(entry.id, entry);
+                }
+                for (const entry of pageEntries) {
+                    if (entry && entry.id) entries.set(entry.id, entry);
+                }
+                doc.value = {...(doc.value || {}), entries: [...entries.values()]};
+                dataRev.value++;
+                fileRows.value = {file, q: cleanQ, page: cleanPage, groups,
+                    totalGroups: Number(d.total_groups || 0), loading: false};
+                return fileRows.value;
+            } catch (e) {
+                if (request === rowRequest) fileRows.value = {file, q: cleanQ, page: cleanPage,
+                    groups: [], totalGroups: 0, loading: false};
+                throw e;
+            }
+        }
+
+        async function loadFilePreview(file) {
+            if (!file || !projectId.value || filePreviewCache.has(file)) return;
+            const d = await api.entries(projectId.value, {file}, {limit: 100});
+            filePreviewCache.set(file, {rows: d.entries || [], total: d.total || 0});
+            dataRev.value++;
         }
 
         async function ensureEntry(id) {
@@ -823,7 +873,7 @@ const App = {
             const e = (doc.value?.entries || []).find(x => x.id === id);
             if (e) return e;
             const loaded = await api.entryByCell(projectId.value, id);
-            if (loaded && loaded.id) doc.value = {...doc.value, entries: [...(doc.value?.entries || []), loaded]};
+            if (loaded && loaded.id) mergeEntries([loaded]);
             return loaded || null;
         }
 
@@ -833,8 +883,10 @@ const App = {
                 const t0 = performance.now();
                 const ov = await api.overview(projectId.value);
                 const t1 = Math.round(performance.now() - t0);
-                loadedFiles.clear();
                 doc.value = {files: [], entries: []};
+                fileRows.value = {file: '', q: '', page: 0, groups: [], totalGroups: 0, loading: false};
+                filePreviewCache.clear();
+                rowRequest++;
                 doc.value._loadMs = t1;
                 summary.value = ov.summary || null;
                 loadSelection();
@@ -845,7 +897,9 @@ const App = {
                 if (!pack.value) await loadPack();
                 expandedDirs.value = {};
                 await loadFileTree();
-                if (focusFileFilter.value) await ensureFile(focusFileFilter.value);
+                if (focusFileFilter.value && leftMode.value === 'phrases') {
+                    await loadFileRows(focusFileFilter.value, 0, phraseSearchQ.value);
+                }
             } catch (e) {
                 logText.value += '\nОшибка: ' + e.message;
             }
@@ -874,21 +928,6 @@ const App = {
             for (const e of (doc.value?.entries || [])) m.set(e.id, e);
             return m;
         });
-        const fileEntriesMap = computed(() => {
-            dataRev.value;
-            const m = new Map();
-            for (const e of (doc.value?.entries || [])) {
-                if (!e || !e.file) continue;
-                let a = m.get(e.file);
-                if (!a) { a = []; m.set(e.file, a); }
-                a.push(e);
-            }
-            for (const a of m.values()) a.sort((x, y) => (x.row_index - y.row_index) || (x.column_index - y.column_index));
-            return m;
-        });
-        function fileEntriesOf(f) {
-            return (fileEntriesMap.value.get(f) || []).filter(e => entryById.value.has(e.id));
-        }
         function scopeFile() { return focusFileFilter.value || ''; }
         const leftMode = ref('files');
         function progPct(f) {
@@ -918,7 +957,7 @@ const App = {
         function expanded(f) { return !!expandedFiles.value[f]; }
         function toggleExpand(f) {
             expandedFiles.value[f] = !expandedFiles.value[f];
-            if (expandedFiles.value[f]) ensureFile(f).catch(e => logText.value += '\n' + e.message);
+            if (expandedFiles.value[f]) loadFilePreview(f).catch(e => logText.value += '\n' + e.message);
         }
         function filePhraseGroups(f) {
             const groups = new Map();
@@ -934,59 +973,65 @@ const App = {
         }
         function filePhrases(f) {
             dataRev.value;
+            const preview = filePreviewCache.get(f);
+            if (!preview) return {rows: [], total: 0};
             const un = [], done = [];
-            let total = 0;
-            for (const e of fileEntriesOf(f)) {
-                total++;
-                (needsWork(e) ? un : done).push(e);
-            }
-            return {rows: un.concat(done).slice(0, 100), total};
+            for (const e of preview.rows || []) (needsWork(e) ? un : done).push(e);
+            return {rows: un.concat(done).slice(0, 100), total: preview.total || 0};
         }
         const phrasePage = ref(0);
         const phraseSearchQ = ref('');
-        const rowGroupPageSize = 60;
         const fileRowGroups = computed(() => {
-            dataRev.value;
-            const f = scopeFile();
-            if (!f) return [];
-            const q = phraseSearchQ.value.trim().toLowerCase();
-            const rows = new Map();
-            for (const e of fileEntriesOf(f)) {
-                if (q && !((e.source || '').toLowerCase().includes(q)
-                        || (e.translation || '').toLowerCase().includes(q)
-                        || (e.row_key || '').toLowerCase().includes(q)
-                        || (e.column_name || '').toLowerCase().includes(q)
-                        || (e.status || '').toLowerCase().includes(q))) {
-                    continue;
-                }
-                let r = rows.get(e.row_index);
-                if (!r) { r = {row: e.row_index, key: e.row_key, cells: []}; rows.set(e.row_index, r); }
-                r.cells.push(e);
-            }
-            const out = [...rows.values()].sort((a, b) => a.row - b.row);
-            out.forEach((r, i) => {
-                r.pos = i;
-                r.section = Math.floor(i / 100);
-                r.cells.sort((a, b) => a.column_index - b.column_index);
-                r.un = 0;
-                for (const e of r.cells) {
-                    if (needsWork(e)) r.un++;
-                }
-            });
-            return out;
+            return fileRows.value.file === scopeFile() ? fileRows.value.groups : [];
         });
-        const rowGroupsPaged = computed(() => fileRowGroups.value.slice(phrasePage.value * rowGroupPageSize, (phrasePage.value + 1) * rowGroupPageSize));
-        const rowGroupPages = computed(() => Math.ceil(fileRowGroups.value.length / rowGroupPageSize) || 1);
+        const rowGroupsPaged = computed(() => fileRowGroups.value);
+        const rowGroupPages = computed(() => Math.ceil(fileRows.value.totalGroups / rowGroupPageSize) || 1);
+        const rowContext = computed(() => ({
+            file: fileRows.value.file,
+            q: fileRows.value.q,
+            page: fileRows.value.page,
+            pageSize: rowGroupPageSize,
+            totalGroups: fileRows.value.totalGroups,
+            groups: fileRows.value.groups
+        }));
+
+        async function setRowGroupPage(page) {
+            const f = scopeFile();
+            if (!f) return;
+            phrasePage.value = Math.max(0, Math.min(rowGroupPages.value - 1, page));
+            try {
+                await loadFileRows(f, phrasePage.value, phraseSearchQ.value);
+            } catch (e) {
+                logText.value += '\n' + e.message;
+            }
+        }
+
+        function setPhraseSearch(value) {
+            phraseSearchQ.value = value || '';
+            phrasePage.value = 0;
+            clearTimeout(phraseSearchTimer);
+            phraseSearchTimer = setTimeout(() => {
+                const f = scopeFile();
+                if (!f) return;
+                loadFileRows(f, 0, phraseSearchQ.value).catch(e => logText.value += '\n' + e.message);
+            }, 250);
+        }
 
         async function openFile(f) {
             focusFileFilter.value = f;
             leftMode.value = 'phrases';
             phrasePage.value = 0;
             phraseSearchQ.value = '';
-            await ensureFile(f);
-            const ents = fileEntriesOf(f);
-            const first = ents.find(e => needsWork(e)) || ents[0];
-            if (first) focusId.value = first.id;
+            const page = await loadFileRows(f, 0, '');
+            let first = null;
+            try {
+                first = await api.rowsNext(projectId.value, {file: f, afterRow: -1, afterCol: -1});
+                if (first) mergeEntries([first]);
+            } catch (e) {
+                logText.value += '\n' + e.message;
+            }
+            const fallback = page && page.groups.length ? page.groups[0].cells[0] : null;
+            if (first || fallback) focusId.value = (first || fallback).id;
         }
 
         function backToFiles() {
@@ -996,10 +1041,22 @@ const App = {
         }
 
         async function focusPhrase(id) {
-            const e = await ensureEntry(id);
-            focusId.value = id;
-            const f = (e && e.file) || ((entryById.value.get(id) || {}).file || '');
-            if (f && leftMode.value === 'files') revealInFiles(f, false, id);
+            try {
+                const e = await ensureEntry(id);
+                if (!e) return;
+                focusId.value = id;
+                const f = e.file || ((entryById.value.get(id) || {}).file || '');
+                if (f && leftMode.value === 'files') {
+                    await revealInFiles(f, false, id);
+                } else if (f && leftMode.value === 'phrases'
+                        && (!fileRows.value.groups || !fileRows.value.groups.some(g => (g.cells || []).some(c => c.id === id)))) {
+                    const pos = await api.rowsPosition(projectId.value, {file: f, rowIndex: e.row_index, q: phraseSearchQ.value});
+                    phrasePage.value = Math.floor(Number(pos || 0) / rowGroupPageSize);
+                    await loadFileRows(f, phrasePage.value, phraseSearchQ.value);
+                }
+            } catch (err) {
+                logText.value += '\n' + (err.message || 'Не удалось открыть фразу');
+            }
         }
 
         const tab = ref('translate');
@@ -1031,7 +1088,6 @@ const App = {
                 expandedDirs.value[parts.slice(0, i).join('/')] = true;
             }
             if (!expanded(file)) toggleExpand(file);
-            await ensureFile(file);
             lastReveal = file;
             revealFile.value = file;
             clearTimeout(revealTimer);
@@ -1181,11 +1237,39 @@ const App = {
             focusFileFilter.value = f || '';
             tab.value = 'translate';
             if (f) {
-                await ensureFile(f);
-                const ents = fileEntriesOf(f);
-                const first = ents.find(e => needsWork(e)) || ents[0];
-                if (first) focusId.value = first.id;
+                leftMode.value = 'phrases';
+                phrasePage.value = 0;
+                phraseSearchQ.value = '';
+                const page = await loadFileRows(f, 0, '');
+                let first = null;
+                try {
+                    first = await api.rowsNext(projectId.value, {file: f, afterRow: -1, afterCol: -1});
+                    if (first) mergeEntries([first]);
+                } catch (e) {
+                    logText.value += '\n' + e.message;
+                }
+                const fallback = page && page.groups.length ? page.groups[0].cells[0] : null;
+                if (first || fallback) focusId.value = (first || fallback).id;
             }
+        }
+
+        async function editorRowNext(file, afterRow, afterCol, q) {
+            const entry = await api.rowsNext(projectId.value, {file, afterRow, afterCol, q});
+            if (!entry || !entry.id) return entry;
+            mergeEntries([entry]);
+            const inPage = fileRows.value.file === file
+                && (fileRows.value.groups || []).some(g => (g.cells || []).some(c => c.id === entry.id));
+            if (!inPage) {
+                const pos = await api.rowsPosition(projectId.value, {file, rowIndex: entry.row_index, q});
+                const page = Math.floor(Number(pos || 0) / rowGroupPageSize);
+                phrasePage.value = page;
+                await loadFileRows(file, page, q || '');
+            }
+            return entry;
+        }
+
+        async function editorLoadRowPage(file, page, q) {
+            return loadFileRows(file, page, q);
         }
 
         function onNavigate(f) {
@@ -1220,31 +1304,35 @@ const App = {
                 logText.value += '\nФраза не найдена';
                 return;
             }
-            await ensureEntry(m.id);
-            const found = entryById.value.get(m.id) || null;
-            const f = (found && found.file) || m.file || '';
-            tab.value = 'translate';
-            focusFileFilter.value = f;
-            leftMode.value = 'phrases';
-            phrasePage.value = 0;
-            phraseSearchQ.value = '';
-            if (f) await ensureFile(f);
-            focusId.value = m.id;
             try {
-                const groups = fileRowGroups.value || [];
-                const idx = groups.findIndex(g => ((g.cells || []).some(c => c.id === m.id)));
-                if (idx >= 0) phrasePage.value = Math.floor(idx / rowGroupPageSize);
-            } catch (e) {}
-            await nextTick();
-            try {
-                const el = document.querySelector('.dock.left [data-id="' + CSS.escape(m.id) + '"]');
-                if (el && el.scrollIntoView) {
-                    el.scrollIntoView({block: 'center'});
-                    el.classList.add('flash');
-                    setTimeout(() => { try { el.classList.remove('flash'); } catch (e2) {} }, 2400);
+                const loaded = await ensureEntry(m.id);
+                const found = loaded || entryById.value.get(m.id) || null;
+                const f = (found && found.file) || m.file || '';
+                let targetPage = 0;
+                if (f && found) {
+                    const pos = await api.rowsPosition(projectId.value, {file: f, rowIndex: found.row_index});
+                    targetPage = Math.floor(Number(pos || 0) / rowGroupPageSize);
+                    await loadFileRows(f, targetPage, '');
                 }
-            } catch (e) {}
-            logText.value += '\nПереход по поиску: ' + (f ? f + ', ' : '') + m.id;
+                tab.value = 'translate';
+                focusFileFilter.value = f;
+                leftMode.value = 'phrases';
+                phrasePage.value = targetPage;
+                phraseSearchQ.value = '';
+                focusId.value = m.id;
+                await nextTick();
+                try {
+                    const el = document.querySelector('.dock.left [data-id="' + CSS.escape(m.id) + '"]');
+                    if (el && el.scrollIntoView) {
+                        el.scrollIntoView({block: 'center'});
+                        el.classList.add('flash');
+                        setTimeout(() => { try { el.classList.remove('flash'); } catch (e2) {} }, 2400);
+                    }
+                } catch (e) {}
+                logText.value += '\nПереход по поиску: ' + (f ? f + ', ' : '') + m.id;
+            } catch (e) {
+                logText.value += '\n' + (e.message || 'Не удалось открыть результат поиска');
+            }
         }
 
         async function openConflict(c) {
@@ -1382,10 +1470,12 @@ const App = {
         async function onSave({id, uuid, translation, status}) {
             try {
                 const d = await api.patchEntry(projectId.value, uuid, translation, status);
-                const arr = (doc.value.entries || []).filter(x => x.id !== id);
-                doc.value = {...doc.value, entries: [...arr, d.entry]};
+                mergeEntries([d.entry]);
                 if (d.summary) summary.value = d.summary;
                 refreshStats();
+                if (d.entry && fileRows.value.file === d.entry.file) {
+                    await loadFileRows(fileRows.value.file, fileRows.value.page, fileRows.value.q);
+                }
                 if (editorRef.value && editorRef.value.noteChanged) editorRef.value.noteChanged();
                 (d.warnings || []).forEach(w => logText.value += '\n[Тег] ' + w);
             } catch (e) {
@@ -1576,6 +1666,7 @@ const App = {
             toggleExpand,
             filePhrases,
             filePhraseGroups,
+            fileRows,
             fileUn,
             projTotal,
             projDone,
@@ -1593,6 +1684,9 @@ const App = {
             fileRowGroups,
             phrasePage,
             phraseSearchQ,
+            setRowGroupPage,
+            setPhraseSearch,
+            rowContext,
             focusPhrase,
             tab,
             focusId,
@@ -1605,6 +1699,8 @@ const App = {
             previewPinRequest,
             csvRequest,
             focusFile,
+            editorRowNext,
+            editorLoadRowPage,
             onNavigate,
             matches,
             searchQ,
@@ -1723,7 +1819,7 @@ const App = {
               </div>
       <div v-if="leftMode==='files'" class="proj-stats"><div class="proj-num">{{fmtNum(projDone)}} <span>/ {{fmtNum(projTotal)}}</span><b class="proj-pct">{{pct1(projDone,projTotal)}}</b></div><div class="sum-bar"><i :style="'width:'+(projTotal?Math.max(projDone/projTotal*100,projDone?1.5:0):0)+'%'"></i></div><div class="proj-sub">Осталось {{fmtNum(projTotal-projDone)}} · файлов {{fmtNum(treeFileCount)}}<span v-if="summary&&summary.by_status&&summary.by_status.stale"> · устар. {{fmtNum(summary.by_status.stale)}}</span></div></div>
       <div v-if="leftMode==='files'" class="ft-search"><svg class="icon ic-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg><input class="grow" :value="fileSearchQ" @input="fileSearchQ=$event.target.value" placeholder="Поиск файлов…"><Dropdown :modelValue="fileSort" @update:modelValue="setSort" title="Сортировка" width="148px" :options="[{value:'need',label:'Недопереведённые'},{value:'name',label:'По имени'},{value:'progress',label:'По прогрессу'}]" /><button class="ghost icon-btn sm" @click="toggleFollow" :style="followFiles?'':'opacity:.4'" :title="followFiles?'Не следить за редактором':'Следить за редактором: список сам находит файл из редактора'"><svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg></button></div>
-      <div v-else-if="focusFileFilter" class="ft-search"><svg class="icon ic-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg><input class="grow" :value="phraseSearchQ" @input="phraseSearchQ=$event.target.value;phrasePage=0" placeholder="Поиск по файлу: текст, строка, колонка, статус…"><button v-if="phraseSearchQ" class="ghost icon-btn sm" @click="phraseSearchQ='';phrasePage=0" title="Очистить"><svg class="icon" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+      <div v-else-if="focusFileFilter" class="ft-search"><svg class="icon ic-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg><input class="grow" :value="phraseSearchQ" @input="setPhraseSearch($event.target.value)" placeholder="Поиск по файлу: текст, строка, колонка, статус…"><button v-if="phraseSearchQ" class="ghost icon-btn sm" @click="setPhraseSearch('')" title="Очистить"><svg class="icon" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
       <div class="pane-body">
         <div v-if="!doc" class="ft-empty"><svg class="icon" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h3l2 2h9a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></svg><span>Проект не загружен</span></div>
         <div v-else-if="leftMode==='files'">
@@ -1755,12 +1851,12 @@ const App = {
         </div>
         <div v-else>
           <div v-if="!focusFileFilter" class="ft-empty"><svg class="icon" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h3l2 2h9a2 2 0 0 1 2 2v8a2 2 0 0 1-2-2V7z"/></svg><span>Выберите файл в списке</span></div>
-          <div v-else-if="!fileRowGroups.length" class="ft-empty"><svg class="icon" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg><span>{{phraseSearchQ?'Ничего не найдено':'В файле нет строк'}}</span></div>
+          <div v-else-if="!fileRows.totalGroups" class="ft-empty"><svg class="icon" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg><span>{{phraseSearchQ?'Ничего не найдено':'В файле нет строк'}}</span></div>
           <template v-else>
           <template v-for="(g,gi) in rowGroupsPaged" :key="g.row">
-          <div v-if="gi===0||g.section!==rowGroupsPaged[gi-1].section" class="ft-section">Строки {{g.section*100+1}}–{{Math.min((g.section+1)*100,fileRowGroups.length)}}</div>
+          <div v-if="gi===0||g.section!==rowGroupsPaged[gi-1].section" class="ft-section">Строки {{g.section*100+1}}–{{Math.min((g.section+1)*100,fileRows.totalGroups)}}</div>
           <div class="ft-rowcard" :class="{active:g.cells.some(c=>c.id===focusId),done:!g.un}">
-            <div class="ft-rowhead" @click="focusPhrase(g.cells[0].id)" :title="'rowIndex '+g.row"><span class="ft-rowkey">{{g.key||('row '+(g.row+1))}}</span><span v-if="g.cells.length>1" class="muted">{{g.cells.length}} кол.</span><span style="flex:1"></span><span v-if="g.un" class="ft-un">{{g.un}} неперев.</span><span v-else class="ft-ok">✓</span></div>
+            <div class="ft-rowhead" @click="focusPhrase(g.cells[0].id)" :title="'rowIndex '+g.row"><span class="ft-rowkey">{{g.row_key||('row '+(g.row+1))}}</span><span v-if="g.cells.length>1" class="muted">{{g.cells.length}} кол.</span><span style="flex:1"></span><span v-if="g.un" class="ft-un">{{g.un}} неперев.</span><span v-else class="ft-ok">✓</span></div>
             <div v-for="c in g.cells" :key="c.id" class="ft-cell" data-ctx="phrase" :data-id="c.id" :class="{active:focusId===c.id}" @click="focusPhrase(c.id)" title="Редактировать">
               <span :class="'ed-status-pill status-'+c.status">{{c.status}}</span>
               <div style="flex:1;min-width:0">
@@ -1771,13 +1867,13 @@ const App = {
             </div>
           </div>
           </template>
-          <div v-if="rowGroupPages>1" class="ft-actions" style="border:none;padding-top:6px"><button class="ghost icon-btn" @click="phrasePage=Math.max(0,phrasePage-1)" :disabled="phrasePage===0" title="Назад"><svg class="icon" viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg></button><span class="muted" style="font-size:11px">{{phrasePage+1}}/{{rowGroupPages}}</span><button class="ghost icon-btn" @click="phrasePage=Math.min(rowGroupPages-1,phrasePage+1)" :disabled="phrasePage>=rowGroupPages-1" title="Вперёд"><svg class="icon" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></button></div>
+          <div v-if="rowGroupPages>1" class="ft-actions" style="border:none;padding-top:6px"><button class="ghost icon-btn" @click="setRowGroupPage(phrasePage-1)" :disabled="phrasePage===0" title="Назад"><svg class="icon" viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg></button><span class="muted" style="font-size:11px">{{phrasePage+1}}/{{rowGroupPages}}</span><button class="ghost icon-btn" @click="setRowGroupPage(phrasePage+1)" :disabled="phrasePage>=rowGroupPages-1" title="Вперёд"><svg class="icon" viewBox="0 0 24 24"><path d="M9 6l6 6 6-6"/></svg></button></div>
           </template>
         </div>
       </div>
     </div></Teleport>
     <main class="main-pane">
-      <Editor ref="editorRef" :entries="doc?doc.entries:[]" :focusId="focusId" :store-key="projectId" :csv-open="csvRequest" :csv-root="root" :pin-request="previewPinRequest" @save="onSave" @navigate="onNavigate" @need-entry="ensureEntry" @resolve="onResolveConflict" @file="onEditorFile" @reveal="onRevealFile"/>
+      <Editor ref="editorRef" :entries="doc?doc.entries:[]" :focusId="focusId" :store-key="projectId" :csv-open="csvRequest" :csv-root="root" :pin-request="previewPinRequest" :row-context="rowContext" :row-next="editorRowNext" :load-row-page="editorLoadRowPage" @save="onSave" @navigate="onNavigate" @need-entry="ensureEntry" @resolve="onResolveConflict" @file="onEditorFile" @reveal="onRevealFile"/>
     </main>
     <section class="dock right" v-show="railVisible.right">
       <div class="hsplit left" @mousedown="e=>startResize('right',e)" title="Потяните, чтобы изменить ширину"></div>

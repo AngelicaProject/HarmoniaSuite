@@ -10,6 +10,7 @@ import com.harmoniasuite.dto.FileTreeDto;
 import com.harmoniasuite.dto.OverviewDto;
 import com.harmoniasuite.dto.ProjectFilesDto;
 import com.harmoniasuite.dto.ProjectListDto;
+import com.harmoniasuite.dto.RowGroupsPageDto;
 import com.harmoniasuite.dto.SaveEntryResponseDto;
 import com.harmoniasuite.dto.SummaryDto;
 import com.harmoniasuite.exception.HarmoniaSuiteBadRequestException;
@@ -25,6 +26,7 @@ import java.nio.file.Path;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -39,6 +41,8 @@ public class ProjectService {
     public static final int ENTRIES_DEFAULT_LIMIT = 80;
     public static final int ENTRIES_MAX_LIMIT = 500;
     public static final int FILE_ENTRIES_MAX_LIMIT = 5000;
+    public static final int ROW_GROUPS_DEFAULT_PAGE_SIZE = 60;
+    public static final int ROW_GROUPS_MAX_PAGE_SIZE = 200;
     public static final int FILES_DEFAULT_LIMIT = 100;
     public static final int FILES_MAX_LIMIT = 500;
 
@@ -157,6 +161,67 @@ public class ProjectService {
         EntryRepository.EntryPage result = entryRepository.pageWithTotal(projectId, filter, from, take);
         return new EntriesPageDto(
                 entryMapper.toDtoList(result.entries()), result.total(), from, take);
+    }
+
+    public RowGroupsPageDto rowGroups(UUID projectId, String file, String query,
+            int offset, int limit) {
+        projectRepository.findById(projectId);
+        file = requireFile(file);
+        int take = limit <= 0 ? ROW_GROUPS_DEFAULT_PAGE_SIZE : Math.min(limit, ROW_GROUPS_MAX_PAGE_SIZE);
+        int from = Math.max(0, offset);
+        List<TranslationEntry> entries = entryRepository.rowGroupWindow(projectId, file, query, from, take);
+        Map<Integer, RowGroupBuilder> grouped = new LinkedHashMap<>();
+        for (TranslationEntry entry : entries) {
+            RowGroupBuilder group = grouped.computeIfAbsent(entry.getRowIndex(),
+                    row -> new RowGroupBuilder(row, entry.getRowKey()));
+            group.cells.add(entryMapper.toDto(entry));
+            if (needsWork(entry)) {
+                group.un++;
+            }
+        }
+        List<RowGroupsPageDto.RowGroupDto> groups = new ArrayList<>(grouped.size());
+        for (RowGroupBuilder group : grouped.values()) {
+            groups.add(new RowGroupsPageDto.RowGroupDto(group.row, group.rowKey, group.cells, group.un));
+        }
+        return new RowGroupsPageDto(groups, entryRepository.countRowGroups(projectId, file, query), from, take);
+    }
+
+    public long rowGroupPosition(UUID projectId, String file, int rowIndex, String query) {
+        projectRepository.findById(projectId);
+        file = requireFile(file);
+        return entryRepository.rowGroupPosition(projectId, file, rowIndex, query);
+    }
+
+    public EntryDto nextNeedsWork(UUID projectId, String file, int afterRow, int afterCol, String query) {
+        projectRepository.findById(projectId);
+        file = requireFile(file);
+        TranslationEntry entry = entryRepository.nextNeedsWork(projectId, file, afterRow, afterCol, query);
+        return entry == null ? null : entryMapper.toDto(entry);
+    }
+
+    private static String requireFile(String file) {
+        if (file == null || file.isBlank()) {
+            throw new HarmoniaSuiteBadRequestException("File is required");
+        }
+        return file.trim().replace('\\', '/');
+    }
+
+    private static boolean needsWork(TranslationEntry entry) {
+        return !"no_translation_required".equals(entry.getStatus())
+                && ((entry.getTranslation() == null || entry.getTranslation().trim().isEmpty())
+                || "stale".equals(entry.getStatus()));
+    }
+
+    private static final class RowGroupBuilder {
+        private final int row;
+        private final String rowKey;
+        private final List<EntryDto> cells = new ArrayList<>();
+        private int un;
+
+        private RowGroupBuilder(int row, String rowKey) {
+            this.row = row;
+            this.rowKey = rowKey;
+        }
     }
 
     public static List<String> normalizeStatuses(String raw) {

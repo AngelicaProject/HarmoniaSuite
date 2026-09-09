@@ -3,8 +3,9 @@ async function req(url,opt){
   const timer = ctrl ? setTimeout(() => ctrl.abort(), 120000) : null;
   try {
     const r = await fetch(url, Object.assign({}, opt || {}, ctrl ? {signal: ctrl.signal} : {}));
-    const d = await r.json().catch(()=>({error:r.statusText}));
-    if(d.error) throw Error(d.error);
+    const d = await r.json().catch(()=>null);
+    if(!r.ok) throw Error((d && d.error) || r.statusText || 'Ошибка запроса');
+    if(d && d.error) throw Error(d.error);
     return d;
   } catch(e) {
     if (e && e.name === 'AbortError') throw Error('Превышено время ожидания ответа сервера');
@@ -47,6 +48,35 @@ export const api={
       if(page.limit) p.set('limit',page.limit);
     }
     return req('/api/projects/'+enc(projectId)+'/entries?'+p.toString());
+  },
+  rowsPage:(projectId,f)=>{
+    const p=new URLSearchParams();
+    if(f){
+      if(f.file) p.set('file',f.file);
+      if(f.offset) p.set('offset',f.offset);
+      if(f.limit) p.set('limit',f.limit);
+      if(f.q) p.set('q',f.q);
+    }
+    return req('/api/projects/'+enc(projectId)+'/rows?'+p.toString());
+  },
+  rowsPosition:(projectId,f)=>{
+    const p=new URLSearchParams();
+    if(f){
+      if(f.file) p.set('file',f.file);
+      if(f.rowIndex !== undefined) p.set('rowIndex',f.rowIndex);
+      if(f.q) p.set('q',f.q);
+    }
+    return req('/api/projects/'+enc(projectId)+'/rows/position?'+p.toString());
+  },
+  rowsNext:(projectId,f)=>{
+    const p=new URLSearchParams();
+    if(f){
+      if(f.file) p.set('file',f.file);
+      if(f.afterRow !== undefined) p.set('afterRow',f.afterRow);
+      if(f.afterCol !== undefined) p.set('afterCol',f.afterCol);
+      if(f.q) p.set('q',f.q);
+    }
+    return req('/api/projects/'+enc(projectId)+'/rows/next?'+p.toString());
   },
   entry:(projectId,entryId)=>req('/api/projects/'+enc(projectId)+'/entries/'+enc(entryId)),
   entryByCell:(projectId,cellId)=>req('/api/projects/'+enc(projectId)+'/entries/by-cell/'+enc(cellId)),

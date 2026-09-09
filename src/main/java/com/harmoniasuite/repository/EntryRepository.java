@@ -32,6 +32,15 @@ public class EntryRepository {
     private static final String SELECT_PAGE_WITH_TOTAL = "SELECT " + ENTRY_COLUMNS + """
             , COUNT(*) OVER () AS _total FROM entries""";
 
+    private static final String SELECT_ROW_GROUPS = "SELECT DISTINCT row_index FROM entries";
+
+    private static final String SELECT_ROW_GROUP_CELLS = SELECT_BASE;
+
+    private static final String COUNT_ROW_GROUPS = "SELECT COUNT(DISTINCT row_index) FROM entries";
+
+    private static final String NEEDS_WORK_PREDICATE =
+            "status <> 'no_translation_required' AND (TRIM(translation) = '' OR status = 'stale')";
+
     private static final String SELECT_TRANSLATED_BY_FILE = SELECT_BASE
             + " WHERE project_id = ? AND file_id = ? AND TRIM(translation) <> ''"
             + " ORDER BY row_index, column_index";
@@ -150,7 +159,8 @@ public class EntryRepository {
             String q = filter.query().trim().toLowerCase(Locale.ROOT);
             builder.and("(INSTR(source_lc, ?) > 0 OR INSTR(translation_lc, ?) > 0"
                     + " OR INSTR(LOWER(row_key), ?) > 0 OR INSTR(LOWER(cell_id), ?) > 0"
-                    + " OR INSTR(LOWER(file_path), ?) > 0)", q, q, q, q, q);
+                    + " OR INSTR(LOWER(file_path), ?) > 0 OR INSTR(LOWER(column_name), ?) > 0"
+                    + " OR INSTR(LOWER(status), ?) > 0)", q, q, q, q, q, q, q);
         }
         return builder;
     }
@@ -181,6 +191,52 @@ public class EntryRepository {
             entries.add(mapRow(row));
         }
         return new EntryPage(entries, total);
+    }
+
+    public List<TranslationEntry> rowGroupWindow(UUID projectId, String file, String query,
+            int offsetGroups, int limitGroups) {
+        EntryFilter filter = new EntryFilter(null, List.of(), file, query, false);
+        int from = Math.max(0, offsetGroups);
+        int take = Math.max(0, limitGroups);
+        SqlBuilder groups = filtered(projectId, filter).orderBy("row_index").limitOffset(take, from);
+        List<Integer> rowIndexes = jdbc.query(
+                SELECT_ROW_GROUPS + groups.text(),
+                (rs, i) -> rs.getInt("row_index"), groups.params());
+        if (rowIndexes.isEmpty()) {
+            return List.of();
+        }
+        SqlBuilder cells = filtered(projectId, new EntryFilter(null, List.of(), file, null, false))
+                .andIn("row_index", rowIndexes)
+                .orderBy("row_index, column_index");
+        return jdbc.query(SELECT_ROW_GROUP_CELLS + cells.text(), ROW_MAPPER, cells.params());
+    }
+
+    public long countRowGroups(UUID projectId, String file, String query) {
+        EntryFilter filter = new EntryFilter(null, List.of(), file, query, false);
+        SqlBuilder builder = filtered(projectId, filter);
+        Long total = jdbc.queryForObject(COUNT_ROW_GROUPS + builder.text(), Long.class, builder.params());
+        return total == null ? 0 : total;
+    }
+
+    public long rowGroupPosition(UUID projectId, String file, int rowIndex, String query) {
+        EntryFilter filter = new EntryFilter(null, List.of(), file, query, false);
+        SqlBuilder builder = filtered(projectId, filter).and("row_index < ?", rowIndex);
+        Long position = jdbc.queryForObject(COUNT_ROW_GROUPS + builder.text(), Long.class, builder.params());
+        return position == null ? 0 : position;
+    }
+
+    public TranslationEntry nextNeedsWork(UUID projectId, String file, int afterRow,
+            int afterCol, String query) {
+        EntryFilter filter = new EntryFilter(null, List.of(), file, query, false);
+        SqlBuilder builder = filtered(projectId, filter)
+                .and(NEEDS_WORK_PREDICATE)
+                .and("(row_index > ? OR (row_index = ? AND column_index > ?))",
+                        afterRow, afterRow, afterCol)
+                .orderBy("row_index, column_index")
+                .limitOffset(1, 0);
+        List<TranslationEntry> rows = jdbc.query(SELECT_ROW_GROUP_CELLS + builder.text(), ROW_MAPPER,
+                builder.params());
+        return rows.isEmpty() ? null : rows.get(0);
     }
 
     private static TranslationEntry mapRow(Map<String, Object> row) {

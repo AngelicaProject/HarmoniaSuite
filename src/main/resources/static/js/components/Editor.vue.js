@@ -3,7 +3,7 @@ import {api} from '../api.js';
 import CsvPreview from './CsvPreview.vue.js';
 export default {
   components: {CsvPreview},
-  props: ['entries', 'focusId', 'storeKey', 'csvOpen', 'csvRoot', 'pinRequest'],
+  props: ['entries', 'focusId', 'storeKey', 'csvOpen', 'csvRoot', 'pinRequest', 'rowContext', 'rowNext', 'loadRowPage'],
   emits: ['save', 'navigate', 'need-entry', 'resolve', 'reveal', 'file'],
   data() {
     let previewH = 240;
@@ -18,12 +18,20 @@ export default {
       void this.rev;
       const f = this.activeFile;
       if (!f) return [];
-      return (this.entries || []).filter(e => e.file === f).sort((a, b) => (a.row_index - b.row_index) || (a.column_index - b.column_index));
+      const byId = this.byId;
+      const cells = [];
+      for (const group of (this.rowContext && this.rowContext.groups || [])) {
+        for (const cell of (group.cells || [])) cells.push(byId[cell.id] || cell);
+      }
+      return cells.filter(e => e.file === f)
+        .sort((a, b) => (a.row_index - b.row_index) || (a.column_index - b.column_index));
     },
     filePos() {
       if (!this.current) return null;
-      const i = this.fileEntries.findIndex(e => e.id === this.current.id);
-      return i < 0 ? null : {i: i + 1, n: this.fileEntries.length};
+      const group = (this.rowContext && this.rowContext.groups || [])
+        .find(g => (g.cells || []).some(e => e.id === this.current.id));
+      if (!group || typeof group.pos !== 'number') return null;
+      return {i: group.pos + 1, n: this.rowContext.totalGroups || 0};
     },
     neighbors() {
       if (!this.current) return {prev: null, next: null};
@@ -31,6 +39,16 @@ export default {
       if (i < 0) return {prev: null, next: null};
       const txt = e => e ? {id: e.id, key: e.row_key || '', col: e.column_name || '', src: String(e.source || '').slice(0, 120)} : null;
       return {prev: txt(this.fileEntries[i - 1]), next: txt(this.fileEntries[i + 1])};
+    },
+    canNeighborPrev() {
+      return !!(this.activeFile && this.rowContext && this.loadRowPage
+        && Number(this.rowContext.page) > 0);
+    },
+    canNeighborNext() {
+      const c = this.rowContext;
+      const pageSize = Number(c && c.pageSize);
+      if (!this.activeFile || !c || !this.loadRowPage || !Number.isFinite(pageSize) || pageSize <= 0) return false;
+      return Number(c.page) + 1 < Math.ceil(Number(c.totalGroups || 0) / pageSize);
     },
     highlightedSource() { return highlightTags(this.current ? this.current.source : '', this.missingKeys); },
     highlightedTranslation() { return highlightTags(this.translation || ''); },
@@ -236,21 +254,31 @@ export default {
       }
       this.activateTab(t);
     },
-    activateTab(t) {
+    async activateTab(t) {
       if (this.activeTab !== t) this.stashDraft();
       this.activeTab = t;
       this.jumpError = '';
       this.preview = false;
       if (t && t.kind === 'file') {
-        if (!t.phraseId || !this.byId[t.phraseId]) t.phraseId = this.pickPhrase(t.file);
+        if (!t.phraseId || !this.byId[t.phraseId]) {
+          t.phraseId = this.pickPhrase(t.file);
+          if (!t.phraseId && this.rowNext) {
+            try {
+              const found = await this.rowNext(t.file, -1, -1, '');
+              t.phraseId = found && found.id ? found.id : null;
+              await this.$nextTick();
+            } catch (e) {
+              this.jumpError = e.message || 'Не удалось найти первую фразу';
+            }
+          }
+        }
         this.loadPhrase(t.phraseId);
         this.persistTabs();
         this.$emit('file', t.file);
       }
     },
     pickPhrase(file) {
-      const list = (this.entries || []).filter(e => (e.file || '') === (file || ''))
-        .sort((a, b) => (a.row_index - b.row_index) || (a.column_index - b.column_index));
+      const list = this.fileEntries.filter(e => (e.file || '') === (file || ''));
       const un = list.find(e => !(e.translation && e.translation.trim()) || e.status === 'stale');
       return ((un || list[0] || {}).id || null);
     },
@@ -325,8 +353,23 @@ export default {
       else if (act === 'all') [...this.tabs].forEach(x => this.closeTab(x));
     },
     navList() { return this.activeFile ? this.fileEntries : (this.entries || []); },
-    nextUntranslated() {
+    async nextUntranslated() {
       if (!this.current) return;
+      if (this.activeFile && this.rowNext) {
+        try {
+          const found = await this.rowNext(this.activeFile, this.current.row_index,
+            this.current.column_index, (this.rowContext && this.rowContext.q) || '');
+          if (found) {
+            await this.$nextTick();
+            this.select(found);
+          } else {
+            this.jumpError = 'Непереведённых фраз больше нет';
+          }
+        } catch (e) {
+          this.jumpError = e.message || 'Не удалось найти следующую фразу';
+        }
+        return;
+      }
       const list = this.navList();
       const i = list.findIndex(x => x.id === this.current.id);
       const found = list.slice(i + 1).find(x => this.needsWork(x)) || list.slice(0, Math.max(i, 0)).find(x => this.needsWork(x));
@@ -360,17 +403,41 @@ export default {
         + this.translation.slice(e);
       this.$nextTick(() => { ta.focus(); const p = s + open.length + (e - s) + (s === e ? 0 : close.length); ta.setSelectionRange(p, p); });
     },
-    next() {
+    async openNeighbor(delta) {
       if (!this.current) return;
       const list = this.navList();
       const i = list.findIndex(x => x.id === this.current.id);
-      if (i >= 0 && i + 1 < list.length) this.select(list[i + 1]);
+      if (i >= 0 && i + delta >= 0 && i + delta < list.length) {
+        this.select(list[i + delta]);
+        return;
+      }
+      const context = this.rowContext;
+      const pageSize = Number(context && context.pageSize);
+      if (!this.activeFile || !this.loadRowPage || !context
+          || !Number.isFinite(pageSize) || pageSize <= 0) return;
+      const page = Number(context.page) + delta;
+      const pages = Math.ceil(Number(context.totalGroups || 0) / pageSize);
+      if (page < 0 || page >= pages) return;
+      try {
+        const loaded = await this.loadRowPage(this.activeFile, page, context.q || '');
+        const cells = (loaded && loaded.groups || []).flatMap(g => g.cells || []);
+        const candidate = delta > 0 ? cells[0] : cells[cells.length - 1];
+        if (candidate) {
+          await this.$nextTick();
+          this.select(candidate);
+        }
+      } catch (e) {
+        this.jumpError = e.message || 'Не удалось загрузить соседнюю страницу';
+      }
+    },
+    moveByCell(delta) {
+      return this.openNeighbor(delta);
+    },
+    next() {
+      return this.moveByCell(1);
     },
     prev() {
-      if (!this.current) return;
-      const list = this.navList();
-      const i = list.findIndex(x => x.id === this.current.id);
-      if (i > 0) this.select(list[i - 1]);
+      return this.moveByCell(-1);
     }
   },
   template: `
@@ -405,7 +472,7 @@ export default {
       <button class="ghost" @click="nextUntranslated" title="Следующая непереведённая"><svg class="icon" viewBox="0 0 24 24"><path d="M12 5v14M6 13l6 6 6-6"/></svg>Следующая</button>
     </div>
     <div class="ed-where"><span class="ed-where-file" @click="$emit('reveal', activeFile)" title="Показать в файлах проекта" style="cursor:pointer">{{activeFile}}</span><button class="ghost icon-btn sm" @click="pinFile(activeFile)" title="Закрепить превью таблицы под переводом"><svg class="icon" viewBox="0 0 24 24"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg></button><span class="muted"> · строка {{current.row_key||((current.row_index||0)+1)}} · {{current.column_name||('кол.'+current.column_index)}}</span><span class="grow"></span><span v-if="filePos" class="muted">{{filePos.i}} из {{filePos.n}} в файле</span></div>
-    <div v-if="neighbors.prev||neighbors.next" class="ed-nbrs"><div v-if="neighbors.prev" class="ed-nbr" @click="openTab(neighbors.prev.id)" :title="neighbors.prev.src">↑ {{neighbors.prev.key}} · {{neighbors.prev.src}}</div><div v-if="neighbors.next" class="ed-nbr" @click="openTab(neighbors.next.id)" :title="neighbors.next.src">↓ {{neighbors.next.key}} · {{neighbors.next.src}}</div></div>
+    <div v-if="neighbors.prev||neighbors.next||canNeighborPrev||canNeighborNext" class="ed-nbrs"><div v-if="neighbors.prev" class="ed-nbr" @click="openNeighbor(-1)" :title="neighbors.prev.src">↑ {{neighbors.prev.key}} · {{neighbors.prev.src}}</div><div v-else-if="canNeighborPrev" class="ed-nbr muted" @click="openNeighbor(-1)">↑ Предыдущая страница</div><div v-if="neighbors.next" class="ed-nbr" @click="openNeighbor(1)" :title="neighbors.next.src">↓ {{neighbors.next.key}} · {{neighbors.next.src}}</div><div v-else-if="canNeighborNext" class="ed-nbr muted" @click="openNeighbor(1)">↓ Следующая страница</div></div>
     <div class="ed-grid">
       <div class="ed-col src">
         <div class="ed-col-label"><span>Оригинал</span><span class="muted">{{current?current.id:''}}</span></div>

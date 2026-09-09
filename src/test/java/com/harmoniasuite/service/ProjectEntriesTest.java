@@ -9,6 +9,8 @@ import com.harmoniasuite.dto.EntriesPageDto;
 import com.harmoniasuite.dto.EntryDto;
 import com.harmoniasuite.dto.OverviewDto;
 import com.harmoniasuite.dto.ProjectFilesDto;
+import com.harmoniasuite.dto.RowGroupsPageDto;
+import com.harmoniasuite.exception.HarmoniaSuiteBadRequestException;
 import com.harmoniasuite.exception.HarmoniaSuiteNotFoundException;
 import com.harmoniasuite.mapping.EntryMapperImpl;
 import com.harmoniasuite.mapping.ProjectMapperImpl;
@@ -44,6 +46,11 @@ class ProjectEntriesTest {
 
     private static TranslationEntry entry(String file, String rowKey, int col, String source,
             String translation, String status) {
+        return entry(file, rowKey, 0, col, source, translation, status);
+    }
+
+    private static TranslationEntry entry(String file, String rowKey, int row, int col, String source,
+            String translation, String status) {
         TranslationEntry e = new TranslationEntry();
         e.setId(EntryIds.ofCell(file, rowKey, col));
         e.setSource(source);
@@ -51,7 +58,9 @@ class ProjectEntriesTest {
         e.setStatus(status);
         e.setFile(file);
         e.setRowKey(rowKey);
+        e.setRowIndex(row);
         e.setColumnIndex(col);
+        e.setColumnName("Column " + col);
         return e;
     }
 
@@ -112,6 +121,12 @@ class ProjectEntriesTest {
         EntryRepository.EntryFilter byTranslation =
                 new EntryRepository.EntryFilter(null, List.of(), null, "прив", false);
         assertEquals(1L, projects.entries(projectId, byTranslation, 0, 0).total());
+        EntryRepository.EntryFilter byStatus =
+                new EntryRepository.EntryFilter(null, List.of(), null, "human_review", false);
+        assertEquals(1L, projects.entries(projectId, byStatus, 0, 0).total());
+        EntryRepository.EntryFilter byColumn =
+                new EntryRepository.EntryFilter(null, List.of(), null, "column", false);
+        assertEquals(2L, projects.entries(projectId, byColumn, 0, 0).total());
         EntryRepository.EntryFilter byRow =
                 new EntryRepository.EntryFilter("11", List.of(), null, null, false);
         assertEquals(1L, projects.entries(projectId, byRow, 0, 0).total());
@@ -344,5 +359,101 @@ class ProjectEntriesTest {
     void updateEntryRejectsUnknownStatus() throws Exception {
         assertThrows(IllegalArgumentException.class, () -> projects.updateEntry(
                 projectId, entryUuid("a.csv", "11", 1), "Пока", "bogus-status"));
+    }
+
+    @Test
+    @DisplayName("row-group pages have no gaps or duplicates at page boundaries")
+    void rowGroupPagesHaveNoGapsOrDuplicates() throws Exception {
+        String now = Instant.now().toString();
+        projectRepository.upsertFiles(projectId, List.of("rows.csv"), now);
+        List<TranslationEntry> rows = new ArrayList<>();
+        for (int row = 1; row <= 61; row++) {
+            rows.add(entry("rows.csv", "row-" + row, row, 1,
+                    "Source " + row, "", "untranslated"));
+            if (row % 3 == 0) {
+                rows.add(entry("rows.csv", "row-" + row, row, 2,
+                        "Extra " + row, "", "untranslated"));
+            }
+        }
+        entryRepository.batchUpsert(projectId, projectRepository.fileIdMap(projectId), rows, now);
+
+        RowGroupsPageDto first = projects.rowGroups(projectId, "rows.csv", null, 0, 60);
+        RowGroupsPageDto last = projects.rowGroups(projectId, "rows.csv", null, 60, 60);
+
+        assertEquals(61L, first.totalGroups());
+        assertEquals(60, first.groups().size());
+        assertEquals(1, last.groups().size());
+        assertEquals(61, last.groups().get(0).row());
+        assertEquals(61, first.groups().stream().map(RowGroupsPageDto.RowGroupDto::row)
+                .distinct().count() + last.groups().stream().map(RowGroupsPageDto.RowGroupDto::row)
+                .distinct().count());
+        assertEquals(2, first.groups().get(2).cells().size());
+    }
+
+    @Test
+    @DisplayName("row-group query includes every cell in a matching group")
+    void rowGroupQueryIncludesWholeMatchingGroup() throws Exception {
+        String now = Instant.now().toString();
+        projectRepository.upsertFiles(projectId, List.of("query.csv"), now);
+        entryRepository.batchUpsert(projectId, projectRepository.fileIdMap(projectId),
+                new ArrayList<>(List.of(
+                        entry("query.csv", "1", 1, 1, "needle", "", "untranslated"),
+                        entry("query.csv", "1", 1, 2, "sibling", "", "untranslated"),
+                        entry("query.csv", "2", 2, 1, "other", "", "untranslated"))), now);
+
+        RowGroupsPageDto page = projects.rowGroups(projectId, "query.csv", "needle", 0, 60);
+
+        assertEquals(1L, page.totalGroups());
+        assertEquals(1, page.groups().size());
+        assertEquals(2, page.groups().get(0).cells().size());
+
+        RowGroupsPageDto byColumn = projects.rowGroups(projectId, "query.csv", "column 2", 0, 60);
+        assertEquals(1L, byColumn.totalGroups());
+        assertEquals(2, byColumn.groups().get(0).cells().size());
+
+        RowGroupsPageDto byStatus = projects.rowGroups(projectId, "query.csv", "untranslated", 0, 60);
+        assertEquals(2L, byStatus.totalGroups());
+        assertEquals(2, byStatus.groups().size());
+        assertThrows(HarmoniaSuiteBadRequestException.class,
+                () -> projects.rowGroups(projectId, "", null, 0, 60));
+    }
+
+    @Test
+    @DisplayName("row-group position maps the last group to the last page")
+    void rowGroupPositionMapsLastGroup() throws Exception {
+        String now = Instant.now().toString();
+        projectRepository.upsertFiles(projectId, List.of("position.csv"), now);
+        List<TranslationEntry> rows = new ArrayList<>();
+        for (int row = 1; row <= 121; row++) {
+            rows.add(entry("position.csv", "row-" + row, row, 1,
+                    "Source " + row, "", "untranslated"));
+        }
+        entryRepository.batchUpsert(projectId, projectRepository.fileIdMap(projectId), rows, now);
+
+        assertEquals(120L, projects.rowGroupPosition(projectId, "position.csv", 121, null));
+        RowGroupsPageDto page = projects.rowGroups(projectId, "position.csv", null, 120, 60);
+        assertEquals(List.of(121), page.groups().stream().map(RowGroupsPageDto.RowGroupDto::row).toList());
+    }
+
+    @Test
+    @DisplayName("next needs-work skips completed cells and finds empty and stale cells")
+    void nextNeedsWorkSkipsCompletedAndFindsEmptyAndStale() throws Exception {
+        String now = Instant.now().toString();
+        projectRepository.upsertFiles(projectId, List.of("needs.csv"), now);
+        entryRepository.batchUpsert(projectId, projectRepository.fileIdMap(projectId),
+                new ArrayList<>(List.of(
+                        entry("needs.csv", "1", 1, 1, "Ignored", "", "no_translation_required"),
+                        entry("needs.csv", "2", 2, 1, "Done", "Готово", "approved"),
+                        entry("needs.csv", "3", 3, 1, "Empty", "", "untranslated"),
+                        entry("needs.csv", "4", 4, 1, "Stale", "Старый", "stale"),
+                        entry("needs.csv", "5", 5, 1, "Later", "", "untranslated"))), now);
+
+        EntryDto empty = projects.nextNeedsWork(projectId, "needs.csv", -1, -1, null);
+        EntryDto stale = projects.nextNeedsWork(projectId, "needs.csv", empty.rowIndex(), empty.columnIndex(), null);
+        EntryDto later = projects.nextNeedsWork(projectId, "needs.csv", stale.rowIndex(), stale.columnIndex(), null);
+
+        assertEquals(3, empty.rowIndex());
+        assertEquals(4, stale.rowIndex());
+        assertEquals(5, later.rowIndex());
     }
 }
