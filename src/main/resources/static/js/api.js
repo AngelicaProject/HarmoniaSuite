@@ -59,6 +59,15 @@ export const api={
   version:()=>req('/api/version'),
   updateStatus:()=>req('/api/update/status'),
   runUpdate:()=>req('/api/update',{method:'POST'}),
+  logTail:(tail=500)=>fetch('/api/log?tail='+encodeURIComponent(tail)).then(async r=>{
+    const text=await r.text();
+    if(!r.ok){
+      let message=text;
+      try{message=JSON.parse(text).error||message;}catch(e){}
+      throw Error(message||r.statusText||'Не удалось получить журнал');
+    }
+    return text;
+  }),
   aiSettings:()=>req('/api/settings/ai'),
   saveAiSettings:(b)=>req('/api/settings/ai',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({provider:b.provider,gemini_key:b.geminiKey,openrouter_key:b.openrouterKey,openrouter_model:b.openrouterModel,openrouter_reasoning:b.openrouterReasoning})}),
   settings:()=>req('/api/settings'),

@@ -15,6 +15,7 @@ export default {
       bkItems: [], bkRetention: 10, bkInput: '10', bkUsed: 0, bkEstimate: 0,
       bkAuto: 0, bkAutoInput: '0',
       bkError: '', bkSaved: '', bkBusy: false,
+      logError: '', logSaved: '', logBusy: false,
     };
   },
   computed: {
@@ -342,6 +343,22 @@ export default {
         this.bkError = e.message;
       }
     },
+    async copyLog() {
+      this.logError = '';
+      this.logSaved = '';
+      this.logBusy = true;
+      try {
+        const text = await api.logTail();
+        if (!navigator.clipboard || !navigator.clipboard.writeText) {
+          throw Error('Буфер обмена недоступен');
+        }
+        await navigator.clipboard.writeText(text);
+        this.logSaved = 'Журнал скопирован';
+      } catch (e) {
+        this.logError = e.message;
+      }
+      this.logBusy = false;
+    },
     async bkDelete(name) {
       if (!confirm('Удалить резервную копию ' + name + '?')) return;
       this.bkError = '';
@@ -449,6 +466,13 @@ export default {
               <span class="set-label">Резервные копии базы данных</span>
               <div class="set-row"><button class="subtle" @click="bkCreate" :disabled="bkBusy">Создать резервную копию</button><button class="subtle" @click="bkOpenFolder">Открыть папку</button></div>
               <div class="set-hint">Снимок базы целиком; хранится в каталоге backups рядом с базой</div>
+            </div>
+            <div class="set-field">
+              <span class="set-label">Журнал приложения</span>
+              <div class="set-row"><button class="subtle" @click="copyLog" :disabled="logBusy">{{logBusy?'Копирование…':'Скопировать журнал'}}</button></div>
+              <div class="set-hint">Хвост журнала нужен для диагностики ошибок обновления и других операций</div>
+              <div v-if="logError" class="form-error">{{logError}}</div>
+              <div v-else-if="logSaved" class="set-ok">{{logSaved}}</div>
             </div>
             <div class="set-field">
               <span class="set-label">Хранить копий</span>

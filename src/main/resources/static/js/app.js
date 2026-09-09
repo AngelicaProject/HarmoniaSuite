@@ -192,6 +192,7 @@ const App = {
         const updModal = ref(false);
         const updRestarting = ref(false);
         const updRestartDead = ref(false);
+        const updLogBusy = ref(false);
         async function loadUpdateStatus() {
             try {
                 upd.value = await api.updateStatus();
@@ -217,6 +218,20 @@ const App = {
             } catch (e) {
                 showToast(e.message);
             }
+        }
+        async function copyUpdateLog() {
+            updLogBusy.value = true;
+            try {
+                const text = await api.logTail();
+                if (!navigator.clipboard || !navigator.clipboard.writeText) {
+                    throw Error('Буфер обмена недоступен');
+                }
+                await navigator.clipboard.writeText(text);
+                showToast('Журнал скопирован');
+            } catch (e) {
+                showToast(e.message);
+            }
+            updLogBusy.value = false;
         }
         const aiTitle = computed(() => {
             const g = geminiStatus.value || {};
@@ -649,6 +664,7 @@ const App = {
         const jobStick = ref(true);
         const jobMainOutput = computed(() => ((job.value && job.value.output) || '')
             .split('\n').filter(l => !l.startsWith('[REASONING]')).join('\n'));
+        const updateFailed = computed(() => !!job.value && job.value.action === 'update' && job.value.status === 'failed');
         function onJobScroll() {
             const el = jobLog.value;
             if (!el) return;
@@ -719,6 +735,7 @@ const App = {
                             }
                         }
                         if (d.action === 'update') {
+                            if (d.status === 'failed') updModal.value = true;
                             setTimeout(loadUpdateStatus, 400);
                         } else if (d.action === 'sync-sources') {
                             setTimeout(async () => {
@@ -1630,10 +1647,13 @@ const App = {
             updModal,
             updRestarting,
             updRestartDead,
+            updLogBusy,
+            updateFailed,
             updLabel,
             updTitle,
             loadUpdateStatus,
             runUpdate,
+            copyUpdateLog,
             onSave,
             onConfirm,
             scanSource,
@@ -1673,7 +1693,7 @@ const App = {
   </div>
 
   <div v-if="job" class="jobbar" :class="job.status">
-    <div class="job-row"><span class="job-spin" v-if="job.status==='running'"></span><b>{{ {extract:'Обновление данных',gemini:'Перевод Gemini',openrouter:'Перевод OpenRouter',merge:'Сборка CSV','sync-sources':'Синхронизация источников'}[job.action] || job.action }}</b><span class="muted" style="margin-left:8px">{{job.status==='running'?'выполняется…':job.status==='queued'?'в очереди…':job.status==='completed'?'готово':job.status==='cancelled'?'отменено':'ошибка'}}</span><button v-if="job.status==='running'||job.status==='queued'" class="ghost sm" style="margin-left:auto" @click="cancelJob" title="Остановить">Отмена</button><button v-if="job.status!=='running'&&job.status!=='queued'" class="ghost icon-btn sm" style="margin-left:auto" @click="job=null" title="Закрыть"><svg class="icon" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+    <div class="job-row"><span class="job-spin" v-if="job.status==='running'"></span><b>{{ {extract:'Обновление данных',gemini:'Перевод Gemini',openrouter:'Перевод OpenRouter',merge:'Сборка CSV','sync-sources':'Синхронизация источников',update:'Обновление приложения'}[job.action] || job.action }}</b><span class="muted" style="margin-left:8px">{{job.status==='running'?'выполняется…':job.status==='queued'?'в очереди…':job.status==='completed'?'готово':job.status==='cancelled'?'отменено':'ошибка'}}</span><button v-if="job.status==='running'||job.status==='queued'" class="ghost sm" style="margin-left:auto" @click="cancelJob" title="Остановить">Отмена</button><button v-if="job.status!=='running'&&job.status!=='queued'" class="ghost icon-btn sm" style="margin-left:auto" @click="job=null" title="Закрыть"><svg class="icon" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
     <pre ref="jobLog" class="job-log" @scroll="onJobScroll">{{jobMainOutput}}</pre>
   </div>
 
@@ -1839,15 +1859,21 @@ const App = {
   <div v-if="ctxMenu" class="dz-menu" style="position:fixed;z-index:302;bottom:auto" :style="{left:ctxMenu.x+'px',top:ctxMenu.y+'px'}"><div v-for="(it,i) in ctxMenu.items" :key="i" class="dz-menu-i" :class="{sel:it.sel}" @click="runCtx(it)">{{it.t}}</div></div>
   <div v-if="updModal" class="overlay" @click.self="updModal=false">
     <div class="modal upd-modal">
-      <div class="upd-title">Доступно новое обновление</div>
-      <div v-if="upd.needsToolchain" class="muted">Для обновления докачается тулчейн (JDK + git, ~250 МБ, один раз)</div>
-      <div v-if="!upd.needsToolchain" class="muted">v{{upd.version}} · {{(upd.currentSha||'').slice(0,7)}} → {{(upd.latestSha||'').slice(0,7)}} · коммитов: {{upd.behindBy}}</div>
-      <template v-if="!upd.needsToolchain">
-      <div class="upd-sec">IN THIS UPDATE</div>
-      <ul class="upd-list"><li v-for="(s,i) in (upd.subjects||[])" :key="i">{{s}}</li></ul>
-      <div v-if="upd.behindBy>(upd.subjects||[]).length" class="muted">+ ещё {{upd.behindBy-(upd.subjects||[]).length}} изменений</div>
+      <div class="upd-title">{{updateFailed?'Обновление не выполнено':'Доступно новое обновление'}}</div>
+      <template v-if="updateFailed">
+        <div class="muted">Причина записана в журнал приложения. Скопируйте хвост журнала для диагностики.</div>
+        <div class="set-actions"><button class="primary" @click="copyUpdateLog" :disabled="updLogBusy">{{updLogBusy?'Копирование…':'Скопировать журнал'}}</button><button class="ghost" @click="updModal=false">Закрыть</button></div>
       </template>
-      <div class="set-actions"><button class="primary" @click="runUpdate">Обновить сейчас</button><button class="ghost" @click="updModal=false">Возможно позже</button></div>
+      <template v-else>
+        <div v-if="upd.needsToolchain" class="muted">Для обновления докачается тулчейн (JDK + git, ~250 МБ, один раз)</div>
+        <div v-if="!upd.needsToolchain" class="muted">v{{upd.version}} · {{(upd.currentSha||'').slice(0,7)}} → {{(upd.latestSha||'').slice(0,7)}} · коммитов: {{upd.behindBy}}</div>
+        <template v-if="!upd.needsToolchain">
+        <div class="upd-sec">IN THIS UPDATE</div>
+        <ul class="upd-list"><li v-for="(s,i) in (upd.subjects||[])" :key="i">{{s}}</li></ul>
+        <div v-if="upd.behindBy>(upd.subjects||[]).length" class="muted">+ ещё {{upd.behindBy-(upd.subjects||[]).length}} изменений</div>
+        </template>
+        <div class="set-actions"><button class="primary" @click="runUpdate">Обновить сейчас</button><button class="ghost" @click="updModal=false">Возможно позже</button></div>
+      </template>
     </div>
   </div>
   <div v-if="updRestarting" class="overlay"><div class="modal upd-modal"><div class="upd-title">Перезапуск…</div><div class="muted">Новая версия поднимается — страница обновится сама</div><div v-if="updRestartDead" class="muted">Не поднялось за 2 минуты — запусти приложение вручную</div></div></div>

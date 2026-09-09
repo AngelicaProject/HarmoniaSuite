@@ -8,10 +8,12 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -131,5 +133,31 @@ class UpdateServiceTest {
     @DisplayName("no exe path outside install")
     void noExeOutsideInstall() {
         assertNull(UpdateService.exeInstallPath());
+    }
+
+    @Test
+    @DisplayName("scrub masks credentials in URLs but keeps ordinary URLs")
+    void scrubsUrlCredentials() {
+        assertEquals("https://***@example.com/path", UpdateService.scrub("https://user:pass@example.com/path"));
+        assertEquals("https://example.com/path", UpdateService.scrub("https://example.com/path"));
+        assertNull(UpdateService.scrub(null));
+        assertEquals("  ", UpdateService.scrub("  "));
+    }
+
+    @Test
+    @DisplayName("failure formatting keeps only the recent capped output")
+    void formatsFailureTail() {
+        List<String> lines = new ArrayList<>();
+        for (int i = 1; i <= 25; i++) {
+            lines.add("line-" + i);
+        }
+        String failure = UpdateService.formatFailure(List.of("git", "pull"), 128, lines);
+        assertTrue(failure.startsWith("git pull: код 128"));
+        assertTrue(failure.contains("line-25"));
+        assertFalse(failure.contains("line-5"));
+
+        String huge = UpdateService.formatFailure("git pull", 1, List.of("x".repeat(5000)));
+        assertTrue(huge.length() < 4200);
+        assertEquals("git pull: код 1", UpdateService.formatFailure("git pull", 1, List.of()));
     }
 }

@@ -27,6 +27,8 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
 import java.util.zip.ZipFile;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -41,6 +43,11 @@ public class UpdateService {
     private static final String TEMURIN_URL =
             "https://api.adoptium.net/v3/binary/latest/21/ga/windows/x64/jdk/hotspot/normal/eclipse";
     private static final Pattern JAVAC_VERSION = Pattern.compile("javac (\\d+)");
+    private static final Pattern URL_CREDENTIALS = Pattern.compile("(?i)(://)[^\\s/@:]+:[^\\s/@]*@");
+    private static final int FAILURE_TAIL_LINES = 20;
+    private static final int FAILURE_TAIL_CHARS = 4096;
+    private static final int HTTP_BODY_CHARS = 4096;
+    private static final Logger logger = LoggerFactory.getLogger(UpdateService.class);
 
     private final HarmoniaProperties properties;
     private final ObjectMapper objectMapper;
@@ -100,6 +107,41 @@ public class UpdateService {
             return "";
         }
         return raw.strip();
+    }
+
+    static String scrub(String value) {
+        return value == null ? null : URL_CREDENTIALS.matcher(value).replaceAll("$1***@");
+    }
+
+    static String formatFailure(List<String> command, int code, List<String> lines) {
+        String cmd = command == null ? "" : String.join(" ", command);
+        return formatFailure(cmd, code, lines);
+    }
+
+    static String formatFailure(String command, int code, List<String> lines) {
+        String prefix = scrub(command == null ? "" : command) + ": код " + code;
+        if (lines == null || lines.isEmpty()) {
+            return prefix;
+        }
+        StringBuilder tail = new StringBuilder();
+        int start = Math.max(0, lines.size() - FAILURE_TAIL_LINES);
+        for (int i = start; i < lines.size(); i++) {
+            String line = scrub(lines.get(i));
+            if (line == null) {
+                continue;
+            }
+            if (tail.length() > 0) {
+                tail.append('\n');
+            }
+            tail.append(line);
+        }
+        if (tail.length() == 0) {
+            return prefix;
+        }
+        if (tail.length() > FAILURE_TAIL_CHARS) {
+            tail.delete(0, tail.length() - FAILURE_TAIL_CHARS);
+        }
+        return prefix + ": " + tail;
     }
 
     static String pickMinGitUrl(List<Map<String, String>> assets) {
@@ -211,54 +253,106 @@ public class UpdateService {
     }
 
     private void runGitUpdate(Path root, Consumer<String> log, String gitBin, String javaHome) throws Exception {
-        if (!out(root, gitBin, "status", "--porcelain").isBlank()) {
+        if (!out(root, log, gitBin, "status", "--porcelain").isBlank()) {
             throw new HarmoniaSuiteBadRequestException("Обновление отменено: есть локальные изменения");
         }
-        String current = out(root, gitBin, "rev-parse", "HEAD");
-        String[] up = upstream(root, gitBin);
-        String latest = parseLsRemote(out(root, gitBin, "ls-remote", up[0], up[1]));
+        String current = out(root, log, gitBin, "rev-parse", "HEAD");
+        String[] up = upstream(root, gitBin, log);
+        String latest = parseLsRemote(out(root, log, gitBin, "ls-remote", up[0], up[1]));
         if (latest.equals(current)) {
             log.accept("Уже актуально");
             return;
         }
         log.accept("Тяну " + shortSha(latest));
+        String phase = "git pull";
+        List<String> phaseOutput = new ArrayList<>();
         try {
-            int code = run(root, List.of(gitBin, "pull", "--ff-only", up[0], up[1]), log);
+            List<String> pullCommand = List.of(gitBin, "pull", "--ff-only", up[0], up[1]);
+            int code = run(root, pullCommand, line -> {
+                phaseOutput.add(line);
+                log.accept(line);
+            });
             if (code != 0) {
-                throw new IOException("git pull завершился с кодом " + code);
+                throw new IOException(formatFailure(pullCommand, code, phaseOutput));
             }
             log.accept("Сборка");
-            code = run(root, buildCommand(root), log,
-                    Map.of("JAVA_HOME", javaHome));
+            phase = "сборка";
+            phaseOutput.clear();
+            List<String> buildCommand = buildCommand(root);
+            code = run(root, buildCommand, line -> {
+                phaseOutput.add(line);
+                log.accept(line);
+            }, Map.of("JAVA_HOME", javaHome));
             if (code != 0) {
-                throw new IOException("Сборка завершилась с кодом " + code);
+                throw new IOException(formatFailure(buildCommand, code, phaseOutput));
             }
         } catch (Exception e) {
-            try {
-                log.accept("Откат на " + shortSha(current));
-                exec(root, List.of(gitBin, "reset", "--hard", current));
-            } catch (Exception resetFailure) {
-                log.accept("Откат не удался: " + resetFailure.getMessage());
+            String fullOutput = String.join("\n", phaseOutput);
+            if (fullOutput.isBlank()) {
+                logger.error("Обновление: фаза {} завершилась ошибкой", phase, e);
+            } else {
+                logger.error("Обновление: фаза {} завершилась ошибкой; полный вывод:\n{}", phase, fullOutput, e);
             }
+            rollback(root, log, gitBin, current, e);
             throw e;
         }
         if (!"jar".equals(launchMode(System.getProperty("java.class.path", "")))) {
             log.accept("Готово. Перезапусти из IDEA (Stop+Run)");
             return;
         }
-        Path exe = exeInstallPath();
-        if (exe != null && InstallLayout.appDir() != null) {
-            Path vbs = writeRelaunchVbs(ProcessHandle.current().pid(),
-                    root.resolve("target").resolve(BUILT_JAR),
-                    InstallLayout.appDir().resolve(BUILT_JAR), exe);
-            log.accept("Перезапуск");
-            wdetach(vbs);
-        } else {
-            Path script = writeRelaunch(relaunchCommand(root));
-            log.accept("Перезапуск");
-            detach(script);
+        Path relaunchScript = null;
+        try {
+            Path exe = exeInstallPath();
+            if (exe != null && InstallLayout.appDir() != null) {
+                relaunchScript = writeRelaunchVbs(ProcessHandle.current().pid(),
+                        root.resolve("target").resolve(BUILT_JAR),
+                        InstallLayout.appDir().resolve(BUILT_JAR), exe);
+                log.accept("Перезапуск");
+                wdetach(relaunchScript);
+            } else {
+                relaunchScript = writeRelaunch(relaunchCommand(root));
+                log.accept("Перезапуск");
+                detach(relaunchScript);
+            }
+        } catch (Exception e) {
+            if (relaunchScript != null) {
+                try {
+                    Files.deleteIfExists(relaunchScript);
+                } catch (Exception cleanupFailure) {
+                    e.addSuppressed(cleanupFailure);
+                    logger.warn("Не удалось удалить скрипт перезапуска: {}",
+                            scrub(cleanupFailure.getMessage() == null
+                                    ? cleanupFailure.toString() : cleanupFailure.getMessage()));
+                }
+            }
+            String message = scrub(e.getMessage() == null ? e.toString() : e.getMessage());
+            log.accept("Перезапуск не удался: " + message);
+            logger.error("Перезапуск обновления не удался", e);
+            rollback(root, log, gitBin, current, e);
+            throw e;
         }
         Runtime.getRuntime().halt(0);
+    }
+
+    private void rollback(Path root, Consumer<String> log, String gitBin, String current, Exception original) {
+        List<String> command = List.of(gitBin, "reset", "--hard", current);
+        try {
+            log.accept("Откат на " + shortSha(current));
+            List<String> output = new ArrayList<>();
+            int code = run(root, command, line -> {
+                output.add(line);
+                log.accept(line);
+            });
+            if (code != 0) {
+                throw new IOException(formatFailure(command, code, output));
+            }
+        } catch (Exception resetFailure) {
+            String message = scrub(resetFailure.getMessage() == null
+                    ? resetFailure.toString() : resetFailure.getMessage());
+            log.accept("Откат не удался: " + message);
+            logger.error("Откат обновления не удался", resetFailure);
+            original.addSuppressed(resetFailure);
+        }
     }
 
     static Path exeInstallPath() {
@@ -567,7 +661,7 @@ public class UpdateService {
             HttpResponse<String> response =
                     http.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
             if (response.statusCode() != 200) {
-                throw new IOException("HTTP " + response.statusCode());
+                throw new IOException(httpFailure("HTTP", response.statusCode(), response.body()));
             }
             return objectMapper.readValue(response.body(), Map.class);
         } catch (InterruptedException e) {
@@ -590,13 +684,43 @@ public class UpdateService {
             HttpResponse<Path> response =
                     http.send(request, HttpResponse.BodyHandlers.ofFile(target));
             if (response.statusCode() != 200) {
-                throw new IOException("скачивание: HTTP " + response.statusCode());
+                throw new IOException(httpFailure("скачивание: HTTP", response.statusCode(), bodyExcerpt(target)));
             }
             log.accept("Скачано " + Files.size(target) / 1024 / 1024 + " МБ");
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new IOException("прервано");
         }
+    }
+
+    private static String httpFailure(String prefix, int status, String body) {
+        String excerpt = bodyExcerpt(body);
+        return prefix + " " + status + (excerpt.isBlank() ? "" : ": " + excerpt);
+    }
+
+    private static String bodyExcerpt(Path file) {
+        try (BufferedReader reader = Files.newBufferedReader(file, StandardCharsets.UTF_8)) {
+            StringBuilder value = new StringBuilder(HTTP_BODY_CHARS + 1);
+            char[] buffer = new char[Math.min(1024, HTTP_BODY_CHARS + 1)];
+            while (value.length() <= HTTP_BODY_CHARS) {
+                int count = reader.read(buffer, 0, Math.min(buffer.length, HTTP_BODY_CHARS + 1 - value.length()));
+                if (count < 0) {
+                    break;
+                }
+                value.append(buffer, 0, count);
+            }
+            return bodyExcerpt(value.toString());
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
+    private static String bodyExcerpt(String body) {
+        if (body == null || body.isBlank()) {
+            return "";
+        }
+        String value = scrub(body.strip());
+        return value.length() > HTTP_BODY_CHARS ? value.substring(0, HTTP_BODY_CHARS) + "…" : value;
     }
 
     private static boolean isWindows() {
@@ -655,40 +779,65 @@ public class UpdateService {
     }
 
     private static String[] upstream(Path root, String gitBin) {
+        return upstream(root, gitBin, line -> {
+        });
+    }
+
+    private static String[] upstream(Path root, String gitBin, Consumer<String> log) {
         try {
-            String ref = out(root, gitBin, "rev-parse", "--abbrev-ref", "@{upstream}");
+            String ref = out(root, log, gitBin, "rev-parse", "--abbrev-ref", "@{upstream}");
             int slash = ref.indexOf('/');
             if (slash > 0) {
                 return new String[]{ref.substring(0, slash), ref.substring(slash + 1)};
             }
-        } catch (Exception ignored) {
+        } catch (Exception e) {
+            logger.warn("Не удалось определить upstream, использую {}/{}: {}",
+                    REMOTE, BRANCH, scrub(e.getMessage() == null ? e.toString() : e.getMessage()));
         }
         return new String[]{REMOTE, BRANCH};
     }
 
     private static List<String> subjects(Path root, String gitBin) throws IOException {
         List<String> lines = new ArrayList<>();
-        int code = run(root, List.of(gitBin, "log", "--format=%s", "-n", String.valueOf(MAX_SUBJECTS),
-                "HEAD..FETCH_HEAD"), lines::add);
+        List<String> command = List.of(gitBin, "log", "--format=%s", "-n", String.valueOf(MAX_SUBJECTS),
+                "HEAD..FETCH_HEAD");
+        int code = run(root, command, lines::add);
         if (code != 0) {
-            throw new IOException("git log завершился с кодом " + code);
+            throw new IOException(formatFailure(command, code, lines));
         }
         return lines.stream().filter(l -> !l.isBlank()).toList();
     }
 
     private static String out(Path dir, String... cmd) throws IOException {
+        return out(dir, line -> {
+        }, cmd);
+    }
+
+    private static String out(Path dir, Consumer<String> log, String... cmd) throws IOException {
         List<String> lines = new ArrayList<>();
-        int code = run(dir, List.of(cmd), lines::add, Map.of());
+        int code = run(dir, List.of(cmd), line -> {
+            lines.add(line);
+            log.accept(line);
+        }, Map.of());
         if (code != 0) {
-            throw new IOException(String.join(" ", cmd) + ": код " + code);
+            throw new IOException(formatFailure(List.of(cmd), code, lines));
         }
         return String.join("\n", lines).strip();
     }
 
     private static void exec(Path dir, List<String> cmd) throws IOException {
-        int code = run(dir, cmd, line -> {}, Map.of());
+        exec(dir, cmd, line -> {
+        });
+    }
+
+    private static void exec(Path dir, List<String> cmd, Consumer<String> log) throws IOException {
+        List<String> lines = new ArrayList<>();
+        int code = run(dir, cmd, line -> {
+            lines.add(line);
+            log.accept(line);
+        }, Map.of());
         if (code != 0) {
-            throw new IOException(String.join(" ", cmd) + ": код " + code);
+            throw new IOException(formatFailure(cmd, code, lines));
         }
     }
 
@@ -716,7 +865,7 @@ public class UpdateService {
         }
         try (BufferedReader reader = new BufferedReader(
                 new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
-            reader.lines().forEach(log);
+            reader.lines().forEach(line -> log.accept(scrub(line)));
         }
         try {
             return process.waitFor();

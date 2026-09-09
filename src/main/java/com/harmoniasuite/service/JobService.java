@@ -20,9 +20,13 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
 import java.util.function.Consumer;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 @Service
 public class JobService {
+
+    private static final Logger logger = LoggerFactory.getLogger(JobService.class);
 
     private final JobRepository jobs;
     private final ProjectRepository projectRepository;
@@ -124,6 +128,7 @@ public class JobService {
             if ("cancelled".equals(job.getStatus())) {
                 return;
             }
+            logger.error("job {} ({}) failed", job.getId(), job.getAction(), e);
             job.append(e.getMessage() == null ? e.toString() : e.getMessage());
             job.setCode(1);
             job.setStatus("failed");

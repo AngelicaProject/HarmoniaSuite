@@ -49,3 +49,8 @@ harmonia:
 logging:
   level:
     com.harmoniasuite: INFO
+  logback:
+    rollingpolicy:
+      max-file-size: 10MB
+      max-history: 10
+      total-size-cap: 100MB

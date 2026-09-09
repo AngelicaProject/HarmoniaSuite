@@ -14,6 +14,7 @@ application-local.yml
 .env
 data/
 projects/
+plans/
 *.db*
 node_modules/
 **/.hermes-tmp.*
