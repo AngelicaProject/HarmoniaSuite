@@ -45,4 +45,16 @@ class LogServiceTest {
         assertEquals(LogService.MAX_BYTES, output.length());
         assertTrue(output.chars().allMatch(c -> c == 'x'));
     }
+
+    @Test
+    @DisplayName("tail masks the user name in home paths")
+    void masksHomeUserName(@TempDir Path dir) throws Exception {
+        Path file = dir.resolve("harmonia.log");
+        Files.writeString(file, "reading C:\\Users\\testuser\\AppData\\app.db\nok\n");
+
+        String output = new LogService(file).tail(500);
+
+        assertTrue(output.contains("C:\\Users\\***\\AppData\\app.db"));
+        assertFalse(output.contains("testuser"));
+    }
 }

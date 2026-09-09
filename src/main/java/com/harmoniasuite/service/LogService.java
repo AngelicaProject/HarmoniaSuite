@@ -2,6 +2,7 @@ package com.harmoniasuite.service;
 
 import com.harmoniasuite.config.WorkspacePaths;
 import com.harmoniasuite.exception.HarmoniaSuiteNotFoundException;
+import com.harmoniasuite.util.ScrubSupport;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
@@ -41,7 +42,7 @@ public class LogService {
             file.seek(start);
             file.readFully(bytes);
         }
-        return tailText(new String(bytes, StandardCharsets.UTF_8), normalizeTail(requested), start > 0);
+        return ScrubSupport.scrub(tailText(new String(bytes, StandardCharsets.UTF_8), normalizeTail(requested), start > 0));
     }
 
     static int normalizeTail(int requested) {

@@ -5,6 +5,7 @@ import com.harmoniasuite.config.AppVersion;
 import com.harmoniasuite.config.HarmoniaProperties;
 import com.harmoniasuite.config.InstallLayout;
 import com.harmoniasuite.exception.HarmoniaSuiteBadRequestException;
+import com.harmoniasuite.util.ScrubSupport;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
@@ -43,7 +44,6 @@ public class UpdateService {
     private static final String TEMURIN_URL =
             "https://api.adoptium.net/v3/binary/latest/21/ga/windows/x64/jdk/hotspot/normal/eclipse";
     private static final Pattern JAVAC_VERSION = Pattern.compile("javac (\\d+)");
-    private static final Pattern URL_CREDENTIALS = Pattern.compile("(?i)(://)[^\\s/@:]+:[^\\s/@]*@");
     private static final int FAILURE_TAIL_LINES = 20;
     private static final int FAILURE_TAIL_CHARS = 4096;
     private static final int HTTP_BODY_CHARS = 4096;
@@ -110,7 +110,7 @@ public class UpdateService {
     }
 
     static String scrub(String value) {
-        return value == null ? null : URL_CREDENTIALS.matcher(value).replaceAll("$1***@");
+        return ScrubSupport.scrub(value);
     }
 
     static String formatFailure(List<String> command, int code, List<String> lines) {
