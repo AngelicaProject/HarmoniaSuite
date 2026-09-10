@@ -1,6 +1,6 @@
 import {api} from '../api.js';
 export default {
-  props: ['projectId', 'job', 'scope', 'dataRev'],
+  props: ['projectId', 'job', 'scope', 'dataRev', 'entryUpdate'],
   emits: ['build', 'build-download', 'toast', 'toggle-scope', 'clear-scope'],
   data() {
     return {candidates: [], built: {}, manifestBuilt: false, loading: false, error: '', page: 0, pageSize: 50};
@@ -26,6 +26,9 @@ export default {
     dataRev() {
       this.load();
     },
+    entryUpdate(update) {
+      this.applyEntryUpdate(update);
+    },
     job(nv) {
       if (nv && nv.status !== 'running' && (nv.action === 'merge' || nv.action === 'gemini')) this.load();
     }
@@ -34,6 +37,35 @@ export default {
     this.load();
   },
   methods: {
+    isTranslated(entry) {
+      return !!entry && ((String(entry.translation || '').trim() !== '' && entry.status !== 'stale')
+        || entry.status === 'no_translation_required');
+    },
+    applyEntryUpdate(update) {
+      const entry = update && update.entry;
+      if (!entry || !entry.file) return;
+      const stats = update.fileStats;
+      const index = this.candidates.findIndex(file => file.path === entry.file);
+      if (index < 0) {
+        if (stats && stats.translated > 0) {
+          this.candidates.push({path: entry.file, translated: stats.translated, total: stats.total});
+          this.candidates.sort((a, b) => b.translated - a.translated);
+        }
+        return;
+      }
+      const current = this.candidates[index];
+      const delta = Number(this.isTranslated(entry)) - Number(this.isTranslated(update.previous));
+      const next = stats
+        ? {...current, translated: stats.translated, total: stats.total}
+        : {...current, translated: Math.max(0, current.translated + delta)};
+      if (next.translated > 0) {
+        this.candidates.splice(index, 1, next);
+        this.candidates.sort((a, b) => b.translated - a.translated);
+      } else {
+        this.candidates.splice(index, 1);
+      }
+      delete this.built[entry.file];
+    },
     async load() {
       this.page = 0;
       await Promise.all([this.loadCandidates(), this.loadBuilt()]);
