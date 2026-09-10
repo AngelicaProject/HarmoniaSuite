@@ -328,7 +328,6 @@ input[type="checkbox"]:disabled:checked,input[type="checkbox"]:disabled:indeterm
 .status-machine_translated{background:var(--warning-soft);color:var(--warning);border-color:rgba(210,154,82,.35)}
 .status-stale{background:var(--warning-soft);color:var(--warning);border:1px dashed rgba(210,154,82,.5)}
 .status-needs_human_review{background:var(--primary-soft);color:var(--primary);border-color:rgba(95,141,240,.35)}
-.status-proofread{background:rgba(95,141,240,.18);color:var(--primary);border-color:rgba(95,141,240,.4)}
 .status-approved{background:var(--success-soft);color:var(--success);border-color:rgba(76,183,130,.35)}
 .status-dot{width:8px;height:8px;border-radius:99px;display:inline-block;flex-shrink:0}
 .status-dot.on{background:var(--success)}

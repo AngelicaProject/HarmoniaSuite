@@ -150,6 +150,8 @@ class ProjectEntriesTest {
                 0, 0).total());
         assertThrows(IllegalArgumentException.class, () ->
                 ProjectService.normalizeStatuses("untranslated, bogus-status"));
+        assertThrows(IllegalArgumentException.class, () ->
+                ProjectService.normalizeStatuses("proofread"));
     }
 
     @Test

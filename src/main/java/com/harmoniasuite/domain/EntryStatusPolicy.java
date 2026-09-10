@@ -16,7 +16,7 @@ public final class EntryStatusPolicy {
 
     private static final List<String> FILTERABLE = List.of(
             "untranslated", "machine_translated", "no_translation_required", "stale",
-            "needs_human_review", "approved", "proofread");
+            "needs_human_review", "approved");
 
     private EntryStatusPolicy() {
     }
