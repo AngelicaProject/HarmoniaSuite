@@ -1,4 +1,5 @@
 import {highlightTags, renderGamePreview, validateTags, warnTags, distinctTags, distinctAnon, findMissingTags, normalizedTag as normTag, tagKindOf as kindOfTag, tagKindLabel as kindLabel} from '../tags.js';
+import {ENTRY_STATUS, ENTRY_STATUS_DOTS, ENTRY_STATUS_OPTIONS, isNoTranslationRequired, needsWork, statusTone as entryStatusTone} from '../translation-statuses.js';
 import {api} from '../api.js';
 import CsvPreview from './CsvPreview.vue.js';
 export default {
@@ -8,7 +9,7 @@ export default {
   data() {
     let previewH = 240;
     try { previewH = Math.min(640, Math.max(80, Number(localStorage.getItem('hs-ed-preview-h')) || 240)); } catch (e) {}
-    return {tabs: [], activeTab: null, drafts: {}, translation: '', status: 'untranslated', preview: false, jumpError: '', rev: 0, pendingOpen: null, pinned: null, pinData: null, pinLoading: false, pinError: '', previewH, tabMenu: null, statusOpen: false};
+    return {tabs: [], activeTab: null, drafts: {}, translation: '', status: ENTRY_STATUS.UNTRANSLATED, preview: false, jumpError: '', rev: 0, pendingOpen: null, pinned: null, pinData: null, pinLoading: false, pinError: '', previewH, tabMenu: null, statusOpen: false};
   },
   computed: {
     byId() { void this.rev; const m = {}; (this.entries || []).forEach(e => { m[e.id] = e; }); return m; },
@@ -77,18 +78,12 @@ export default {
     fieldDirty() {
       const e = this.current;
       if (!e) return false;
-      return this.translation !== (e.translation || '') || this.status !== (e.status || 'untranslated');
+      return this.translation !== (e.translation || '') || this.status !== (e.status || ENTRY_STATUS.UNTRANSLATED);
     },
     tabKey() { return 'hs-tabs:' + (this.storeKey || 'default'); },
+    defaultStatus() { return ENTRY_STATUS.UNTRANSLATED; },
     statusOptions() {
-      return [
-        {value: 'untranslated', label: 'Не переведено'},
-        {value: 'no_translation_required', label: 'Не требует перевода'},
-        {value: 'machine_translated', label: 'Машинный перевод'},
-        {value: 'stale', label: 'Устарело'},
-        {value: 'needs_human_review', label: 'На проверке'},
-        {value: 'approved', label: 'Одобрено'}
-      ];
+      return ENTRY_STATUS_OPTIONS;
     }
   },
   watch: {
@@ -113,7 +108,8 @@ export default {
   methods: {
     esc(s) { return String(s).replace(/[&<>]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;'}[c])); },
     statusLabel(v) { const o = this.statusOptions.find(o => o.value === v); return o ? o.label : v; },
-    statusDot(v) { return {approved: 'ok', needs_human_review: 'info', machine_translated: 'warn', stale: 'bad'}[v] || 'mut'; },
+    statusDot(v) { return ENTRY_STATUS_DOTS[v] || 'mut'; },
+    statusTone(v) { return entryStatusTone(v); },
     closeStatusOutside(e) {
       if (this.statusOpen && e.target && e.target.closest && !e.target.closest('.st-wrap')) this.statusOpen = false;
     },
@@ -141,7 +137,7 @@ export default {
       for (const id of Object.keys(this.drafts)) {
         const d = this.drafts[id], e = this.byId[id];
         if (!d || !e || (e.file || '') !== t.file) continue;
-        if (d.translation !== (e.translation || '') || d.status !== (e.status || 'untranslated')) return true;
+        if (d.translation !== (e.translation || '') || d.status !== (e.status || ENTRY_STATUS.UNTRANSLATED)) return true;
       }
       return false;
     },
@@ -279,14 +275,14 @@ export default {
     },
     pickPhrase(file) {
       const list = this.fileEntries.filter(e => (e.file || '') === (file || ''));
-      const un = list.find(e => !(e.translation && e.translation.trim()) || e.status === 'stale');
+      const un = list.find(e => needsWork(e));
       return ((un || list[0] || {}).id || null);
     },
     loadPhrase(id) {
       const e = id ? this.byId[id] : null;
       if (!e) {
         this.translation = '';
-        this.status = 'untranslated';
+        this.status = ENTRY_STATUS.UNTRANSLATED;
         return;
       }
       let d = this.drafts[id];
@@ -296,7 +292,7 @@ export default {
         d = null;
       }
       this.translation = d ? d.translation : (e.translation || '');
-      this.status = d ? d.status : (e.status || 'untranslated');
+      this.status = d ? d.status : (e.status || ENTRY_STATUS.UNTRANSLATED);
     },
     tabMouse(t, e) {
       if (e && e.button === 1) {
@@ -320,7 +316,7 @@ export default {
     noteChanged() { this.rev++; },
     jumpToPos(pos) { this.preview = false; this.$nextTick(() => { const ta = this.$refs.ta; if (!ta) return; ta.focus(); try { ta.setSelectionRange(pos, pos); } catch (e) {} }); },
     onPreviewClick(e) { const el = e.target.closest ? e.target.closest('[data-err]') : null; if (el && el.dataset && el.dataset.err !== undefined) this.jumpToPos(Number(el.dataset.err)); },
-    needsWork(e) { return e.status !== 'no_translation_required' && (!(e.translation && e.translation.trim()) || e.status === 'stale'); },
+    needsWork(e) { return needsWork(e); },
     select(e) { this.openTab(e.id); },
     focusEntry(id) { this.openTab(id); },
     openConflictTab(c) {
@@ -380,8 +376,11 @@ export default {
       if (!this.current) return;
       if (this.tagIssues.length) return;
       if (this.translation !== (this.current.translation || '')
-        || this.status !== (this.current.status || 'untranslated')) {
-        if ((this.translation || '').trim() && (this.status === 'untranslated' || this.status === 'no_translation_required')) this.status = 'needs_human_review';
+        || this.status !== (this.current.status || ENTRY_STATUS.UNTRANSLATED)) {
+        if ((this.translation || '').trim()
+          && (this.status === ENTRY_STATUS.UNTRANSLATED || isNoTranslationRequired(this.status))) {
+          this.status = ENTRY_STATUS.HUMAN_REVIEWED;
+        }
       } else if (next) {
         this.nextUntranslated();
         return;
@@ -490,7 +489,7 @@ export default {
       </div>
       </div>
       <div class="ed-foot">
-       <span :class="'ed-status-pill status-'+(current?current.status:'untranslated')">{{current?current.status:'—'}}</span>
+       <span :class="'ed-status-pill status-'+statusTone(current?current.status:defaultStatus)">{{current?current.status:'—'}}</span>
         <div class="st-wrap">
          <button type="button" class="st-btn" @click="statusOpen=!statusOpen" @keydown.esc="statusOpen=false" :title="'Статус: '+statusLabel(status)"><i class="sum-dot" :class="statusDot(status)"></i><span>{{statusLabel(status)}}</span><svg class="icon" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></button>
          <div v-if="statusOpen" class="dd-menu up st-menu">

@@ -109,7 +109,7 @@ class ProjectStoreTest {
         projects.upsertFiles(projectId, List.of("pack-two.csv"), now);
         Map<String, String> fileIds = projects.fileIdMap(projectId);
         entries.batchUpsert(projectId, fileIds, new ArrayList<>(List.of(
-                entry("pack-one.csv", "10", 1, "Hello", "Привет", "needs_human_review"),
+                entry("pack-one.csv", "10", 1, "Hello", "Привет", "human_reviewed"),
                 entry("pack-one.csv", "11", 1, "Bye", "", "untranslated"),
                 entry("pack-two.csv", "10", 1, "Morning", "", "untranslated"))), now);
         Map<String, Long> byFile = entries.pendingByFile(projectId);
@@ -124,7 +124,7 @@ class ProjectStoreTest {
         String now = Instant.now().toString();
         Map<String, String> fileIds = projects.fileIdMap(projectId);
         entries.batchUpsert(projectId, fileIds, new ArrayList<>(List.of(
-                entry("pack-one.csv", "10", 1, "Hello", "Привет", "needs_human_review"),
+                entry("pack-one.csv", "10", 1, "Hello", "Привет", "human_reviewed"),
                 entry("pack-one.csv", "11", 1, "Bye", "", "untranslated"))), now);
         assertEquals(2, entries.count(projectId, null));
         assertEquals(1, entries.count(projectId,
@@ -144,7 +144,7 @@ class ProjectStoreTest {
         assertEquals(1, entries.count(projectId,
                 new EntryRepository.EntryFilter(null, List.of("untranslated"), null, null, false)));
         assertEquals(2, entries.count(projectId,
-                new EntryRepository.EntryFilter(null, List.of("untranslated", "needs_human_review"), null, null, false)));
+                new EntryRepository.EntryFilter(null, List.of("untranslated", "human_reviewed"), null, null, false)));
         TranslationEntry stored = entries.findByCell(projectId, EntryIds.ofCell("pack-one.csv", "10", 1));
         assertNotNull(stored.getUuid());
         assertNotNull(stored.getCreatedAt());
@@ -159,11 +159,11 @@ class ProjectStoreTest {
         String first = Instant.now().toString();
         Map<String, String> fileIds = projects.fileIdMap(projectId);
         entries.batchUpsert(projectId, fileIds,
-                List.of(entry("pack-one.csv", "10", 1, "Hello", "Перевод", "needs_human_review")), first);
+                List.of(entry("pack-one.csv", "10", 1, "Hello", "Перевод", "human_reviewed")), first);
         String id = entries.findByCell(projectId, EntryIds.ofCell("pack-one.csv", "10", 1)).getUuid();
         String second = Instant.now().toString();
         entries.batchUpsert(projectId, fileIds,
-                List.of(entry("pack-one.csv", "10", 1, "Hello", "Перевод", "needs_human_review")), second);
+                List.of(entry("pack-one.csv", "10", 1, "Hello", "Перевод", "human_reviewed")), second);
         entries.deleteStale(projectId, second);
         assertEquals(id, entries.findByCell(projectId, EntryIds.ofCell("pack-one.csv", "10", 1)).getUuid());
     }
@@ -174,13 +174,13 @@ class ProjectStoreTest {
         String now = Instant.now().toString();
         Map<String, String> fileIds = projects.fileIdMap(projectId);
         entries.batchUpsert(projectId, fileIds,
-                List.of(entry("pack-one.csv", "10", 1, "Hello", "Привет", "needs_human_review")), now);
+                List.of(entry("pack-one.csv", "10", 1, "Hello", "Привет", "human_reviewed")), now);
         var all = projects.summaries();
         assertEquals(1, all.size());
         var summary = projects.summarize(projectId);
         assertEquals(1L, summary.entries());
         assertEquals(1L, summary.translated());
-        assertEquals(Map.of("needs_human_review", 1L), summary.byStatus());
+        assertEquals(Map.of("human_reviewed", 1L), summary.byStatus());
         assertEquals(summary, all.get(projectId.toString()));
     }
 
@@ -204,9 +204,9 @@ class ProjectStoreTest {
                 List.of(entry("pack-one.csv", "10", 1, "Hello", "", "untranslated")), now);
         String cellId = EntryIds.ofCell("pack-one.csv", "10", 1);
         String id = entries.findByCell(projectId, cellId).getUuid();
-        assertEquals(1, entries.updateTranslation(id, "Привет", "needs_human_review", now));
+        assertEquals(1, entries.updateTranslation(id, "Привет", "human_reviewed", now));
         assertEquals("Привет", entries.findById(UUID.fromString(id)).getTranslation());
-        entries.insertHistory(projectId, id, "", "untranslated", "Привет", "needs_human_review", "editor", now);
+        entries.insertHistory(projectId, id, "", "untranslated", "Привет", "human_reviewed", "editor", now);
         assertEquals(1L, projects.summarize(projectId).translated());
     }
 
@@ -216,7 +216,7 @@ class ProjectStoreTest {
         String now = Instant.now().toString();
         Map<String, String> fileIds = projects.fileIdMap(projectId);
         entries.batchUpsert(projectId, fileIds, new ArrayList<>(List.of(
-                entry("pack-one.csv", "10", 1, "A", "ok", "needs_human_review"),
+                entry("pack-one.csv", "10", 1, "A", "ok", "human_reviewed"),
                 entry("pack-one.csv", "11", 1, "B", "", "untranslated"),
                 entry("pack-one.csv", "12", 1, "C", "old", "stale"),
                 entry("pack-one.csv", "13", 1, "D", "", "no_translation_required"))), now);
@@ -385,7 +385,7 @@ class ProjectStoreTest {
         String now = Instant.now().toString();
         Map<String, String> fileIds = projects.fileIdMap(projectId);
         entries.batchUpsert(projectId, fileIds, new ArrayList<>(List.of(
-                entry("pack-one.csv", "10", 1, "Hello", "Привет", "needs_human_review"),
+                entry("pack-one.csv", "10", 1, "Hello", "Привет", "human_reviewed"),
                 entry("pack-one.csv", "11", 1, "Bye", "", "untranslated"))), now);
         var rows = entries.progressByFile(projectId);
         assertEquals(1, rows.size());

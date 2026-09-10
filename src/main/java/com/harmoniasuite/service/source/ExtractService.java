@@ -1,6 +1,7 @@
 package com.harmoniasuite.service.source;
 
 import com.harmoniasuite.domain.EntryIds;
+import com.harmoniasuite.domain.EntryStatusPolicy;
 import com.harmoniasuite.domain.ProjectMeta;
 import com.harmoniasuite.domain.TranslationDocument;
 import com.harmoniasuite.domain.TranslationEntry;
@@ -189,7 +190,7 @@ public class ExtractService {
                             }
                         } else {
                             cell.setTranslation("");
-                            cell.setStatus("untranslated");
+                            cell.setStatus(EntryStatusPolicy.UNTRANSLATED);
                             created++;
                         }
                         cells.put(cell.getId(), cell);
@@ -320,7 +321,7 @@ public class ExtractService {
             if (anchor != null
                     && columnName.equals(anchor.columnName() == null ? "" : anchor.columnName())) {
                 if (!source.equals(anchor.source())) {
-                    return new Carry(anchor.translation(), "stale", true);
+                    return new Carry(anchor.translation(), EntryStatusPolicy.STALE, true);
                 }
                 return new Carry(anchor.translation(), effectiveStatus(anchor.status()), false);
             }
@@ -335,7 +336,8 @@ public class ExtractService {
         }
 
         private static String effectiveStatus(String status) {
-            return status == null || status.equals("untranslated") ? "untranslated" : status;
+            return status == null || status.equals(EntryStatusPolicy.UNTRANSLATED)
+                    ? EntryStatusPolicy.UNTRANSLATED : status;
         }
 
         private static String key(String file, String source) {

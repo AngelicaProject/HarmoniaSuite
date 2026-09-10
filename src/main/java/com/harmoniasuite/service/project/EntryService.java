@@ -203,9 +203,7 @@ public class EntryService {
     }
 
     private static boolean needsWork(TranslationEntry entry) {
-        return !"no_translation_required".equals(entry.getStatus())
-                && ((entry.getTranslation() == null || entry.getTranslation().trim().isEmpty())
-                || "stale".equals(entry.getStatus()));
+        return EntryStatusPolicy.needsWork(entry.getStatus(), entry.getTranslation());
     }
 
     private static String orEmpty(String value) {

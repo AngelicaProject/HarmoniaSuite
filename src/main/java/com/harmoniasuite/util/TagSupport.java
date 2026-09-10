@@ -287,7 +287,7 @@ public final class TagSupport {
     /**
      * Hard errors that break the game client and block saving:
      * malformed or unclosed tags in the translation.
-     * Empty translation means "untranslated" and is always accepted.
+     * Empty translation means that no translation was provided and is always accepted.
      */
     public static List<String> validate(String translation) {
         if (translation == null || translation.isBlank()) {

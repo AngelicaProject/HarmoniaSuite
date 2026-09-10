@@ -1,5 +1,6 @@
 import {computed, createApp, nextTick, onMounted, ref, shallowRef, watch} from 'vue';
 import {api} from './api.js';
+import {ENTRY_STATUS, isNoTranslationRequired, isTranslated as isEntryTranslated, needsWork as entryNeedsWork} from './translation-statuses.js';
 import Picker from './components/Picker.vue.js';
 import Editor from './components/Editor.vue.js';
 import Settings from './components/Settings.vue.js';
@@ -825,15 +826,13 @@ const App = {
         }
 
         function isCountedAsTranslated(entry) {
-            if (!entry) return false;
-            return (String(entry.translation || '').trim() !== '' && entry.status !== 'stale')
-                || entry.status === 'no_translation_required';
+            return isEntryTranslated(entry);
         }
 
         function isPendingForTranslation(entry) {
             return !!entry
                 && String(entry.translation || '').trim() === ''
-                && entry.status !== 'no_translation_required';
+                && !isNoTranslationRequired(entry.status);
         }
 
         function localEntry(id) {
@@ -1036,9 +1035,10 @@ const App = {
             return i < 0 ? s : s.slice(i + 1);
         }
         function fileUn(f) { return (f.total || 0) - (f.translated || 0); }
-        function needsWork(e) { return e.status !== 'no_translation_required' && (!(e.translation && e.translation.trim()) || e.status === 'stale'); }
+        function needsWork(e) { return entryNeedsWork(e); }
         const projTotal = computed(() => summary.value?.entries ?? 0);
         const projDone = computed(() => summary.value?.translated ?? 0);
+        const staleStatus = ENTRY_STATUS.STALE;
         const expandedFiles = ref({});
         function expanded(f) { return !!expandedFiles.value[f]; }
         function toggleExpand(f) {
@@ -1757,6 +1757,7 @@ const App = {
             fileUn,
             projTotal,
             projDone,
+            staleStatus,
             progPct,
             dirPct,
             fmtNum,
@@ -1904,7 +1905,7 @@ const App = {
         <h3 v-else style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis" :title="focusFileFilter">{{focusFileFilter||'Фразы'}}</h3>
         <span class="grow"></span>
               </div>
-      <div v-if="leftMode==='files'" class="proj-stats"><div class="proj-num">{{fmtNum(projDone)}} <span>/ {{fmtNum(projTotal)}}</span><b class="proj-pct">{{pct1(projDone,projTotal)}}</b></div><div class="sum-bar"><i :style="'width:'+(projTotal?Math.max(projDone/projTotal*100,projDone?1.5:0):0)+'%'"></i></div><div class="proj-sub">Осталось {{fmtNum(projTotal-projDone)}} · файлов {{fmtNum(treeFileCount)}}<span v-if="summary&&summary.by_status&&summary.by_status.stale"> · устар. {{fmtNum(summary.by_status.stale)}}</span></div></div>
+      <div v-if="leftMode==='files'" class="proj-stats"><div class="proj-num">{{fmtNum(projDone)}} <span>/ {{fmtNum(projTotal)}}</span><b class="proj-pct">{{pct1(projDone,projTotal)}}</b></div><div class="sum-bar"><i :style="'width:'+(projTotal?Math.max(projDone/projTotal*100,projDone?1.5:0):0)+'%'"></i></div><div class="proj-sub">Осталось {{fmtNum(projTotal-projDone)}} · файлов {{fmtNum(treeFileCount)}}<span v-if="summary&&summary.by_status&&summary.by_status[staleStatus]"> · устар. {{fmtNum(summary.by_status[staleStatus])}}</span></div></div>
       <div v-if="leftMode==='files'" class="ft-search"><svg class="icon ic-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg><input class="grow" :value="fileSearchQ" @input="fileSearchQ=$event.target.value" placeholder="Поиск файлов…"><Dropdown :modelValue="fileSort" @update:modelValue="setSort" title="Сортировка" width="148px" :options="[{value:'need',label:'Недопереведённые'},{value:'name',label:'По имени'},{value:'progress',label:'По прогрессу'}]" /><button class="ghost icon-btn sm" @click="toggleFollow" :style="followFiles?'':'opacity:.4'" :title="followFiles?'Не следить за редактором':'Следить за редактором: список сам находит файл из редактора'"><svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg></button></div>
       <div v-else-if="focusFileFilter" class="ft-search"><svg class="icon ic-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg><input class="grow" :value="phraseSearchQ" @input="setPhraseSearch($event.target.value)" placeholder="Поиск по файлу: текст, строка, колонка, статус…"><button v-if="phraseSearchQ" class="ghost icon-btn sm" @click="setPhraseSearch('')" title="Очистить"><svg class="icon" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
       <div class="pane-body">

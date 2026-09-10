@@ -1,6 +1,7 @@
 package com.harmoniasuite.service.project;
 
 import com.harmoniasuite.config.WorkspacePaths;
+import com.harmoniasuite.domain.EntryStatusPolicy;
 import com.harmoniasuite.domain.TranslationEntry;
 import com.harmoniasuite.dto.DeltaConflictDto;
 import com.harmoniasuite.dto.DeltaExportDto;
@@ -24,7 +25,6 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
@@ -38,12 +38,6 @@ public class DeltaService {
     public static final int DELTA_MAX_LIMIT = 20000;
     // Защита от абсурдных пейлоадов; импорт идёт одной транзакцией батчами — 100k рядовые.
     public static final int DELTA_MAX_ROWS = 100000;
-
-    private static final List<String> WRITE_STATUSES =
-            List.of("untranslated", "machine_translated", "no_translation_required", "needs_human_review", "approved");
-    private static final Map<String, Integer> STATUS_RANK = Map.of(
-            "untranslated", 0, "machine_translated", 1, "no_translation_required", 2,
-            "needs_human_review", 3, "approved", 4);
 
     private final WorkspacePaths workspace;
     private final ProjectRepository projectRepository;
@@ -113,12 +107,7 @@ public class DeltaService {
         if (author.length() > 64) {
             throw new HarmoniaSuiteBadRequestException("Delta author is too long");
         }
-        String maxStatus = request.maxStatus() == null || request.maxStatus().isBlank()
-                ? "needs_human_review"
-                : request.maxStatus().trim().toLowerCase(Locale.ROOT);
-        if (!WRITE_STATUSES.contains(maxStatus)) {
-            throw new HarmoniaSuiteBadRequestException("Unknown status: " + request.maxStatus());
-        }
+        String maxStatus = EntryStatusPolicy.forDeltaCap(request.maxStatus());
         String expectedFingerprint = request.sourcesFp() == null ? "" : request.sourcesFp();
         String actualFingerprint = projectRepository.sourcesFingerprint(projectId);
         if (!expectedFingerprint.equals(actualFingerprint)) {
@@ -153,12 +142,12 @@ public class DeltaService {
                 skipped.add(new DeltaSkippedDto(item.cellId(), file, "unknown_cell", null));
                 continue;
             }
-            String status = item.status() == null ? "" : item.status().trim().toLowerCase(Locale.ROOT);
-            if (!status.equals("stale") && !WRITE_STATUSES.contains(status)) {
+            String status = EntryStatusPolicy.normalize(item.status());
+            if (!EntryStatusPolicy.isKnown(status)) {
                 skipped.add(new DeltaSkippedDto(item.cellId(), file, "bad_status", item.status()));
                 continue;
             }
-            if (!status.equals("stale") && STATUS_RANK.get(status) > STATUS_RANK.get(maxStatus)) {
+            if (!EntryStatusPolicy.isWithinDeltaCap(status, maxStatus)) {
                 skipped.add(new DeltaSkippedDto(item.cellId(), file, "status_above_cap",
                         status + " > " + maxStatus));
                 continue;
@@ -170,7 +159,7 @@ public class DeltaService {
                 continue;
             }
             String translation = orEmpty(item.translation());
-            // Теги не блокируют влитие: machine_translated часто их ломает, это ок —
+            // Теги не блокируют влитие: машинный перевод часто их ломает, это ок —
             // расхождения видны в warnings, люди чинят вручную.
             if (orEmpty(current.getTranslation()).equals(translation)
                     && orEmpty(current.getStatus()).equals(status)) {
@@ -178,8 +167,7 @@ public class DeltaService {
                 continue;
             }
             String ownStatus = orEmpty(current.getStatus());
-            if (ownStatus.equals("needs_human_review") || ownStatus.equals("approved")
-                    || ownStatus.equals("no_translation_required")) {
+            if (EntryStatusPolicy.isConflict(ownStatus)) {
                 conflicts.add(new DeltaConflictDto(item.cellId(), file,
                         new DeltaSideDto(orEmpty(current.getTranslation()), ownStatus),
                         new DeltaSideDto(translation, status)));

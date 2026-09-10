@@ -10,7 +10,7 @@ public class TranslationEntry {
     private String id;
     private String source;
     private String translation = "";
-    private String status = "untranslated";
+    private String status = EntryStatusPolicy.UNTRANSLATED;
     private List<String> protectedTokens = new ArrayList<>();
     private String file = "";
     private String rowKey = "";
