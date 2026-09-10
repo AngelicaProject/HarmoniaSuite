@@ -26,9 +26,9 @@ class UpdateRelaunchTest {
     @Test
     @DisplayName("classpath mode: target/classes means dev, else jar")
     void detectsLaunchMode() {
-        assertEquals("dev", UpdateRelaunch.launchMode("target/classes;C:/lib/app.jar"));
-        assertEquals("dev", UpdateRelaunch.launchMode("C:\\repo\\target\\classes;C:\\lib\\app.jar"));
-        assertEquals("jar", UpdateRelaunch.launchMode("C:/dist/harmonia-suite.jar"));
+        assertEquals("dev", UpdateRelaunch.detectLaunchMode("target/classes;C:/lib/app.jar"));
+        assertEquals("dev", UpdateRelaunch.detectLaunchMode("C:\\repo\\target\\classes;C:\\lib\\app.jar"));
+        assertEquals("jar", UpdateRelaunch.detectLaunchMode("C:/dist/harmonia-suite.jar"));
     }
 
     @Test

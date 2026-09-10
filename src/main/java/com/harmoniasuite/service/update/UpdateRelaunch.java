@@ -33,7 +33,7 @@ final class UpdateRelaunch {
         return System.getProperty("os.name", "").toLowerCase().contains("win");
     }
 
-    static String launchMode(String classPath) {
+    static String detectLaunchMode(String classPath) {
         String normalized = classPath == null ? "" : classPath.replace('\\', '/');
         return normalized.contains("target/classes") ? "dev" : "jar";
     }
@@ -52,7 +52,7 @@ final class UpdateRelaunch {
         if (!reported.isEmpty()) {
             return reported;
         }
-        if (!"jar".equals(launchMode(classPath)) || classPath.isBlank()) {
+        if (!"jar".equals(detectLaunchMode(classPath)) || classPath.isBlank()) {
             return reported;
         }
         return List.of("-jar", classPath);
@@ -160,7 +160,7 @@ final class UpdateRelaunch {
         String marker = " wait " + pid;
         long deadline = System.nanoTime() + timeout.toNanos();
         while (System.nanoTime() < deadline) {
-            if (started(logFile, marker)) {
+            if (hasStarted(logFile, marker)) {
                 return;
             }
             try {
@@ -173,7 +173,7 @@ final class UpdateRelaunch {
         throw new IOException("скрипт перезапуска не запустился: " + logFile);
     }
 
-    private static boolean started(Path logFile, String marker) {
+    private static boolean hasStarted(Path logFile, String marker) {
         try {
             byte[] content = Files.readAllBytes(logFile);
             return new String(content, StandardCharsets.ISO_8859_1).contains(marker);
@@ -203,14 +203,14 @@ final class UpdateRelaunch {
             entries.filter(Files::isRegularFile)
                     .filter(path -> path.getFileName().toString()
                             .startsWith(RelaunchScripts.SCRIPT_PREFIX))
-                    .filter(path -> lastModified(path) < cutoff)
+                    .filter(path -> lastModifiedMillis(path) < cutoff)
                     .forEach(UpdateRelaunch::deleteQuietly);
         } catch (IOException e) {
             logger.debug("Не удалось удалить старые скрипты обновления", e);
         }
     }
 
-    private static long lastModified(Path path) {
+    private static long lastModifiedMillis(Path path) {
         try {
             return Files.getLastModifiedTime(path).toMillis();
         } catch (IOException e) {

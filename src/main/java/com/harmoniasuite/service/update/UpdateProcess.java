@@ -47,7 +47,7 @@ public final class UpdateProcess {
                 || name.equals("MAVEN_ARGS"));
     }
 
-    static Result runProcess(Path dir, List<String> command, Consumer<String> log, Map<String, String> env)
+    static ProcessResult runProcess(Path dir, List<String> command, Consumer<String> log, Map<String, String> env)
             throws IOException {
         ProcessBuilder builder = new ProcessBuilder(command)
                 .directory(dir.toFile())
@@ -73,7 +73,7 @@ public final class UpdateProcess {
                     log.accept(safe);
                 });
             }
-            return new Result(process.waitFor(), lines);
+            return new ProcessResult(process.waitFor(), lines);
         } catch (InterruptedException e) {
             process.destroyForcibly();
             Thread.currentThread().interrupt();
@@ -88,17 +88,22 @@ public final class UpdateProcess {
     }
 
     static String captureOutput(Path dir, Consumer<String> log, String... command) throws IOException {
-        Result result = runProcess(dir, List.of(command), log, Map.of());
-        if (result.code() != 0) {
-            throw new IOException(formatFailure(List.of(command), result.code(), result.output()));
+        ProcessResult result = runProcess(dir, List.of(command), log, Map.of());
+        if (result.exitCode() != 0) {
+            throw new IOException(formatFailure(List.of(command), result.exitCode(), result.output()));
         }
         return String.join("\n", result.output()).strip();
     }
 
-    static void requireSuccess(Path dir, List<String> command, Consumer<String> log) throws IOException {
-        Result result = runProcess(dir, command, log, Map.of());
-        if (result.code() != 0) {
-            throw new IOException(formatFailure(command, result.code(), result.output()));
+    static String captureOutput(Path dir, String... command) throws IOException {
+        return captureOutput(dir, line -> {
+        }, command);
+    }
+
+    static void runOrThrow(Path dir, List<String> command, Consumer<String> log) throws IOException {
+        ProcessResult result = runProcess(dir, command, log, Map.of());
+        if (result.exitCode() != 0) {
+            throw new IOException(formatFailure(command, result.exitCode(), result.output()));
         }
     }
 
@@ -106,9 +111,15 @@ public final class UpdateProcess {
         return ScrubSupport.scrub(value);
     }
 
+    /** Error text for logs and failure details: the message, or the throwable's own description. */
+    static String diagnosticDetail(Throwable error) {
+        String message = error.getMessage();
+        return message == null || message.isBlank() ? error.toString() : scrub(message);
+    }
+
     static String formatFailure(List<String> command, int code, List<String> lines) {
-        String cmd = command == null ? "" : String.join(" ", command);
-        return formatFailure(cmd, code, lines);
+        String joined = command == null ? "" : String.join(" ", command);
+        return formatFailure(joined, code, lines);
     }
 
     static String formatFailure(String command, int code, List<String> lines) {
@@ -137,6 +148,6 @@ public final class UpdateProcess {
         return prefix + ": " + tail;
     }
 
-    public record Result(int code, List<String> output) {
+    public record ProcessResult(int exitCode, List<String> output) {
     }
 }

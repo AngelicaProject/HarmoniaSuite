@@ -25,7 +25,7 @@ public class VersionController {
         if (!built.isEmpty()) {
             map.put("buildTime", built);
         }
-        String commit = UpdateService.resolveCommit(properties.getApp().getCommit());
+        String commit = UpdateService.resolveCommitSha(properties.getApp().getCommit());
         if (!commit.isEmpty()) {
             map.put("commit", commit);
         }
