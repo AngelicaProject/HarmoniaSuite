@@ -40,10 +40,10 @@ public class DeltaService {
     public static final int DELTA_MAX_ROWS = 100000;
 
     private static final List<String> WRITE_STATUSES =
-            List.of("untranslated", "machine_translated", "no_translation_required", "needs_human_review", "approved");
+            List.of("untranslated", "machine_translated", "no_translation_required", "human_reviewed", "approved");
     private static final Map<String, Integer> STATUS_RANK = Map.of(
             "untranslated", 0, "machine_translated", 1, "no_translation_required", 2,
-            "needs_human_review", 3, "approved", 4);
+            "human_reviewed", 3, "approved", 4);
 
     private final WorkspacePaths workspace;
     private final ProjectRepository projectRepository;
@@ -114,7 +114,7 @@ public class DeltaService {
             throw new HarmoniaSuiteBadRequestException("Delta author is too long");
         }
         String maxStatus = request.maxStatus() == null || request.maxStatus().isBlank()
-                ? "needs_human_review"
+                ? "human_reviewed"
                 : request.maxStatus().trim().toLowerCase(Locale.ROOT);
         if (!WRITE_STATUSES.contains(maxStatus)) {
             throw new HarmoniaSuiteBadRequestException("Unknown status: " + request.maxStatus());
@@ -178,7 +178,7 @@ public class DeltaService {
                 continue;
             }
             String ownStatus = orEmpty(current.getStatus());
-            if (ownStatus.equals("needs_human_review") || ownStatus.equals("approved")
+            if (ownStatus.equals("human_reviewed") || ownStatus.equals("approved")
                     || ownStatus.equals("no_translation_required")) {
                 conflicts.add(new DeltaConflictDto(item.cellId(), file,
                         new DeltaSideDto(orEmpty(current.getTranslation()), ownStatus),

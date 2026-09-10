@@ -24,7 +24,7 @@ export default {
       const by = this.summary?.by_status || {};
       const order = [
         ['approved', 'Одобрено', 'ok'],
-        ['needs_human_review', 'На проверке', 'info'],
+        ['human_reviewed', 'Проверено человеком', 'info'],
         ['machine_translated', 'Машинный перевод', 'warn'],
         ['no_translation_required', 'Не требует перевода', 'mut'],
         ['untranslated', 'Не переведено', 'mut'],
