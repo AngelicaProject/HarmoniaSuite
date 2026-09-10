@@ -1,4 +1,5 @@
 import {api} from '../api.js';
+import {isTranslated as isEntryTranslated} from '../translation-statuses.js';
 export default {
   props: ['projectId', 'job', 'scope', 'dataRev', 'entryUpdate'],
   emits: ['build', 'build-download', 'toast', 'toggle-scope', 'clear-scope'],
@@ -38,8 +39,7 @@ export default {
   },
   methods: {
     isTranslated(entry) {
-      return !!entry && ((String(entry.translation || '').trim() !== '' && entry.status !== 'stale')
-        || entry.status === 'no_translation_required');
+      return isEntryTranslated(entry);
     },
     applyEntryUpdate(update) {
       const entry = update && update.entry;

@@ -2,6 +2,7 @@ package com.harmoniasuite.repository;
 
 import com.harmoniasuite.domain.EntryIds;
 import com.harmoniasuite.domain.EntryQuery;
+import com.harmoniasuite.domain.EntryStatusPolicy;
 import com.harmoniasuite.domain.TranslationEntry;
 import com.harmoniasuite.exception.HarmoniaSuiteBadRequestException;
 import java.util.ArrayList;
@@ -40,7 +41,7 @@ public class EntryRepository {
     private static final String COUNT_ROW_GROUPS = "SELECT COUNT(DISTINCT row_index) FROM entries";
 
     private static final String NEEDS_WORK_PREDICATE =
-            "status <> 'no_translation_required' AND (TRIM(translation) = '' OR status = 'stale')";
+            "status <> ? AND (TRIM(translation) = '' OR status = ?)";
 
     private static final String SELECT_TRANSLATED_BY_FILE = SELECT_BASE
             + " WHERE project_id = ? AND file_id = ? AND TRIM(translation) <> ''"
@@ -55,14 +56,14 @@ public class EntryRepository {
             FROM entries
             WHERE project_id = ?
             AND TRIM(translation) <> ''
-            AND status <> 'stale'""";
+            AND status <> ?""";
 
     private static final String SELECT_PENDING_BY_FILE = """
             SELECT file_path, COUNT(*) AS total
             FROM entries
             WHERE project_id = ?
             AND TRIM(translation) = ''
-            AND status <> 'no_translation_required'
+            AND status <> ?
             GROUP BY file_path
             ORDER BY file_path""";
 
@@ -95,7 +96,7 @@ public class EntryRepository {
 
     private static final String SELECT_PROGRESS = """
             SELECT file_path AS file, COUNT(*) AS total,
-                   SUM(CASE WHEN TRIM(translation) <> '' AND status <> 'stale'
+                   SUM(CASE WHEN TRIM(translation) <> '' AND status <> ?
                        THEN 1 ELSE 0 END) AS done
             FROM entries WHERE project_id = ? GROUP BY file_path ORDER BY file_path""";
 
@@ -171,7 +172,7 @@ public class EntryRepository {
         }
         if (filter.onlyUntranslated()) {
             builder.and("TRIM(translation) = ''");
-            builder.and("status <> 'no_translation_required'");
+            builder.and("status <> ?", EntryStatusPolicy.NO_TRANSLATION_REQUIRED);
         }
         if (filter.query() != null && !filter.query().isBlank()) {
             String q = filter.query().trim().toLowerCase(Locale.ROOT);
@@ -254,7 +255,8 @@ public class EntryRepository {
             int afterCol, String query) {
         EntryQuery filter = new EntryQuery(null, List.of(), file, query, false);
         SqlBuilder builder = whereClause(projectId, filter)
-                .and(NEEDS_WORK_PREDICATE)
+                .and(NEEDS_WORK_PREDICATE,
+                        EntryStatusPolicy.NO_TRANSLATION_REQUIRED, EntryStatusPolicy.STALE)
                 .and("(row_index > ? OR (row_index = ? AND column_index > ?))",
                         afterRow, afterRow, afterCol)
                 .orderBy("row_index, column_index")
@@ -310,7 +312,7 @@ public class EntryRepository {
 
     public List<String> translatedFilePaths(UUID projectId) {
         return jdbc.query(SELECT_TRANSLATED_FILE_PATHS,
-                (rs, i) -> rs.getString("file"), projectId);
+                (rs, i) -> rs.getString("file"), projectId, EntryStatusPolicy.STALE);
     }
 
     private static final String DELTA_ORDER = "updated_at, cell_id";
@@ -318,7 +320,7 @@ public class EntryRepository {
     public List<TranslationEntry> deltaPage(UUID projectId, String sinceUpdatedAt, String sinceCellId,
             List<String> files, int limit) {
         SqlBuilder builder = SqlBuilder.where("project_id = ?", projectId);
-        builder.and("(TRIM(translation) <> '' OR status <> 'untranslated')");
+        builder.and("(TRIM(translation) <> '' OR status <> ?)", EntryStatusPolicy.UNTRANSLATED);
         if (sinceUpdatedAt != null && !sinceUpdatedAt.isBlank()) {
             builder.and("(updated_at > ? OR (updated_at = ? AND cell_id > ?))",
                     sinceUpdatedAt, sinceUpdatedAt, sinceCellId == null ? "" : sinceCellId);
@@ -344,7 +346,7 @@ public class EntryRepository {
 
     public List<TranslationEntry> pending(UUID projectId, List<String> files) {
         SqlBuilder builder = whereClause(projectId, null).and("TRIM(translation) = ''")
-                .and("status <> 'no_translation_required'");
+                .and("status <> ?", EntryStatusPolicy.NO_TRANSLATION_REQUIRED);
         if (files != null && !files.isEmpty()) {
             builder.andIn("file_path", files.stream().map(f -> f.replace('\\', '/')).toList());
         }
@@ -355,7 +357,7 @@ public class EntryRepository {
     public Map<String, Long> pendingByFile(UUID projectId) {
         return jdbc.query(
                 SELECT_PENDING_BY_FILE,
-                new Object[]{projectId},
+                new Object[]{projectId, EntryStatusPolicy.NO_TRANSLATION_REQUIRED},
                 rs -> {
                     Map<String, Long> out = new LinkedHashMap<>();
                     while (rs.next()) {
@@ -367,7 +369,7 @@ public class EntryRepository {
 
     public long remainingCount(UUID projectId) {
         SqlBuilder builder = whereClause(projectId, null).and("TRIM(translation) = ''")
-                .and("status <> 'no_translation_required'");
+                .and("status <> ?", EntryStatusPolicy.NO_TRANSLATION_REQUIRED);
         Long total = jdbc.queryForObject(
                 COUNT_BASE + builder.text(), Long.class, builder.params());
         return total == null ? 0 : total;
@@ -376,7 +378,7 @@ public class EntryRepository {
     public long translatedCount(UUID projectId) {
         SqlBuilder builder = whereClause(projectId, null)
                 .and("TRIM(translation) <> ''")
-                .and("status <> 'stale'");
+                .and("status <> ?", EntryStatusPolicy.STALE);
         Long total = jdbc.queryForObject(
                 COUNT_BASE + builder.text(), Long.class, builder.params());
         return total == null ? 0 : total;
@@ -483,7 +485,7 @@ public class EntryRepository {
                     lowercase(entry.getSource()),
                     entry.getTranslation() == null ? "" : entry.getTranslation(),
                     lowercase(entry.getTranslation()),
-                    entry.getStatus() == null ? "untranslated" : entry.getStatus(), now, now});
+                    entry.getStatus() == null ? EntryStatusPolicy.UNTRANSLATED : entry.getStatus(), now, now});
         }
         if (batch.isEmpty()) {
             return;
@@ -492,7 +494,7 @@ public class EntryRepository {
     }
 
     public List<Map<String, Object>> progressByFile(UUID projectId) {
-        return jdbc.queryForList(SELECT_PROGRESS, projectId);
+        return jdbc.queryForList(SELECT_PROGRESS, EntryStatusPolicy.STALE, projectId);
     }
 
     private static String lowercase(String value) {

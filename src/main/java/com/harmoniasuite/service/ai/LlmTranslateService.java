@@ -1,6 +1,7 @@
 package com.harmoniasuite.service.ai;
 
 import com.harmoniasuite.config.PromptResources;
+import com.harmoniasuite.domain.EntryStatusPolicy;
 import com.harmoniasuite.domain.TranslationEntry;
 import com.harmoniasuite.repository.EntryRepository;
 import com.harmoniasuite.repository.ProjectRepository;
@@ -245,9 +246,9 @@ public class LlmTranslateService extends AbstractBatchTranslator {
                     entry.getUuid(),
                     entry.getTranslation() == null ? "" : entry.getTranslation(),
                     entry.getStatus() == null ? "" : entry.getStatus(),
-                    translations.get(i), "machine_translated"));
+                    translations.get(i), EntryStatusPolicy.MACHINE_TRANSLATED));
             entry.setTranslation(translations.get(i));
-            entry.setStatus("machine_translated");
+            entry.setStatus(EntryStatusPolicy.MACHINE_TRANSLATED);
             goodChars += sources.get(i).length();
         }
         if (!writes.isEmpty()) {
@@ -290,10 +291,10 @@ public class LlmTranslateService extends AbstractBatchTranslator {
         String oldStatus = entry.getStatus() == null ? "" : entry.getStatus();
         entryRepository.batchWriteTranslations(projectId,
                 List.of(new EntryRepository.TranslationWrite(
-                        entry.getUuid(), "", oldStatus, "", "no_translation_required")),
+                        entry.getUuid(), "", oldStatus, "", EntryStatusPolicy.NO_TRANSLATION_REQUIRED)),
                 provider.id(), now);
         entry.setTranslation("");
-        entry.setStatus("no_translation_required");
+        entry.setStatus(EntryStatusPolicy.NO_TRANSLATION_REQUIRED);
         log.accept("[ЭХО] перевод не нужен: " + excerpt(source));
     }
 
