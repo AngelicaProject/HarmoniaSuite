@@ -8,6 +8,7 @@ import com.harmoniasuite.dto.PendingByFileDto;
 import com.harmoniasuite.dto.ProjectFilesDto;
 import com.harmoniasuite.dto.ProjectsResponseDto;
 import com.harmoniasuite.service.ProjectService;
+import com.harmoniasuite.service.EntryService;
 import jakarta.validation.Valid;
 import java.io.IOException;
 import java.util.UUID;
@@ -26,9 +27,11 @@ import org.springframework.web.bind.annotation.RestController;
 public class ProjectsController {
 
     private final ProjectService projectService;
+    private final EntryService entryService;
 
-    public ProjectsController(ProjectService projectService) {
+    public ProjectsController(ProjectService projectService, EntryService entryService) {
         this.projectService = projectService;
+        this.entryService = entryService;
     }
 
     @GetMapping
@@ -55,7 +58,7 @@ public class ProjectsController {
 
     @GetMapping("/{projectId}/translate/pending-by-file")
     public PendingByFileDto pendingByFile(@PathVariable UUID projectId) {
-        return new PendingByFileDto(projectService.pendingTranslateByFile(projectId));
+        return new PendingByFileDto(entryService.pendingByFile(projectId));
     }
 
     @GetMapping("/{projectId}/files")

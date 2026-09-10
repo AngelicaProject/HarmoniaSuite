@@ -1,7 +1,7 @@
 package com.harmoniasuite.service;
 
 import com.harmoniasuite.config.WorkspacePaths;
-import com.harmoniasuite.domain.TranslationEntry;
+import com.harmoniasuite.domain.EntryStatusPolicy;
 import com.harmoniasuite.dto.CreateProjectResponseDto;
 import com.harmoniasuite.dto.EntriesPageDto;
 import com.harmoniasuite.dto.EntryDto;
@@ -19,7 +19,6 @@ import com.harmoniasuite.mapping.EntryMapper;
 import com.harmoniasuite.mapping.ProjectMapper;
 import com.harmoniasuite.repository.EntryRepository;
 import com.harmoniasuite.repository.ProjectRepository;
-import com.harmoniasuite.util.TagSupport;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -28,45 +27,48 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 import java.util.function.Consumer;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class ProjectService {
 
-    public static final int ENTRIES_DEFAULT_LIMIT = 80;
-    public static final int ENTRIES_MAX_LIMIT = 500;
-    public static final int FILE_ENTRIES_MAX_LIMIT = 5000;
-    public static final int ROW_GROUPS_DEFAULT_PAGE_SIZE = 60;
-    public static final int ROW_GROUPS_MAX_PAGE_SIZE = 200;
+    /** Compatibility aliases while callers migrate to EntryService constants. */
+    public static final int ENTRIES_DEFAULT_LIMIT = EntryService.DEFAULT_LIMIT;
+    public static final int ENTRIES_MAX_LIMIT = EntryService.MAX_LIMIT;
+    public static final int FILE_ENTRIES_MAX_LIMIT = EntryService.FILE_MAX_LIMIT;
+    public static final int ROW_GROUPS_DEFAULT_PAGE_SIZE = EntryService.ROW_GROUPS_DEFAULT_PAGE_SIZE;
+    public static final int ROW_GROUPS_MAX_PAGE_SIZE = EntryService.ROW_GROUPS_MAX_PAGE_SIZE;
     public static final int FILES_DEFAULT_LIMIT = 100;
     public static final int FILES_MAX_LIMIT = 500;
-
-    private static final List<String> ENTRY_STATUSES =
-            List.of("untranslated", "machine_translated", "no_translation_required", "stale", "needs_human_review", "approved");
-    private static final List<String> ENTRY_STATUS_FILTER =
-            List.of("untranslated", "machine_translated", "no_translation_required", "stale", "needs_human_review",
-                    "approved", "proofread");
 
     private static final int DELETE_BATCH = 20_000;
 
     private final WorkspacePaths workspace;
     private final ProjectRepository projectRepository;
     private final EntryRepository entryRepository;
-    private final EntryMapper entryMapper;
     private final ProjectMapper projectMapper;
+    private final EntryService entryService;
 
+    /** Compatibility constructor for direct unit-test/application callers. */
     public ProjectService(WorkspacePaths workspace, ProjectRepository projectRepository,
             EntryRepository entryRepository, EntryMapper entryMapper, ProjectMapper projectMapper) {
+        this(workspace, projectRepository, entryRepository, projectMapper,
+                new EntryService(workspace, projectRepository, entryRepository, entryMapper, projectMapper));
+    }
+
+    @Autowired
+    public ProjectService(WorkspacePaths workspace, ProjectRepository projectRepository,
+            EntryRepository entryRepository, ProjectMapper projectMapper,
+            EntryService entryService) {
         this.workspace = workspace;
         this.projectRepository = projectRepository;
         this.entryRepository = entryRepository;
-        this.entryMapper = entryMapper;
         this.projectMapper = projectMapper;
+        this.entryService = entryService;
     }
 
     public List<ProjectListDto> listProjects() {
@@ -87,11 +89,11 @@ public class ProjectService {
 
     public CreateProjectResponseDto createProject(String name, String inputRoot) throws IOException {
         name = sanitizeName(name);
-        Path dir = workspace.resolve("projects").resolve(name);
-        Files.createDirectories(dir);
         if (projectRepository.existsByName(name)) {
             throw new HarmoniaSuiteBadRequestException("Project already exists: " + name);
         }
+        Path dir = workspace.resolve("projects").resolve(name);
+        Files.createDirectories(dir);
         String now = Instant.now().toString();
         UUID projectId = projectRepository.insert(name,
                 inputRoot == null || inputRoot.isBlank() ? "rawexd/en" : inputRoot,
@@ -146,102 +148,31 @@ public class ProjectService {
                 page.needFiles(), page.readyFiles(), toSummaryDto(page.summary(), row.outputDir()));
     }
 
-    public Map<String, Long> pendingTranslateByFile(UUID projectId) {
-        projectRepository.findById(projectId);
-        return entryRepository.pendingByFile(projectId);
-    }
-
     public EntriesPageDto entries(UUID projectId, EntryRepository.EntryFilter filter,
             int offset, int limit) {
-        ProjectRepository.ProjectRow row = projectRepository.findById(projectId);
-        boolean fileScope = filter != null && filter.file() != null && !filter.file().isBlank();
-        int cap = fileScope ? FILE_ENTRIES_MAX_LIMIT : ENTRIES_MAX_LIMIT;
-        int take = limit <= 0 ? ENTRIES_DEFAULT_LIMIT : Math.min(limit, cap);
-        int from = Math.max(0, offset);
-        EntryRepository.EntryPage result = entryRepository.pageWithTotal(projectId, filter, from, take);
-        return new EntriesPageDto(
-                entryMapper.toDtoList(result.entries()), result.total(), from, take);
+        EntryService.EntrySearch search = filter == null
+                ? EntryService.EntrySearch.empty()
+                : new EntryService.EntrySearch(filter.file(), filter.query(),
+                        filter.statuses() == null ? "" : String.join(",", filter.statuses()),
+                        filter.rowKey(), filter.onlyUntranslated(), offset, limit);
+        return entryService.search(projectId, search);
     }
 
     public RowGroupsPageDto rowGroups(UUID projectId, String file, String query,
             int offset, int limit) {
-        projectRepository.findById(projectId);
-        file = requireFile(file);
-        int take = limit <= 0 ? ROW_GROUPS_DEFAULT_PAGE_SIZE : Math.min(limit, ROW_GROUPS_MAX_PAGE_SIZE);
-        int from = Math.max(0, offset);
-        List<TranslationEntry> entries = entryRepository.rowGroupWindow(projectId, file, query, from, take);
-        Map<Integer, RowGroupBuilder> grouped = new LinkedHashMap<>();
-        for (TranslationEntry entry : entries) {
-            RowGroupBuilder group = grouped.computeIfAbsent(entry.getRowIndex(),
-                    row -> new RowGroupBuilder(row, entry.getRowKey()));
-            group.cells.add(entryMapper.toDto(entry));
-            if (needsWork(entry)) {
-                group.un++;
-            }
-        }
-        List<RowGroupsPageDto.RowGroupDto> groups = new ArrayList<>(grouped.size());
-        for (RowGroupBuilder group : grouped.values()) {
-            groups.add(new RowGroupsPageDto.RowGroupDto(group.row, group.rowKey, group.cells, group.un));
-        }
-        return new RowGroupsPageDto(groups, entryRepository.countRowGroups(projectId, file, query), from, take);
+        return entryService.rowGroups(projectId, file, query, offset, limit);
     }
 
     public long rowGroupPosition(UUID projectId, String file, int rowIndex, String query) {
-        projectRepository.findById(projectId);
-        file = requireFile(file);
-        return entryRepository.rowGroupPosition(projectId, file, rowIndex, query);
+        return entryService.rowGroupPosition(projectId, file, rowIndex, query);
     }
 
     public EntryDto nextNeedsWork(UUID projectId, String file, int afterRow, int afterCol, String query) {
-        projectRepository.findById(projectId);
-        file = requireFile(file);
-        TranslationEntry entry = entryRepository.nextNeedsWork(projectId, file, afterRow, afterCol, query);
-        return entry == null ? null : entryMapper.toDto(entry);
-    }
-
-    private static String requireFile(String file) {
-        if (file == null || file.isBlank()) {
-            throw new HarmoniaSuiteBadRequestException("File is required");
-        }
-        return file.trim().replace('\\', '/');
-    }
-
-    private static boolean needsWork(TranslationEntry entry) {
-        return !"no_translation_required".equals(entry.getStatus())
-                && ((entry.getTranslation() == null || entry.getTranslation().trim().isEmpty())
-                || "stale".equals(entry.getStatus()));
-    }
-
-    private static final class RowGroupBuilder {
-        private final int row;
-        private final String rowKey;
-        private final List<EntryDto> cells = new ArrayList<>();
-        private int un;
-
-        private RowGroupBuilder(int row, String rowKey) {
-            this.row = row;
-            this.rowKey = rowKey;
-        }
+        return entryService.nextNeedsWork(projectId, file, afterRow, afterCol, query);
     }
 
     public static List<String> normalizeStatuses(String raw) {
-        if (raw == null || raw.isBlank()) {
-            return List.of();
-        }
-        List<String> statuses = new ArrayList<>();
-        for (String part : raw.split(",")) {
-            String status = part.trim().toLowerCase(Locale.ROOT);
-            if (status.isEmpty()) {
-                continue;
-            }
-            if (!ENTRY_STATUS_FILTER.contains(status)) {
-                throw new HarmoniaSuiteBadRequestException("Unknown status: " + part.trim());
-            }
-            if (!statuses.contains(status)) {
-                statuses.add(status);
-            }
-        }
-        return statuses;
+        return EntryStatusPolicy.parseFilter(raw);
     }
 
     private String toWorkspaceRelative(String pathValue) {
@@ -319,54 +250,15 @@ public class ProjectService {
     }
 
     public EntryDto entry(UUID projectId, UUID entryId) {
-        TranslationEntry entry = entryRepository.findByUuid(projectId, entryId);
-        if (entry == null) {
-            throw new HarmoniaSuiteNotFoundException("Entry not found: " + entryId);
-        }
-        return entryMapper.toDto(entry);
+        return entryService.find(projectId, entryId);
     }
 
     public EntryDto entryByCell(UUID projectId, String cellId) {
-        projectRepository.findById(projectId);
-        TranslationEntry entry = entryRepository.findByCell(projectId, cellId);
-        if (entry == null) {
-            throw new HarmoniaSuiteNotFoundException("Entry not found: " + cellId);
-        }
-        return entryMapper.toDto(entry);
+        return entryService.findByCell(projectId, cellId);
     }
 
-    @Transactional
     public SaveEntryResponseDto updateEntry(UUID projectId, UUID entryId, String translation, String status) {
-        ProjectRepository.ProjectRow row = projectRepository.findById(projectId);
-        TranslationEntry current = entryRepository.findByUuid(projectId, entryId);
-        if (current == null) {
-            throw new HarmoniaSuiteNotFoundException("Entry not found: " + entryId);
-        }
-        String nextTranslation = translation == null ? "" : translation;
-        List<String> tagErrors = TagSupport.validate(nextTranslation);
-        if (!tagErrors.isEmpty()) {
-            throw new HarmoniaSuiteBadRequestException("Битые теги в переводе: " + String.join("; ", tagErrors));
-        }
-        List<String> tagWarnings = TagSupport.warnings(current.getSource(), nextTranslation);
-        String nextStatus = status == null || status.isBlank()
-                ? "needs_human_review" : status.trim().toLowerCase(Locale.ROOT);
-        if (!ENTRY_STATUSES.contains(nextStatus)) {
-            throw new HarmoniaSuiteBadRequestException("Unknown status: " + status);
-        }
-        String now = Instant.now().toString();
-        int updated = entryRepository.updateTranslation(
-                current.getUuid(), nextTranslation, nextStatus, now);
-        if (updated == 0) {
-            throw new HarmoniaSuiteNotFoundException("Entry not found: " + entryId);
-        }
-        entryRepository.insertHistory(projectId, current.getUuid(),
-                current.getTranslation() == null ? "" : current.getTranslation(),
-                current.getStatus() == null ? "" : current.getStatus(),
-                nextTranslation, nextStatus, "editor", now);
-        current.setTranslation(nextTranslation);
-        current.setStatus(nextStatus);
-        current.setUpdatedAt(now);
-        return new SaveEntryResponseDto(true, entryMapper.toDto(current), tagWarnings,
-                summaryOf(projectId, row.outputDir()));
+        return entryService.update(projectId, entryId,
+                new com.harmoniasuite.dto.UpdateEntryRequest(translation, status));
     }
 }
