@@ -1,6 +1,7 @@
 package com.harmoniasuite.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.harmoniasuite.domain.EntryQuery;
 import com.harmoniasuite.domain.PackMeta;
 import com.harmoniasuite.domain.TranslationEntry;
 import com.harmoniasuite.repository.EntryRepository;
@@ -220,10 +221,10 @@ public class MergeService {
             List<FileOutcome> outcomes, Path outputRoot, Consumer<String> log) {
         boolean failed = hasErrors(outcomes);
         long withTrans = entryRepository.translatedCount(projectId);
-        long noTrans = entryRepository.count(projectId,
-                new EntryRepository.EntryFilter(null, List.of("no_translation_required"), null, null, false));
-        long staleCount = entryRepository.count(projectId,
-                new EntryRepository.EntryFilter(null, List.of("stale"), null, null, false));
+        long noTrans = entryRepository.countByQuery(projectId,
+                new EntryQuery(null, List.of("no_translation_required"), null, null, false));
+        long staleCount = entryRepository.countByQuery(projectId,
+                new EntryQuery(null, List.of("stale"), null, null, false));
         long total = entryRepository.count(projectId, null);
         long without = total - withTrans - staleCount - noTrans;
         int skipped = skippedNoTranslations + skippedCount(outcomes);

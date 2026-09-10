@@ -37,6 +37,16 @@ public class ProjectRepository {
     private static final String SELECT_ALL_PROJECTS = "SELECT " + PROJECT_COLUMNS
             + "FROM projects ORDER BY name";
 
+    private static final String COUNT_PROJECTS_BY_NAME = """
+            SELECT COUNT(*)
+            FROM projects
+            WHERE name = ?""";
+
+    private static final String SELECT_PROJECT_EXISTS = """
+            SELECT 1
+            FROM projects
+            WHERE id = ?""";
+
     private static final String SUMMARY_BY_STATUS = """
             SELECT e.status, COUNT(e.id) AS n,
                    COALESCE(SUM(CASE WHEN (TRIM(e.translation) <> '' AND e.status <> 'stale')
@@ -47,6 +57,18 @@ public class ProjectRepository {
             LEFT JOIN entries e ON e.file_id = f.id AND e.project_id = f.project_id
             WHERE f.project_id = ?
             GROUP BY e.status""";
+
+    private static final String SUMMARY_WITH_PROJECT = """
+            SELECT p.output_dir AS output_dir, e.status AS status, COUNT(e.id) AS n,
+                   COALESCE(SUM(CASE WHEN (TRIM(e.translation) <> '' AND e.status <> 'stale')
+                       OR e.status = 'no_translation_required'
+                       THEN 1 ELSE 0 END), 0) AS translated,
+                   (SELECT COUNT(*) FROM source_files sf WHERE sf.project_id = p.id) AS files
+            FROM projects p
+            LEFT JOIN source_files f ON f.project_id = p.id
+            LEFT JOIN entries e ON e.file_id = f.id AND e.project_id = f.project_id
+            WHERE p.id = ?
+            GROUP BY p.output_dir, e.status""";
 
     private static final String SUMMARIES_ALL = """
             SELECT project_id, status, COUNT(*) AS n,
@@ -73,6 +95,8 @@ public class ProjectRepository {
             WHERE id = ?""";
 
     private static final String DELETE_PROJECT = "DELETE FROM projects WHERE id = ?";
+
+    private static final String DELETE_FILES = "DELETE FROM source_files";
 
     private static final String INSERT_FILE = """
             INSERT INTO source_files (
@@ -118,6 +142,10 @@ public class ProjectRepository {
     private static final RowMapper<FileRow> FILE_MAPPER = (rs, i) -> new FileRow(
             rs.getString(1), rs.getString(2), rs.getString(3));
 
+    private static final RowMapper<ProjectSummaryRow> SUMMARY_ROW_MAPPER = (rs, i) ->
+            new ProjectSummaryRow(rs.getString("output_dir"), rs.getString("status"),
+                    rs.getLong("n"), rs.getLong("translated"), rs.getLong("files"));
+
     private final JdbcTemplate jdbc;
 
     public ProjectRepository(JdbcTemplate jdbc) {
@@ -154,13 +182,23 @@ public class ProjectRepository {
             Map<String, Long> byStatus) {
     }
 
+    public record ProjectSnapshot(ProjectSummary summary, String outputDir) {
+    }
+
+    private record ProjectSummaryRow(
+            String outputDir,
+            String status,
+            long entries,
+            long translated,
+            long files) {
+    }
+
     public static java.util.UUID uuidOf(String value) {
         return java.util.UUID.fromString(value);
     }
 
     public boolean existsByName(String name) {
-        Integer total = jdbc.queryForObject(
-                "SELECT COUNT(*) FROM projects WHERE name = ?", Integer.class, name);
+        Integer total = jdbc.queryForObject(COUNT_PROJECTS_BY_NAME, Integer.class, name);
         return total != null && total > 0;
     }
 
@@ -178,6 +216,10 @@ public class ProjectRepository {
             throw new HarmoniaSuiteNotFoundException("Project not found: " + projectId);
         }
         return rows.get(0);
+    }
+
+    public boolean exists(UUID projectId) {
+        return !jdbc.query(SELECT_PROJECT_EXISTS, (rs, rowNum) -> Boolean.TRUE, projectId).isEmpty();
     }
 
     public ProjectRow findByName(String name) {
@@ -208,6 +250,28 @@ public class ProjectRepository {
             translated += ((Number) row.get("translated")).longValue();
         }
         return new ProjectSummary(files, entries, translated, byStatus);
+    }
+
+    public ProjectSnapshot summarizeWithProject(UUID projectId) {
+        List<ProjectSummaryRow> rows = jdbc.query(
+                SUMMARY_WITH_PROJECT, SUMMARY_ROW_MAPPER, projectId);
+        if (rows.isEmpty()) {
+            throw new HarmoniaSuiteNotFoundException("Project not found: " + projectId);
+        }
+        ProjectSummaryRow first = rows.getFirst();
+        Map<String, Long> byStatus = new LinkedHashMap<>();
+        long entries = 0;
+        long translated = 0;
+        for (ProjectSummaryRow row : rows) {
+            if (row.status() == null) {
+                continue;
+            }
+            byStatus.put(row.status(), row.entries());
+            entries += row.entries();
+            translated += row.translated();
+        }
+        return new ProjectSnapshot(
+                new ProjectSummary(first.files(), entries, translated, byStatus), first.outputDir());
     }
 
     public Map<String, ProjectSummary> summaries() {
@@ -284,7 +348,7 @@ public class ProjectRepository {
             return;
         }
         SqlBuilder filter = SqlBuilder.where("project_id = ?", projectId).andIn("path", paths);
-        jdbc.update("DELETE FROM source_files" + filter.text(), filter.params());
+        jdbc.update(DELETE_FILES + filter.text(), filter.params());
     }
 
     public int delete(UUID id) {

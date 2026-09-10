@@ -4,8 +4,7 @@ import com.harmoniasuite.dto.EntriesPageDto;
 import com.harmoniasuite.dto.EntryDto;
 import com.harmoniasuite.dto.SaveEntryResponseDto;
 import com.harmoniasuite.dto.UpdateEntryRequest;
-import com.harmoniasuite.repository.EntryRepository;
-import com.harmoniasuite.service.ProjectService;
+import com.harmoniasuite.service.EntryService;
 import java.util.UUID;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
@@ -19,10 +18,10 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/api/projects/{projectId}/entries")
 public class EntriesController {
 
-    private final ProjectService projectService;
+    private final EntryService entryService;
 
-    public EntriesController(ProjectService projectService) {
-        this.projectService = projectService;
+    public EntriesController(EntryService entryService) {
+        this.entryService = entryService;
     }
 
     @GetMapping
@@ -35,30 +34,23 @@ public class EntriesController {
             @RequestParam(defaultValue = "false") boolean untranslated,
             @RequestParam(defaultValue = "0") int offset,
             @RequestParam(defaultValue = "0") int limit) {
-        EntryRepository.EntryFilter filter = new EntryRepository.EntryFilter(
-                rowKey.isBlank() ? null : rowKey,
-                ProjectService.normalizeStatuses(status),
-                file.isBlank() ? null : file,
-                q.isBlank() ? null : q,
-                untranslated);
-        return projectService.entries(projectId, filter, offset, limit);
+        return entryService.search(projectId,
+                new EntryService.EntrySearch(file, q, status, rowKey, untranslated, offset, limit));
     }
 
     @GetMapping("/{entryId}")
     public EntryDto entry(@PathVariable UUID projectId, @PathVariable UUID entryId) {
-        return projectService.entry(projectId, entryId);
+        return entryService.find(projectId, entryId);
     }
 
     @GetMapping("/by-cell/{cellId}")
     public EntryDto entryByCell(@PathVariable UUID projectId, @PathVariable String cellId) {
-        return projectService.entryByCell(projectId, cellId);
+        return entryService.findByCell(projectId, cellId);
     }
 
     @PatchMapping("/{entryId}")
     public SaveEntryResponseDto saveEntry(@PathVariable UUID projectId, @PathVariable UUID entryId,
             @RequestBody UpdateEntryRequest body) {
-        String translation = body == null ? "" : body.translation();
-        String state = body == null ? null : body.status();
-        return projectService.updateEntry(projectId, entryId, translation, state);
+        return entryService.update(projectId, entryId, body);
     }
 }
