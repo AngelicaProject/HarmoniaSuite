@@ -1,8 +1,8 @@
 package com.harmoniasuite.service.job;
 
 import com.harmoniasuite.dto.RunRequest;
-import com.harmoniasuite.service.LlmTranslateService;
-import com.harmoniasuite.service.OpenRouterProvider;
+import com.harmoniasuite.service.ai.LlmTranslateService;
+import com.harmoniasuite.service.ai.OpenRouterProvider;
 import org.springframework.stereotype.Component;
 
 import java.util.List;

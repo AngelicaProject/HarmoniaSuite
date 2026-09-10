@@ -1,8 +1,8 @@
 package com.harmoniasuite.service.job;
 
 import com.harmoniasuite.dto.RunRequest;
-import com.harmoniasuite.service.GeminiProvider;
-import com.harmoniasuite.service.LlmTranslateService;
+import com.harmoniasuite.service.ai.GeminiProvider;
+import com.harmoniasuite.service.ai.LlmTranslateService;
 import org.springframework.stereotype.Component;
 
 import java.util.List;

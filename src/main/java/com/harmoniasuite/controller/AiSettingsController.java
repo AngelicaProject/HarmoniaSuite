@@ -2,7 +2,7 @@ package com.harmoniasuite.controller;
 
 import com.harmoniasuite.dto.AiKeyCheckRequest;
 import com.harmoniasuite.dto.UpdateAiSettingsRequest;
-import com.harmoniasuite.service.AiSettingsService;
+import com.harmoniasuite.service.ai.AiSettingsService;
 import java.util.List;
 import java.util.Map;
 import org.springframework.web.bind.annotation.GetMapping;

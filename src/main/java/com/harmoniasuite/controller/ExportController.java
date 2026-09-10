@@ -1,7 +1,7 @@
 package com.harmoniasuite.controller;
 
 import com.harmoniasuite.dto.ExportListDto;
-import com.harmoniasuite.service.ExportService;
+import com.harmoniasuite.service.export.ExportService;
 import java.io.IOException;
 import java.util.UUID;
 import org.springframework.core.io.Resource;

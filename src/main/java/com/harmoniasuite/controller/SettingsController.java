@@ -1,7 +1,7 @@
 package com.harmoniasuite.controller;
 
 import com.harmoniasuite.dto.UpdateSourceSettingsRequest;
-import com.harmoniasuite.service.SourceService;
+import com.harmoniasuite.service.source.SourceService;
 import java.util.Map;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PutMapping;

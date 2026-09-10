@@ -2,7 +2,7 @@ package com.harmoniasuite.controller;
 
 import com.harmoniasuite.dto.EntryDto;
 import com.harmoniasuite.dto.RowGroupsPageDto;
-import com.harmoniasuite.service.EntryService;
+import com.harmoniasuite.service.project.EntryService;
 import java.util.UUID;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
