@@ -2,7 +2,7 @@ package com.harmoniasuite.controller;
 
 import com.harmoniasuite.domain.PackMeta;
 import com.harmoniasuite.dto.PackViewDto;
-import com.harmoniasuite.service.PackService;
+import com.harmoniasuite.service.export.PackService;
 import java.io.IOException;
 import java.util.UUID;
 import org.springframework.web.bind.annotation.GetMapping;

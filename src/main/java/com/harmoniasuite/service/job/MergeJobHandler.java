@@ -1,7 +1,7 @@
 package com.harmoniasuite.service.job;
 
 import com.harmoniasuite.dto.RunRequest;
-import com.harmoniasuite.service.MergeService;
+import com.harmoniasuite.service.export.MergeService;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;

@@ -4,7 +4,7 @@ import com.harmoniasuite.dto.EntriesPageDto;
 import com.harmoniasuite.dto.EntryDto;
 import com.harmoniasuite.dto.SaveEntryResponseDto;
 import com.harmoniasuite.dto.UpdateEntryRequest;
-import com.harmoniasuite.service.EntryService;
+import com.harmoniasuite.service.project.EntryService;
 import java.util.UUID;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;

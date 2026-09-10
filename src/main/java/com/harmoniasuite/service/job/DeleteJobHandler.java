@@ -1,7 +1,7 @@
 package com.harmoniasuite.service.job;
 
 import com.harmoniasuite.dto.RunRequest;
-import com.harmoniasuite.service.ProjectService;
+import com.harmoniasuite.service.project.ProjectService;
 import org.springframework.stereotype.Component;
 
 import java.util.function.Consumer;

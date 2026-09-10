@@ -1,6 +1,6 @@
 package com.harmoniasuite.controller;
 
-import com.harmoniasuite.service.LogService;
+import com.harmoniasuite.service.system.LogService;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestParam;

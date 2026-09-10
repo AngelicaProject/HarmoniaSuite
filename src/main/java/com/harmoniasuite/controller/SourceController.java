@@ -2,8 +2,8 @@ package com.harmoniasuite.controller;
 
 import com.harmoniasuite.dto.SourceFilesDto;
 import com.harmoniasuite.dto.SourcePreviewDto;
-import com.harmoniasuite.service.FileSearchService;
-import com.harmoniasuite.service.SourceService;
+import com.harmoniasuite.service.project.FileSearchService;
+import com.harmoniasuite.service.source.SourceService;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;

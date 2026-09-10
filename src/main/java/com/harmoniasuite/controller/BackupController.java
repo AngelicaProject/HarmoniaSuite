@@ -4,7 +4,7 @@ import com.harmoniasuite.dto.BackupDto;
 import com.harmoniasuite.dto.BackupListDto;
 import com.harmoniasuite.dto.UpdateBackupSettingsRequest;
 import com.harmoniasuite.exception.HarmoniaSuiteBadRequestException;
-import com.harmoniasuite.service.BackupOps;
+import com.harmoniasuite.service.backup.BackupOps;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;

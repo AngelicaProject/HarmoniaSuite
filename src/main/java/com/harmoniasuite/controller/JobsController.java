@@ -2,7 +2,7 @@ package com.harmoniasuite.controller;
 
 import com.harmoniasuite.dto.JobDto;
 import com.harmoniasuite.dto.RunRequest;
-import com.harmoniasuite.service.JobService;
+import com.harmoniasuite.service.job.JobService;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;

@@ -2,7 +2,7 @@ package com.harmoniasuite.controller;
 
 import com.harmoniasuite.config.AppVersion;
 import com.harmoniasuite.config.HarmoniaProperties;
-import com.harmoniasuite.service.UpdateService;
+import com.harmoniasuite.service.update.UpdateService;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import org.springframework.web.bind.annotation.GetMapping;

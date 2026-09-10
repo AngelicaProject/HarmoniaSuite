@@ -1,7 +1,7 @@
 package com.harmoniasuite.controller;
 
 import com.harmoniasuite.config.HarmoniaProperties;
-import com.harmoniasuite.service.AiSettingsService;
+import com.harmoniasuite.service.ai.AiSettingsService;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RestController;
 
