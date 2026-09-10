@@ -917,8 +917,9 @@ const App = {
             const cleanQ = String(q || '').trim();
             const previousPageIds = new Set((fileRows.value.groups || []).flatMap(g =>
                 (g.cells || []).map(cell => cell.id)));
+            const activeEntryId = focusId.value || editorRef.value?.current?.id || '';
             const request = ++rowRequest;
-            fileRows.value = {file, q: cleanQ, page: cleanPage, groups: [], totalGroups: 0, loading: true};
+            fileRows.value = {...fileRows.value, loading: true};
             try {
                 const d = await api.rowsPage(projectId.value, {
                     file, offset: cleanPage * rowGroupPageSize, limit: rowGroupPageSize, q: cleanQ
@@ -928,7 +929,7 @@ const App = {
                 const pageEntries = groups.flatMap(g => g.cells || []);
                 const entries = new Map();
                 for (const entry of (doc.value?.entries || [])) {
-                    if (entry && entry.id && !previousPageIds.has(entry.id)) entries.set(entry.id, entry);
+                    if (entry && entry.id && (!previousPageIds.has(entry.id) || entry.id === activeEntryId)) entries.set(entry.id, entry);
                 }
                 for (const entry of pageEntries) {
                     if (entry && entry.id) entries.set(entry.id, entry);
@@ -939,8 +940,7 @@ const App = {
                     totalGroups: Number(d.total_groups || 0), loading: false};
                 return fileRows.value;
             } catch (e) {
-                if (request === rowRequest) fileRows.value = {file, q: cleanQ, page: cleanPage,
-                    groups: [], totalGroups: 0, loading: false};
+                if (request === rowRequest) fileRows.value = {...fileRows.value, loading: false};
                 throw e;
             }
         }
