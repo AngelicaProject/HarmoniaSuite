@@ -99,10 +99,10 @@ class LlmTranslateServiceTest {
     void breakerTripsAfterConsecutiveFails() {
         LlmTranslateService svc = service(1000000, 40000);
         for (int i = 0; i < LlmTranslateService.MAX_CONSECUTIVE_FAILS - 1; i++) {
-            assertEquals(false, svc.noteAttempt(false));
+            assertEquals(false, svc.recordAttempt(false));
         }
-        assertEquals(true, svc.noteAttempt(false));
-        assertEquals(false, svc.noteAttempt(true));
-        assertEquals(false, svc.noteAttempt(false));
+        assertEquals(true, svc.recordAttempt(false));
+        assertEquals(false, svc.recordAttempt(true));
+        assertEquals(false, svc.recordAttempt(false));
     }
 }

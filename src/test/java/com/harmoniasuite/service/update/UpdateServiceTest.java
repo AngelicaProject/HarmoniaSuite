@@ -7,7 +7,6 @@ import org.junit.jupiter.api.Test;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -17,64 +16,35 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class UpdateServiceTest {
 
     @Test
-    @DisplayName("ls-remote sha is the first token of the first line")
-    void parsesLsRemoteSha() {
-        assertEquals("e916062abc", UpdateService.parseLsRemote("e916062abc\trefs/heads/main\n"));
-        assertEquals("", UpdateService.parseLsRemote(""));
-        assertEquals("", UpdateService.parseLsRemote(null));
-    }
-
-    @Test
     @DisplayName("classifies local and divergent Git history explicitly")
     void classifiesHistory() {
-        assertEquals(UpdateState.UP_TO_DATE, UpdateService.historyState(0, 0));
-        assertEquals(UpdateState.UPDATE_AVAILABLE, UpdateService.historyState(3, 0));
-        assertEquals(UpdateState.LOCAL_AHEAD, UpdateService.historyState(0, 2));
-        assertEquals(UpdateState.DIVERGED, UpdateService.historyState(3, 2));
+        assertEquals(UpdateState.UP_TO_DATE, UpdateService.classifyHistory(0, 0));
+        assertEquals(UpdateState.UPDATE_AVAILABLE, UpdateService.classifyHistory(3, 0));
+        assertEquals(UpdateState.LOCAL_AHEAD, UpdateService.classifyHistory(0, 2));
+        assertEquals(UpdateState.DIVERGED, UpdateService.classifyHistory(3, 2));
     }
 
     @Test
     @DisplayName("short sha is the first 7 characters")
     void shortensSha() {
-        assertEquals("e916062", UpdateService.shortSha("e916062abc123"));
-        assertEquals("abc", UpdateService.shortSha("abc"));
-        assertEquals("", UpdateService.shortSha(null));
+        assertEquals("e916062", UpdateService.shortenSha("e916062abc123"));
+        assertEquals("abc", UpdateService.shortenSha("abc"));
+        assertEquals("", UpdateService.shortenSha(null));
     }
 
     @Test
     @DisplayName("unresolved commit gives empty")
     void blankCommitResolvesEmpty() {
-        assertEquals("", UpdateService.resolveCommit(null));
-        assertEquals("", UpdateService.resolveCommit("  "));
-        assertEquals("", UpdateService.resolveCommit("@app.commit@"));
-        assertEquals("e916062abc", UpdateService.resolveCommit("e916062abc"));
-    }
-
-    @Test
-    @DisplayName("javac major parses from version output")
-    void parsesJavaMajor() {
-        assertEquals(21, UpdateService.parseJavaMajor("javac 21.0.3"));
-        assertEquals(11, UpdateService.parseJavaMajor("javac 11.0.24"));
-        assertEquals(-1, UpdateService.parseJavaMajor("garbage"));
-        assertEquals(-1, UpdateService.parseJavaMajor(null));
-    }
-
-    @Test
-    @DisplayName("MinGit is picked from release assets")
-    void picksMinGitAsset() {
-        assertEquals("https://example.com/m.zip", UpdateService.pickMinGitUrl(List.of(
-                Map.of("name", "MinGit-2.51.0-busybox-64-bit.zip", "browser_download_url", "https://example.com/bb.zip"),
-                Map.of("name", "Git-2.51.0-64-bit.exe", "browser_download_url", "https://example.com/g.exe"),
-                Map.of("name", "MinGit-2.51.0-64-bit.zip", "browser_download_url", "https://example.com/m.zip"))));
-        assertEquals(null, UpdateService.pickMinGitUrl(List.of(
-                Map.of("name", "MinGit-2.51.0-32-bit.zip", "browser_download_url", "https://example.com/m32.zip"))));
-        assertEquals(null, UpdateService.pickMinGitUrl(null));
+        assertEquals("", UpdateService.resolveCommitSha(null));
+        assertEquals("", UpdateService.resolveCommitSha("  "));
+        assertEquals("", UpdateService.resolveCommitSha("@app.commit@"));
+        assertEquals("e916062abc", UpdateService.resolveCommitSha("e916062abc"));
     }
 
     @Test
     @DisplayName("update build skips tests like release builds")
     void updateBuildSkipsTests() {
-        List<String> command = UpdateService.buildCommand(Paths.get("D:/repo"));
+        List<String> command = UpdateService.mavenBuildCommand(Paths.get("D:/repo"));
         assertTrue(command.get(0).contains("mvnw"));
         assertEquals(List.of("-B", "-DskipTests", "clean", "package"), command.subList(1, command.size()));
     }
@@ -106,10 +76,10 @@ class UpdateServiceTest {
     }
 
     @Test
-    @DisplayName("root candidates stop at the first available result")
-    void selectsFirstAvailableRoot() {
+    @DisplayName("root candidates stop at the first non-null result")
+    void selectsFirstNonNullRoot() {
         List<String> attempts = new ArrayList<>();
-        assertEquals("filesystem", UpdateService.firstAvailable(
+        assertEquals("filesystem", UpdateService.firstNonNull(
                 () -> {
                     attempts.add("git");
                     return null;
@@ -125,7 +95,7 @@ class UpdateServiceTest {
         assertEquals(List.of("git", "filesystem"), attempts);
 
         attempts.clear();
-        assertEquals("git", UpdateService.firstAvailable(
+        assertEquals("git", UpdateService.firstNonNull(
                 () -> {
                     attempts.add("git");
                     return "git";

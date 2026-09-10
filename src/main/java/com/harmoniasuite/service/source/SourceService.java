@@ -50,7 +50,7 @@ public class SourceService {
     public Map<String, Object> status() {
         String gamePath = gamePath();
         boolean gameValid = isValidGamePath(gamePath);
-        boolean exeOk = isRegularFile(bundledExe());
+        boolean exeOk = isRegularFile(unpackerExecutable());
         Path root = activeRootIfReady();
         Map<String, Object> map = new LinkedHashMap<>();
         map.put("gamePath", gamePath);
@@ -149,7 +149,7 @@ public class SourceService {
         if (!isValidGamePath(gamePath)) {
             throw new HarmoniaSuiteBadRequestException("Некорректный путь к игре: " + gamePath);
         }
-        String exe = bundledExe();
+        String exe = unpackerExecutable();
         if (!isRegularFile(exe)) {
             throw new HarmoniaSuiteBadRequestException(
                     "Нет XivExdUnpacker (bundled нет; для своей сборки — через env HARMONIA_UNPACKER_EXE)");
@@ -204,7 +204,7 @@ public class SourceService {
         Files.writeString(dir.resolve("config.yml"), content, StandardCharsets.UTF_8);
     }
 
-    private static String bundledExe() {
+    private static String unpackerExecutable() {
         String env = System.getenv("HARMONIA_UNPACKER_EXE");
         if (isRegularFile(env)) {
             return env.strip();

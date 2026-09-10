@@ -100,7 +100,7 @@ public class AiSettingsService {
             int models = gemini.checkKey(use);
             return Map.of("ok", true, "message", "Доступ OK · моделей: " + models);
         } catch (Exception e) {
-            return Map.of("ok", false, "message", cap(e.getMessage()));
+            return Map.of("ok", false, "message", failureText(e.getMessage()));
         }
     }
 
@@ -112,7 +112,7 @@ public class AiSettingsService {
         return out;
     }
 
-    private static String cap(String message) {
+    private static String failureText(String message) {
         if (message == null || message.isBlank()) {
             return "ошибка доступа";
         }

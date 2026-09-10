@@ -31,7 +31,7 @@ public class LogService {
         this.logFile = logFile;
     }
 
-    public String tail(int requested) throws IOException {
+    public String readTail(int requested) throws IOException {
         if (!Files.isRegularFile(logFile)) {
             throw new HarmoniaSuiteNotFoundException("Журнал приложения ещё не создан");
         }
@@ -42,7 +42,7 @@ public class LogService {
             file.seek(start);
             file.readFully(bytes);
         }
-        return ScrubSupport.scrub(tailText(new String(bytes, StandardCharsets.UTF_8), normalizeTail(requested), start > 0));
+        return ScrubSupport.scrub(lastLines(new String(bytes, StandardCharsets.UTF_8), normalizeTail(requested), start > 0));
     }
 
     static int normalizeTail(int requested) {
@@ -52,7 +52,7 @@ public class LogService {
         return Math.min(requested, MAX_TAIL);
     }
 
-    static String tailText(String text, int requested, boolean partialFirstLine) {
+    static String lastLines(String text, int requested, boolean partialFirstLine) {
         if (text == null || text.isEmpty()) {
             return "";
         }

@@ -116,18 +116,18 @@ public class PackRepository {
 
     public void save(UUID projectId, PackMeta pack, String now) {
         int updated = jdbc.update(UPDATE_PACK,
-                str(pack.getPackId()), str(pack.getTranslationVersion()), str(pack.getGameVersion()),
-                str(pack.getVendorId()), str(pack.getVendorName()), str(pack.getVendorUrl()),
-                str(pack.getVendorContact()), str(pack.getTitle()), str(pack.getDescription()),
-                str(pack.getChangelog()), str(pack.getHomepage()), str(pack.getLicense()),
-                str(pack.getMinPluginVersion()), now, projectId);
+                orEmpty(pack.getPackId()), orEmpty(pack.getTranslationVersion()), orEmpty(pack.getGameVersion()),
+                orEmpty(pack.getVendorId()), orEmpty(pack.getVendorName()), orEmpty(pack.getVendorUrl()),
+                orEmpty(pack.getVendorContact()), orEmpty(pack.getTitle()), orEmpty(pack.getDescription()),
+                orEmpty(pack.getChangelog()), orEmpty(pack.getHomepage()), orEmpty(pack.getLicense()),
+                orEmpty(pack.getMinPluginVersion()), now, projectId);
         if (updated == 0) {
             jdbc.update(INSERT_PACK,
-                    projectId, str(pack.getPackId()), str(pack.getTranslationVersion()),
-                    str(pack.getGameVersion()), str(pack.getVendorId()), str(pack.getVendorName()),
-                    str(pack.getVendorUrl()), str(pack.getVendorContact()), str(pack.getTitle()),
-                    str(pack.getDescription()), str(pack.getChangelog()), str(pack.getHomepage()),
-                    str(pack.getLicense()), str(pack.getMinPluginVersion()), now, now);
+                    projectId, orEmpty(pack.getPackId()), orEmpty(pack.getTranslationVersion()),
+                    orEmpty(pack.getGameVersion()), orEmpty(pack.getVendorId()), orEmpty(pack.getVendorName()),
+                    orEmpty(pack.getVendorUrl()), orEmpty(pack.getVendorContact()), orEmpty(pack.getTitle()),
+                    orEmpty(pack.getDescription()), orEmpty(pack.getChangelog()), orEmpty(pack.getHomepage()),
+                    orEmpty(pack.getLicense()), orEmpty(pack.getMinPluginVersion()), now, now);
         }
         saveAuthors(projectId, pack.getAuthors(), now);
         saveStrings(VERSIONS_TABLE, INSERT_VERSION, projectId, pack.getCompatibleGameVersions(), now);
@@ -144,8 +144,8 @@ public class PackRepository {
             if (author == null) {
                 continue;
             }
-            batch.add(new Object[]{project, str(author.getName()), str(author.getRole()),
-                    str(author.getContact()), now, now});
+            batch.add(new Object[]{project, orEmpty(author.getName()), orEmpty(author.getRole()),
+                    orEmpty(author.getContact()), now, now});
         }
         if (batch.isEmpty()) {
             return;
@@ -172,7 +172,7 @@ public class PackRepository {
         jdbc.batchUpdate(insertSql, batch);
     }
 
-    private static String str(String value) {
+    private static String orEmpty(String value) {
         return value == null ? "" : value;
     }
 

@@ -80,7 +80,7 @@ class ProjectStoreTest {
         entries.batchUpsert(projectId, fileIds, new ArrayList<>(List.of(
                 entry("pack-one.csv", "10", 1, "Seize", "", "no_translation_required"))), now);
         assertEquals(0, entries.pendingByFile(projectId).size());
-        assertEquals(0, entries.remaining(projectId));
+        assertEquals(0, entries.remainingCount(projectId));
         assertEquals(1, projects.summarize(projectId).translated());
     }
 

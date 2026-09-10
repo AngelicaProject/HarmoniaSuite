@@ -84,7 +84,7 @@ public class DeltaService {
             nextCellId = orEmpty(last.getId());
         }
         String now = Instant.now().toString();
-        DeltaHeaderDto header = new DeltaHeaderDto(projectRepository.sourcesFp(projectId),
+        DeltaHeaderDto header = new DeltaHeaderDto(projectRepository.sourcesFingerprint(projectId),
                 packRepository.gameVersion(projectId), author.trim(), now);
         return new DeltaExportDto(header, rows, nextUpdatedAt, nextCellId, page.size() < take);
     }
@@ -119,9 +119,9 @@ public class DeltaService {
         if (!WRITE_STATUSES.contains(maxStatus)) {
             throw new HarmoniaSuiteBadRequestException("Unknown status: " + request.maxStatus());
         }
-        String expectedFp = request.sourcesFp() == null ? "" : request.sourcesFp();
-        String actualFp = projectRepository.sourcesFp(projectId);
-        if (!expectedFp.equals(actualFp)) {
+        String expectedFingerprint = request.sourcesFp() == null ? "" : request.sourcesFp();
+        String actualFingerprint = projectRepository.sourcesFingerprint(projectId);
+        if (!expectedFingerprint.equals(actualFingerprint)) {
             throw new HarmoniaSuiteBadRequestException(
                     "sources_fp mismatch: delta is from another source snapshot");
         }

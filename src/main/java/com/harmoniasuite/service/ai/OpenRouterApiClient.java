@@ -190,7 +190,7 @@ public class OpenRouterApiClient {
                             ? "[ОШИБКА] Ответ обрезан лимитом max_tokens (выход " + outTokens + "/"
                                     + maxOutputTokens + " токенов, текст " + text.length()
                                     + " символов)" + thought + ", делю пачку"
-                            : "[ОШИБКА] Некорректный JSON от OpenRouter: " + LlmJson.snippet(text));
+                            : "[ОШИБКА] Некорректный JSON от OpenRouter: " + LlmJson.excerpt(text));
                     return null;
                 }
                 return new LlmResult(byIndex, truncated, inTokens, outTokens,
