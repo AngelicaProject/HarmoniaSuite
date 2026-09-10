@@ -1,3 +1,5 @@
+import {ENTRY_STATUS_SUMMARY} from '../translation-statuses.js';
+
 export default {
   props: ['summary'],
   computed: {
@@ -22,14 +24,7 @@ export default {
     },
     rows() {
       const by = this.summary?.by_status || {};
-      const order = [
-        ['approved', 'Одобрено', 'ok'],
-        ['human_reviewed', 'Проверено человеком', 'info'],
-        ['machine_translated', 'Машинный перевод', 'warn'],
-        ['no_translation_required', 'Не требует перевода', 'mut'],
-        ['untranslated', 'Не переведено', 'mut'],
-        ['stale', 'Устарело', 'bad']
-      ];
+      const order = ENTRY_STATUS_SUMMARY.map(s => [s.value, s.label, s.dot]);
       const seen = new Set();
       const out = [];
       for (const [k, label, dot] of order) {

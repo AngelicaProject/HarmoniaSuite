@@ -1,4 +1,5 @@
 import {api} from '../api.js';
+import {ENTRY_STATUS} from '../translation-statuses.js';
 export default {
   props: ['projectId'],
   emits: ['toast', 'refresh', 'open-conflict'],
@@ -10,6 +11,9 @@ export default {
     };
   },
   computed: {
+    untranslatedStatus() {
+      return ENTRY_STATUS.UNTRANSLATED;
+    },
     visibleChecked() {
       return this.fileList.filter(f => this.checked[f.path]);
     },
@@ -379,7 +383,7 @@ export default {
     <div style="display:flex;gap:8px;margin:8px 0;align-items:center;flex-wrap:wrap"><span class="muted" style="font-size:12px">Автор</span><input ref="authorInput" class="grow" v-model="author" :class="{invalid:authorBad}" @input="authorBad=false" @change="saveAuthor" placeholder="Имя переводчика" style="max-width:220px"></div>
 
     <div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.08em;font-weight:700;margin-top:12px">Выгрузка по файлам</div>
-    <div class="muted" style="font-size:12px;margin:6px 0">Показаны только файлы с переводами. Нетронутые строки (пусто + untranslated) не выгружаются. Выбрано: {{visibleChecked.length}}</div>
+    <div class="muted" style="font-size:12px;margin:6px 0">Показаны только файлы с переводами. Нетронутые строки (пусто + {{untranslatedStatus}}) не выгружаются. Выбрано: {{visibleChecked.length}}</div>
     <div style="display:flex;gap:8px;margin:8px 0;align-items:center;flex-wrap:wrap"><input class="grow" v-model="fileQ" @input="scheduleExpSearch" placeholder="Поиск файлов…" style="max-width:320px"><button class="ghost sm" @click="toggleAllVisible">Выбрать все видимые</button><button class="sm" @click="exportDelta" :disabled="expBusy||!projectId||!visibleChecked.length">{{expBusy?'Выгрузка…':'Выгрузить выбранные (.json)'}}</button></div>
     <div v-if="fileLoading" class="ft-empty"><span class="job-spin"></span><span>Загрузка…</span></div>
     <div v-else-if="expRows.length" style="display:flex;flex-direction:column;gap:4px;max-height:320px;overflow-y:auto">

@@ -2,6 +2,7 @@ package com.harmoniasuite.service.export;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.harmoniasuite.domain.EntryQuery;
+import com.harmoniasuite.domain.EntryStatusPolicy;
 import com.harmoniasuite.domain.PackMeta;
 import com.harmoniasuite.domain.TranslationEntry;
 import com.harmoniasuite.repository.EntryRepository;
@@ -172,7 +173,7 @@ public class MergeService {
                 if (translation == null || translation.isBlank()) {
                     continue;
                 }
-                if ("stale".equals(entry.getStatus())) {
+                if (EntryStatusPolicy.isStale(entry.getStatus())) {
                     stale++;
                     continue;
                 }
@@ -222,9 +223,9 @@ public class MergeService {
         boolean failed = hasErrors(outcomes);
         long withTrans = entryRepository.translatedCount(projectId);
         long noTrans = entryRepository.countByQuery(projectId,
-                new EntryQuery(null, List.of("no_translation_required"), null, null, false));
+                new EntryQuery(null, List.of(EntryStatusPolicy.NO_TRANSLATION_REQUIRED), null, null, false));
         long staleCount = entryRepository.countByQuery(projectId,
-                new EntryQuery(null, List.of("stale"), null, null, false));
+                new EntryQuery(null, List.of(EntryStatusPolicy.STALE), null, null, false));
         long total = entryRepository.count(projectId, null);
         long without = total - withTrans - staleCount - noTrans;
         int skipped = skippedNoTranslations + skippedCount(outcomes);
@@ -239,7 +240,7 @@ public class MergeService {
                 + (skipped > 0 ? " | без переводов пропущено файлов: " + skipped : ""));
         if (staleSkipped > 0) {
             log.accept("→ Устаревших переводов пропущено: " + staleSkipped
-                    + " — проверьте в редакторе (статус stale)");
+                    + " — проверьте в редакторе (статус " + EntryStatusPolicy.STALE + ")");
         }
         if (coordMismatch > 0) {
             log.accept("→ Пропущено из-за расхождения координат: " + coordMismatch + " — запустите extract заново");
