@@ -211,7 +211,7 @@ const App = {
         });
         const updTitle = computed(() => {
             const u = upd.value || {};
-            if (!u.supported) return 'Обновления недоступны';
+            if (!u.supported) return 'Обновления недоступны' + (u.reason ? '\n' + u.reason : '');
             if (!u.updateAvailable) return 'Актуально\n' + (u.currentSha || '');
             return 'Текущий: ' + (u.currentSha || '') + '\nНа main: ' + (u.latestSha || '');
         });

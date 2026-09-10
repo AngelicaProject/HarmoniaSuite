@@ -24,6 +24,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
@@ -47,6 +48,7 @@ public class UpdateService {
     private static final int FAILURE_TAIL_LINES = 20;
     private static final int FAILURE_TAIL_CHARS = 4096;
     private static final int HTTP_BODY_CHARS = 4096;
+    private static final Object GIT_STATUS_LOCK = new Object();
     private static final Logger logger = LoggerFactory.getLogger(UpdateService.class);
 
     private final HarmoniaProperties properties;
@@ -62,9 +64,9 @@ public class UpdateService {
         String version = AppVersion.resolve(properties.getApp().getVersion(), "dev");
         map.put("version", version);
         String gitBin = probeGit();
-        Path root = gitBin != null ? repoRoot(gitBin) : repoRootFs();
+        Path root = resolveRoot(gitBin);
         if (root == null) {
-            map.put("supported", false);
+            markUnsupported(map, "Исходники приложения не найдены");
             return map;
         }
         gitStatus(root, gitBin, map);
@@ -73,10 +75,7 @@ public class UpdateService {
 
     public void runUpdate(Consumer<String> log) throws Exception {
         String gitBin = ensureGit(log, objectMapper);
-        Path root = repoRoot(gitBin);
-        if (root == null) {
-            root = repoRootFs();
-        }
+        Path root = resolveRoot(gitBin);
         if (root == null) {
             throw new HarmoniaSuiteBadRequestException("Обновление недоступно: нет исходников");
         }
@@ -111,6 +110,25 @@ public class UpdateService {
 
     static String scrub(String value) {
         return ScrubSupport.scrub(value);
+    }
+
+    @SafeVarargs
+    static <T> T firstAvailable(Supplier<T>... candidates) {
+        for (Supplier<T> candidate : candidates) {
+            T value = candidate.get();
+            if (value != null) {
+                return value;
+            }
+        }
+        return null;
+    }
+
+    static String unavailableReason(String detail) {
+        String scrubbed = scrub(detail);
+        if (scrubbed == null || scrubbed.isBlank()) {
+            return "Причина недоступности обновлений не определена";
+        }
+        return scrubbed.strip();
     }
 
     static String formatFailure(List<String> command, int code, List<String> lines) {
@@ -234,17 +252,25 @@ public class UpdateService {
             int behind = 0;
             List<String> subjects = List.of();
             if (!latest.equals(current)) {
-                exec(root, List.of(gitBin, "fetch", "--quiet", up[0], up[1]));
-                behind = Integer.parseInt(out(root, gitBin, "rev-list", "--count", "HEAD..FETCH_HEAD"));
-                subjects = subjects(root, gitBin);
+                synchronized (GIT_STATUS_LOCK) {
+                    exec(root, List.of(gitBin, "fetch", "--quiet", up[0], up[1]));
+                    behind = Integer.parseInt(out(root, gitBin, "rev-list", "--count", "HEAD..FETCH_HEAD"));
+                    subjects = subjects(root, gitBin);
+                }
             }
             map.put("behindBy", behind);
             map.put("subjects", subjects);
             map.put("updateAvailable", behind > 0);
         } catch (Exception e) {
-            map.put("supported", false);
-            map.put("reason", e.getMessage());
+            markUnsupported(map, e.getMessage() == null ? e.toString() : e.getMessage());
         }
+    }
+
+    private static void markUnsupported(Map<String, Object> map, String detail) {
+        String reason = unavailableReason(detail);
+        map.put("supported", false);
+        map.put("reason", reason);
+        logger.warn("Обновления недоступны: {}", scrub(reason));
     }
 
     static List<String> buildCommand(Path root) {
@@ -725,6 +751,13 @@ public class UpdateService {
 
     private static boolean isWindows() {
         return System.getProperty("os.name", "").toLowerCase().contains("win");
+    }
+
+    private static Path resolveRoot(String gitBin) {
+        if (gitBin != null) {
+            return firstAvailable(() -> repoRoot(gitBin), UpdateService::repoRootFs);
+        }
+        return firstAvailable(UpdateService::repoRootFs);
     }
 
     private static Path repoRoot(String gitBin) {

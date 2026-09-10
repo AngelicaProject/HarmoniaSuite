@@ -160,4 +160,47 @@ class UpdateServiceTest {
         assertTrue(huge.length() < 4200);
         assertEquals("git pull: код 1", UpdateService.formatFailure("git pull", 1, List.of()));
     }
+
+    @Test
+    @DisplayName("root candidates stop at the first available result")
+    void selectsFirstAvailableRoot() {
+        List<String> attempts = new ArrayList<>();
+        assertEquals("filesystem", UpdateService.firstAvailable(
+                () -> {
+                    attempts.add("git");
+                    return null;
+                },
+                () -> {
+                    attempts.add("filesystem");
+                    return "filesystem";
+                },
+                () -> {
+                    attempts.add("unexpected");
+                    return "unexpected";
+                }));
+        assertEquals(List.of("git", "filesystem"), attempts);
+
+        attempts.clear();
+        assertEquals("git", UpdateService.firstAvailable(
+                () -> {
+                    attempts.add("git");
+                    return "git";
+                },
+                () -> {
+                    attempts.add("filesystem");
+                    return "filesystem";
+                }));
+        assertEquals(List.of("git"), attempts);
+    }
+
+    @Test
+    @DisplayName("unavailable reason is non-empty and scrubbed")
+    void buildsUnavailableReason() {
+        assertEquals("Исходники приложения не найдены",
+                UpdateService.unavailableReason("Исходники приложения не найдены"));
+        assertEquals("Причина недоступности обновлений не определена",
+                UpdateService.unavailableReason("  "));
+        assertEquals("https://***@example.com/path",
+                UpdateService.unavailableReason("https://user:pass@example.com/path"));
+    }
 }
