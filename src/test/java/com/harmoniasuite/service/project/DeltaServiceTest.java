@@ -92,9 +92,9 @@ class DeltaServiceTest {
 
     private void translateAll() {
         delta.importDelta(projectId, request(List.of(
-                row(EntryIds.ofCell("a.csv", "10", 1), "a.csv", "Hello", "Привет", "needs_human_review"),
-                row(EntryIds.ofCell("a.csv", "11", 1), "a.csv", "Bye", "Пока", "needs_human_review"),
-                row(EntryIds.ofCell("b.csv", "10", 1), "b.csv", "Morning", "Утро", "needs_human_review"))));
+                row(EntryIds.ofCell("a.csv", "10", 1), "a.csv", "Hello", "Привет", "human_reviewed"),
+                row(EntryIds.ofCell("a.csv", "11", 1), "a.csv", "Bye", "Пока", "human_reviewed"),
+                row(EntryIds.ofCell("b.csv", "10", 1), "b.csv", "Morning", "Утро", "human_reviewed"))));
     }
 
     @Test
@@ -151,7 +151,7 @@ class DeltaServiceTest {
     void previewCountsWithoutWriting() {
         String cell = EntryIds.ofCell("a.csv", "10", 1);
         DeltaImportResultDto result = delta.preview(projectId,
-                request(List.of(row(cell, "a.csv", "Hello", "Привет", "needs_human_review"))));
+                request(List.of(row(cell, "a.csv", "Hello", "Привет", "human_reviewed"))));
         assertEquals(1, result.applied());
         assertEquals("", entryRepository.findByCells(projectId, List.of(cell)).get(cell).getTranslation());
         assertEquals(0, projectRepository.summarize(projectId).translated());
@@ -162,7 +162,7 @@ class DeltaServiceTest {
     void importAppliesCleanRows() {
         String cell = EntryIds.ofCell("a.csv", "10", 1);
         DeltaImportResultDto result = delta.importDelta(projectId,
-                request(List.of(row(cell, "a.csv", "Hello", "Привет", "needs_human_review"))));
+                request(List.of(row(cell, "a.csv", "Hello", "Привет", "human_reviewed"))));
         assertEquals(1, result.applied());
         assertEquals(0, result.noop());
         assertTrue(result.skipped().isEmpty());
@@ -177,7 +177,7 @@ class DeltaServiceTest {
     @DisplayName("reimporting the same delta is a noop")
     void reimportSameDeltaGivesNoop() {
         String cell = EntryIds.ofCell("a.csv", "10", 1);
-        DeltaImportRequest req = request(List.of(row(cell, "a.csv", "Hello", "Привет", "needs_human_review")));
+        DeltaImportRequest req = request(List.of(row(cell, "a.csv", "Hello", "Привет", "human_reviewed")));
         delta.importDelta(projectId, req);
         DeltaImportResultDto again = delta.importDelta(projectId, req);
         assertEquals(0, again.applied());
@@ -190,7 +190,7 @@ class DeltaServiceTest {
         String cell = EntryIds.ofCell("a.csv", "10", 1);
         DeltaImportRequest req = new DeltaImportRequest("Author One",
                 null, null, "fp-other", null,
-                List.of(row(cell, "a.csv", "Hello", "Привет", "needs_human_review")));
+                List.of(row(cell, "a.csv", "Hello", "Привет", "human_reviewed")));
         assertThrows(HarmoniaSuiteBadRequestException.class, () -> delta.importDelta(projectId, req));
         assertEquals("", entryRepository.findByCells(projectId, List.of(cell)).get(cell).getTranslation());
     }
@@ -200,7 +200,7 @@ class DeltaServiceTest {
     void sourceMismatchGoesToSkipped() {
         String cell = EntryIds.ofCell("a.csv", "10", 1);
         DeltaImportResultDto result = delta.importDelta(projectId,
-                request(List.of(row(cell, "a.csv", "Hello?", "Привет", "needs_human_review"))));
+                request(List.of(row(cell, "a.csv", "Hello?", "Привет", "human_reviewed"))));
         assertEquals(0, result.applied());
         assertEquals(1, result.skipped().size());
         assertEquals("source_mismatch", result.skipped().get(0).reason());
@@ -212,9 +212,9 @@ class DeltaServiceTest {
     void humanOverwriteGivesConflictWithoutOverwrite() {
         String cell = EntryIds.ofCell("a.csv", "10", 1);
         delta.importDelta(projectId,
-                request(List.of(row(cell, "a.csv", "Hello", "Привет", "needs_human_review"))));
+                request(List.of(row(cell, "a.csv", "Hello", "Привет", "human_reviewed"))));
         DeltaImportResultDto result = delta.importDelta(projectId,
-                request(List.of(row(cell, "a.csv", "Hello", "Пока", "needs_human_review"))));
+                request(List.of(row(cell, "a.csv", "Hello", "Пока", "human_reviewed"))));
         assertEquals(0, result.applied());
         assertEquals(1, result.conflicts().size());
         assertEquals(cell, result.conflicts().get(0).cellId());
@@ -228,7 +228,7 @@ class DeltaServiceTest {
         String cell = EntryIds.ofCell("b.csv", "10", 1);
         DeltaImportRequest req = new DeltaImportRequest("Author One",
                 List.of("a.csv"), null, "fp-one", null,
-                List.of(row(cell, "b.csv", "Morning", "Утро", "needs_human_review")));
+                List.of(row(cell, "b.csv", "Morning", "Утро", "human_reviewed")));
         DeltaImportResultDto result = delta.importDelta(projectId, req);
         assertEquals(0, result.applied());
         assertEquals("not_assigned", result.skipped().get(0).reason());

@@ -86,7 +86,7 @@ export default {
         {value: 'no_translation_required', label: 'Не требует перевода'},
         {value: 'machine_translated', label: 'Машинный перевод'},
         {value: 'stale', label: 'Устарело'},
-        {value: 'needs_human_review', label: 'На проверке'},
+        {value: 'human_reviewed', label: 'Проверено человеком'},
         {value: 'approved', label: 'Одобрено'}
       ];
     }
@@ -113,7 +113,7 @@ export default {
   methods: {
     esc(s) { return String(s).replace(/[&<>]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;'}[c])); },
     statusLabel(v) { const o = this.statusOptions.find(o => o.value === v); return o ? o.label : v; },
-    statusDot(v) { return {approved: 'ok', needs_human_review: 'info', machine_translated: 'warn', stale: 'bad'}[v] || 'mut'; },
+    statusDot(v) { return {approved: 'ok', human_reviewed: 'info', machine_translated: 'warn', stale: 'bad'}[v] || 'mut'; },
     closeStatusOutside(e) {
       if (this.statusOpen && e.target && e.target.closest && !e.target.closest('.st-wrap')) this.statusOpen = false;
     },
@@ -381,7 +381,7 @@ export default {
       if (this.tagIssues.length) return;
       if (this.translation !== (this.current.translation || '')
         || this.status !== (this.current.status || 'untranslated')) {
-        if ((this.translation || '').trim() && (this.status === 'untranslated' || this.status === 'no_translation_required')) this.status = 'needs_human_review';
+        if ((this.translation || '').trim() && (this.status === 'untranslated' || this.status === 'no_translation_required')) this.status = 'human_reviewed';
       } else if (next) {
         this.nextUntranslated();
         return;

@@ -60,7 +60,7 @@ class ProjectServiceTagsTest {
 
         var error = assertThrows(IllegalArgumentException.class, () ->
                 fixture.projects().updateEntry(fixture.projectId(), fixture.entryId(),
-                        "Дарует <colortype(506>Бред<br>", "needs_human_review"));
+                        "Дарует <colortype(506>Бред<br>", "human_reviewed"));
         assertEquals(true, error.getMessage().contains("Битые теги"));
     }
 
@@ -71,7 +71,7 @@ class ProjectServiceTagsTest {
         Fixture fixture = seed(tmp, dbDir, "Grants <colortype(506)>Delirium<br>");
 
         var ok = fixture.projects().updateEntry(fixture.projectId(), fixture.entryId(),
-                "Дарует Бред<br>", "needs_human_review");
+                "Дарует Бред<br>", "human_reviewed");
         assertEquals(true, ok.ok());
         assertEquals(1, ok.warnings().size());
         assertEquals(true, ok.warnings().get(0).contains("нет тега <colortype(506)> из оригинала"));
@@ -83,7 +83,7 @@ class ProjectServiceTagsTest {
         Fixture fixture = seed(tmp, dbDir, "Grants <colortype(506)>Delirium<br>");
 
         var ok = fixture.projects().updateEntry(fixture.projectId(), fixture.entryId(),
-                "Дарует <colortype(506)>Бред<br>", "needs_human_review");
+                "Дарует <colortype(506)>Бред<br>", "human_reviewed");
         assertEquals(true, ok.ok());
     }
 }
