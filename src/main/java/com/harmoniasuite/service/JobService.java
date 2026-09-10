@@ -5,6 +5,7 @@ import com.harmoniasuite.domain.JobState;
 import com.harmoniasuite.dto.JobDto;
 import com.harmoniasuite.dto.RunRequest;
 import com.harmoniasuite.exception.HarmoniaSuiteBadRequestException;
+import com.harmoniasuite.exception.UpdateException;
 import com.harmoniasuite.repository.JobRepository;
 import com.harmoniasuite.repository.ProjectRepository;
 import com.harmoniasuite.service.job.JobHandler;
@@ -16,7 +17,8 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Future;
+import java.util.concurrent.FutureTask;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
 import java.util.function.Consumer;
@@ -34,7 +36,7 @@ public class JobService {
     private final WorkspacePaths workspace;
     private final List<JobHandler> handlers;
     private final SourceService sources;
-    private final ConcurrentHashMap<String, CompletableFuture<?>> running = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, Future<?>> running = new ConcurrentHashMap<>();
 
     public JobService(JobRepository jobs, ProjectRepository projectRepository,
             @Qualifier("jobExecutor") Executor jobExecutor,
@@ -80,7 +82,20 @@ public class JobService {
         String jobId = UUID.randomUUID().toString().replace("-", "");
         JobState job = new JobState(jobId, request.action());
         jobs.put(job);
-        running.put(jobId, CompletableFuture.runAsync(() -> run(job, handler, request, paths), jobExecutor));
+        FutureTask<Void> task = new FutureTask<>(() -> {
+            run(job, handler, request, paths);
+            return null;
+        });
+        running.put(jobId, task);
+        try {
+            jobExecutor.execute(task);
+        } catch (RuntimeException e) {
+            running.remove(jobId);
+            job.setCode(1);
+            job.setStatus("failed");
+            job.append(e.getMessage() == null ? e.toString() : e.getMessage());
+            throw e;
+        }
         return toDto(job);
     }
 
@@ -100,7 +115,7 @@ public class JobService {
         if ("running".equals(job.getStatus()) || "queued".equals(job.getStatus())) {
             job.setStatus("cancelled");
             job.append("Отмена запрошена…");
-            CompletableFuture<?> future = running.get(id);
+            Future<?> future = running.get(id);
             if (future != null) {
                 future.cancel(true);
                 running.remove(id);
@@ -128,8 +143,14 @@ public class JobService {
             if ("cancelled".equals(job.getStatus())) {
                 return;
             }
-            logger.error("job {} ({}) failed", job.getId(), job.getAction(), e);
-            job.append(e.getMessage() == null ? e.toString() : e.getMessage());
+            if (e instanceof UpdateException updateFailure) {
+                logger.error("job {} ({}) failed [{}]: {}", job.getId(), job.getAction(),
+                        updateFailure.code(), updateFailure.diagnosticMessage());
+                job.append(updateFailure.getMessage());
+            } else {
+                logger.error("job {} ({}) failed", job.getId(), job.getAction(), e);
+                job.append(e.getMessage() == null ? e.toString() : e.getMessage());
+            }
             job.setCode(1);
             job.setStatus("failed");
         } finally {

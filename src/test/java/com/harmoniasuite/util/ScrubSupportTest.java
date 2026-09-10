@@ -37,4 +37,12 @@ class ScrubSupportTest {
                 ScrubSupport.scrub("C:\\Program Files\\app\\app.log"));
         assertEquals("/opt/data/file", ScrubSupport.scrub("/opt/data/file"));
     }
+
+    @Test
+    @DisplayName("scrub masks bearer and query credentials")
+    void scrubsBearerAndQueryCredentials() {
+        assertEquals("Authorization: Bearer ***", ScrubSupport.scrub("Authorization: Bearer abc.def-token"));
+        assertEquals("https://example.com/api?access_token=***&page=2",
+                ScrubSupport.scrub("https://example.com/api?access_token=secret&page=2"));
+    }
 }

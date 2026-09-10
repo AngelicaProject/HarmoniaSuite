@@ -192,7 +192,7 @@ const App = {
             }
         }
         loadGeminiStatus();
-        const upd = ref({supported: false, mode: '', version: '', needsToolchain: false, currentSha: '', latestSha: '', behindBy: 0, subjects: [], updateAvailable: false});
+        const upd = ref({supported: false, mode: '', version: '', needsToolchain: false, currentSha: '', latestSha: '', behindBy: 0, subjects: [], updateAvailable: false, state: 'unavailable', reason: ''});
         const updModal = ref(false);
         const updRestarting = ref(false);
         const updRestartDead = ref(false);
@@ -206,11 +206,15 @@ const App = {
         const updLabel = computed(() => {
             const u = upd.value || {};
             const sha = (u.currentSha || '').slice(0, 7);
+            if (u.state === 'toolchain_required') return 'Компоненты обновления';
             if (u.updateAvailable) return 'v' + (u.version || 'dev') + ' (+' + u.behindBy + ') ' + sha;
             return 'v' + (u.version || 'dev') + ' · ' + sha;
         });
         const updTitle = computed(() => {
             const u = upd.value || {};
+            if (u.state === 'toolchain_required') return 'Для обновления потребуется один раз установить JDK и Git';
+            if (u.state === 'local_ahead') return 'Локальная версия новее origin/main\n' + (u.currentSha || '');
+            if (u.state === 'diverged') return 'История исходников расходится с origin/main\n' + (u.currentSha || '');
             if (!u.supported) return 'Обновления недоступны' + (u.reason ? '\n' + u.reason : '');
             if (!u.updateAvailable) return 'Актуально\n' + (u.currentSha || '');
             return 'Текущий: ' + (u.currentSha || '') + '\nНа main: ' + (u.latestSha || '');
@@ -797,7 +801,7 @@ const App = {
                 clearInterval(updWatch);
                 updWatch = null;
             }
-            job.value = {status: d.status || 'running', action: d.action, output: ''};
+            job.value = {id: d.id, status: d.status || 'running', action: d.action, output: ''};
             pollJob(d.id);
         }
 
@@ -1932,11 +1936,11 @@ const App = {
   <footer class="statusbar" v-if="!showPicker">
     <span class="sb-item sb-proj" :title="projectId">{{projectName||projectId||'—'}}</span>
     <span class="sb-item sb-badge" @click="gotoView('summary')" title="Сводка">{{badge}}</span>
-    <span v-if="job" class="sb-item">{{ {extract:'Обновление',gemini:'Gemini',openrouter:'OpenRouter',merge:'Сборка','sync-sources':'Синхронизация',update:'Апдейт'}[job.action]||job.action }}: {{job.status==='running'?'…':job.status==='queued'?'в очереди':job.status }}</span>
+    <span v-if="job" class="sb-item">{{ {extract:'Обновление',gemini:'Gemini',openrouter:'OpenRouter',merge:'Сборка','sync-sources':'Синхронизация',update:'Обновление'}[job.action]||job.action }}: {{job.status==='running'?'…':job.status==='queued'?'в очереди':job.status }}</span>
     <span class="sb-item" @click="openSettings('sources')" :title="(sourceStatus.activeRoot||'')+' — настроить источники'"><span class="status-dot" :class="sourceStatus.ready?'on':'off'"></span>{{sourceLabel}}</span>
     <span class="grow"></span>
     <span class="sb-item sb-ai" @click="openSettings('ai')" :title="aiTitle"><span class="status-dot" :class="geminiStatus.configured?'on':'off'"></span>Gemini<span class="sb-sep">·</span><span class="status-dot" :class="geminiStatus.openrouterConfigured?'on':'off'"></span>OpenRouter</span>
-    <span v-if="upd.supported||upd.version" class="sb-item sb-upd" :class="{'sb-warn':upd.updateAvailable}" @click="upd.updateAvailable||upd.needsToolchain?updModal=true:loadUpdateStatus()" :title="updTitle">{{updLabel}}</span>
+    <span v-if="upd.supported||upd.version" class="sb-item sb-upd" :class="{'sb-warn':upd.updateAvailable}" @click="upd.updateAvailable||upd.needsToolchain||['local_ahead','diverged','check_failed'].includes(upd.state)?updModal=true:loadUpdateStatus()" :title="updTitle">{{updLabel}}</span>
   </footer>
 
   <div v-if="paletteOpen" class="overlay" @click.self="paletteOpen=false">
@@ -1955,16 +1959,20 @@ const App = {
   <div v-if="ctxMenu" class="dz-menu" style="position:fixed;z-index:302;bottom:auto" :style="{left:ctxMenu.x+'px',top:ctxMenu.y+'px'}"><div v-for="(it,i) in ctxMenu.items" :key="i" class="dz-menu-i" :class="{sel:it.sel}" @click="runCtx(it)">{{it.t}}</div></div>
   <div v-if="updModal" class="overlay" @click.self="updModal=false">
     <div class="modal upd-modal">
-      <div class="upd-title">{{updateFailed?'Обновление не выполнено':'Доступно новое обновление'}}</div>
+      <div class="upd-title">{{updateFailed?'Обновление не выполнено':upd.state==='local_ahead'?'Локальная версия новее':upd.state==='diverged'?'История исходников расходится':upd.state==='check_failed'?'Проверка обновления не выполнена':'Доступно новое обновление'}}</div>
       <template v-if="updateFailed">
         <div class="muted">Причина записана в журнал приложения. Скопируйте хвост журнала для диагностики.</div>
         <div class="set-actions"><button class="primary" @click="copyUpdateLog" :disabled="updLogBusy">{{updLogBusy?'Копирование…':'Скопировать журнал'}}</button><button class="ghost" @click="updModal=false">Закрыть</button></div>
       </template>
+      <template v-else-if="['local_ahead','diverged','check_failed'].includes(upd.state)">
+        <div class="muted">{{upd.reason || 'Обновление сейчас недоступно'}}</div>
+        <div class="set-actions"><button class="ghost" @click="updModal=false">Закрыть</button></div>
+      </template>
       <template v-else>
-        <div v-if="upd.needsToolchain" class="muted">Для обновления докачается тулчейн (JDK + git, ~250 МБ, один раз)</div>
+        <div v-if="upd.needsToolchain" class="muted">Для обновления один раз установятся JDK и Git (около 250 МБ)</div>
         <div v-if="!upd.needsToolchain" class="muted">v{{upd.version}} · {{(upd.currentSha||'').slice(0,7)}} → {{(upd.latestSha||'').slice(0,7)}} · коммитов: {{upd.behindBy}}</div>
         <template v-if="!upd.needsToolchain">
-        <div class="upd-sec">IN THIS UPDATE</div>
+        <div class="upd-sec">В ЭТОМ ОБНОВЛЕНИИ</div>
         <ul class="upd-list"><li v-for="(s,i) in (upd.subjects||[])" :key="i">{{s}}</li></ul>
         <div v-if="upd.behindBy>(upd.subjects||[]).length" class="muted">+ ещё {{upd.behindBy-(upd.subjects||[]).length}} изменений</div>
         </template>
@@ -1972,7 +1980,7 @@ const App = {
       </template>
     </div>
   </div>
-  <div v-if="updRestarting" class="overlay"><div class="modal upd-modal"><div class="upd-title">Перезапуск…</div><div class="muted">Новая версия поднимается — страница обновится сама</div><div v-if="updRestartDead" class="muted">Не поднялось за 2 минуты — запусти приложение вручную</div></div></div>
+  <div v-if="updRestarting" class="overlay"><div class="modal upd-modal"><div class="upd-title">Перезапуск…</div><div class="muted">Новая версия запускается — страница обновится сама</div><div v-if="updRestartDead" class="muted">Не удалось запустить новую версию за 2 минуты — запусти приложение вручную</div></div></div>
   <div v-if="toast" class="toast">{{toast}}</div>`
 };
 const app = createApp(App);

@@ -20,7 +20,7 @@ public class UpdateJobHandler implements JobHandler {
     }
 
     @Override
-    public void execute(RunRequest request, JobPaths paths, Consumer<String> log) throws Exception {
+    public void execute(RunRequest request, JobPaths paths, Consumer<String> log) {
         updateService.runUpdate(log);
     }
 }

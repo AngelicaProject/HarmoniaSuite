@@ -2,9 +2,9 @@ package com.harmoniasuite.controller;
 
 import com.harmoniasuite.dto.JobDto;
 import com.harmoniasuite.dto.RunRequest;
+import com.harmoniasuite.dto.UpdateStatusDto;
 import com.harmoniasuite.service.JobService;
 import com.harmoniasuite.service.UpdateService;
-import java.util.Map;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -23,7 +23,7 @@ public class UpdateController {
     }
 
     @GetMapping("/api/update/status")
-    public Map<String, Object> status() {
+    public UpdateStatusDto status() {
         return updateService.status();
     }
 

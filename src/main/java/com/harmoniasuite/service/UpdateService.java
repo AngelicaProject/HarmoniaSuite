@@ -4,11 +4,12 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.harmoniasuite.config.AppVersion;
 import com.harmoniasuite.config.HarmoniaProperties;
 import com.harmoniasuite.config.InstallLayout;
-import com.harmoniasuite.exception.HarmoniaSuiteBadRequestException;
-import com.harmoniasuite.util.ScrubSupport;
+import com.harmoniasuite.dto.UpdateState;
+import com.harmoniasuite.dto.UpdateStatusDto;
+import com.harmoniasuite.exception.UpdateErrorCode;
+import com.harmoniasuite.exception.UpdateException;
 import java.io.BufferedReader;
 import java.io.IOException;
-import java.io.InputStreamReader;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -20,9 +21,9 @@ import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
 import java.time.Duration;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 import java.util.regex.Matcher;
@@ -36,21 +37,38 @@ import org.springframework.stereotype.Service;
 @Service
 public class UpdateService {
 
-    private static final String REMOTE = "origin";
-    private static final String BRANCH = "main";
+    private static final String UPDATE_REMOTE = "origin";
+    private static final String UPDATE_BRANCH = "main";
     private static final int MAX_SUBJECTS = 10;
-    private static final String BUILT_JAR = "harmonia-suite.jar";
     private static final String MINGIT_RELEASES_URL =
             "https://api.github.com/repos/git-for-windows/git/releases/latest";
     private static final String TEMURIN_URL =
             "https://api.adoptium.net/v3/binary/latest/21/ga/windows/x64/jdk/hotspot/normal/eclipse";
+    private static final Set<String> DOWNLOAD_HOSTS = Set.of(
+            "api.github.com", "github.com", "objects.githubusercontent.com",
+            "release-assets.githubusercontent.com", "api.adoptium.net");
     private static final Pattern JAVAC_VERSION = Pattern.compile("javac (\\d+)");
-    private static final int FAILURE_TAIL_LINES = 20;
-    private static final int FAILURE_TAIL_CHARS = 4096;
     private static final int HTTP_BODY_CHARS = 4096;
-    private static final Object GIT_STATUS_LOCK = new Object();
     private static final Logger logger = LoggerFactory.getLogger(UpdateService.class);
 
+    private enum UpdatePhase {
+        PULL("получение исходников", UpdateErrorCode.PULL_FAILED),
+        BUILD("сборка", UpdateErrorCode.BUILD_FAILED);
+
+        private final String label;
+        private final UpdateErrorCode errorCode;
+
+        UpdatePhase(String label, UpdateErrorCode errorCode) {
+            this.label = label;
+            this.errorCode = errorCode;
+        }
+    }
+
+    private record UpdatePlan(Path root, String gitBin, String javaHome,
+            String current, String latest, int behind, int ahead) {
+    }
+
+    private final UpdateCoordinator coordinator = new UpdateCoordinator();
     private final HarmoniaProperties properties;
     private final ObjectMapper objectMapper;
 
@@ -59,25 +77,36 @@ public class UpdateService {
         this.objectMapper = objectMapper;
     }
 
-    public Map<String, Object> status() {
-        Map<String, Object> map = new LinkedHashMap<>();
+    public UpdateStatusDto status() {
+        return coordinator.read(this::statusLocked);
+    }
+
+    private UpdateStatusDto statusLocked() {
         String version = AppVersion.resolve(properties.getApp().getVersion(), "dev");
-        map.put("version", version);
         String gitBin = probeGit();
         Path root = resolveRoot(gitBin);
         if (root == null) {
-            markUnsupported(map, "Исходники приложения не найдены");
-            return map;
+            return unavailableStatus(version, null, UpdateState.UNAVAILABLE,
+                    new UpdateException(UpdateErrorCode.SOURCES_NOT_FOUND));
         }
-        gitStatus(root, gitBin, map);
-        return map;
+        if (gitBin == null || probeJavaHome() == null) {
+            String mode = launchMode(System.getProperty("java.class.path", ""));
+            return new UpdateStatusDto(version, true, mode, true,
+                    null, null, null, null, false, UpdateState.TOOLCHAIN_REQUIRED,
+                    UpdateState.TOOLCHAIN_REQUIRED.message());
+        }
+        return gitStatus(version, root, gitBin);
     }
 
-    public void runUpdate(Consumer<String> log) throws Exception {
+    public void runUpdate(Consumer<String> log) {
+        coordinator.run(() -> runUpdateLocked(log));
+    }
+
+    private void runUpdateLocked(Consumer<String> log) {
         String gitBin = ensureGit(log, objectMapper);
         Path root = resolveRoot(gitBin);
         if (root == null) {
-            throw new HarmoniaSuiteBadRequestException("Обновление недоступно: нет исходников");
+            throw new UpdateException(UpdateErrorCode.SOURCES_NOT_FOUND);
         }
         runGitUpdate(root, log, gitBin, ensureJava(log));
     }
@@ -90,6 +119,19 @@ public class UpdateService {
         return parts.length > 0 ? parts[0] : "";
     }
 
+    static UpdateState historyState(int behind, int ahead) {
+        if (behind > 0 && ahead == 0) {
+            return UpdateState.UPDATE_AVAILABLE;
+        }
+        if (behind == 0 && ahead > 0) {
+            return UpdateState.LOCAL_AHEAD;
+        }
+        if (behind > 0) {
+            return UpdateState.DIVERGED;
+        }
+        return UpdateState.UP_TO_DATE;
+    }
+
     static String shortSha(String sha) {
         if (sha == null) {
             return "";
@@ -98,7 +140,7 @@ public class UpdateService {
     }
 
     static String launchMode(String classPath) {
-        return classPath != null && classPath.contains("target/classes") ? "dev" : "jar";
+        return UpdateRelaunch.launchMode(classPath);
     }
 
     public static String resolveCommit(String raw) {
@@ -109,7 +151,7 @@ public class UpdateService {
     }
 
     static String scrub(String value) {
-        return ScrubSupport.scrub(value);
+        return UpdateProcess.scrub(value);
     }
 
     @SafeVarargs
@@ -123,43 +165,12 @@ public class UpdateService {
         return null;
     }
 
-    static String unavailableReason(String detail) {
-        String scrubbed = scrub(detail);
-        if (scrubbed == null || scrubbed.isBlank()) {
-            return "Причина недоступности обновлений не определена";
-        }
-        return scrubbed.strip();
-    }
-
     static String formatFailure(List<String> command, int code, List<String> lines) {
-        String cmd = command == null ? "" : String.join(" ", command);
-        return formatFailure(cmd, code, lines);
+        return UpdateProcess.formatFailure(command, code, lines);
     }
 
     static String formatFailure(String command, int code, List<String> lines) {
-        String prefix = scrub(command == null ? "" : command) + ": код " + code;
-        if (lines == null || lines.isEmpty()) {
-            return prefix;
-        }
-        StringBuilder tail = new StringBuilder();
-        int start = Math.max(0, lines.size() - FAILURE_TAIL_LINES);
-        for (int i = start; i < lines.size(); i++) {
-            String line = scrub(lines.get(i));
-            if (line == null) {
-                continue;
-            }
-            if (tail.length() > 0) {
-                tail.append('\n');
-            }
-            tail.append(line);
-        }
-        if (tail.length() == 0) {
-            return prefix;
-        }
-        if (tail.length() > FAILURE_TAIL_CHARS) {
-            tail.delete(0, tail.length() - FAILURE_TAIL_CHARS);
-        }
-        return prefix + ": " + tail;
+        return UpdateProcess.formatFailure(command, code, lines);
     }
 
     static String pickMinGitUrl(List<Map<String, String>> assets) {
@@ -193,137 +204,168 @@ public class UpdateService {
     }
 
     static List<String> relaunchCommand(Path root) {
-        ProcessHandle.Info info = ProcessHandle.current().info();
-        String javaBin = info.command().orElse(defaultJavaBin());
-        List<String> args = new ArrayList<>(info.arguments().map(List::of).orElse(List.of()));
-        return relaunchCommand(root, javaBin, args, bundledRuntimeJava());
+        return UpdateRelaunch.relaunchCommand(root);
     }
 
     static List<String> relaunchCommand(Path root, String javaBin, List<String> args, Path runtimeJava) {
-        Path builtJar = root.resolve("target").resolve(BUILT_JAR);
-        int jarFlag = args.indexOf("-jar");
-        if (jarFlag >= 0) {
-            List<String> command = new ArrayList<>();
-            command.add(javaBin);
-            command.addAll(args.subList(0, jarFlag));
-            command.add("-jar");
-            command.add(builtJar.toString());
-            if (jarFlag + 2 <= args.size()) {
-                command.addAll(args.subList(jarFlag + 2, args.size()));
-            }
-            return command;
-        }
-        if (runtimeJava != null) {
-            List<String> command = new ArrayList<>();
-            command.add(runtimeJava.toString());
-            command.add("-jar");
-            command.add(builtJar.toString());
-            command.addAll(args);
-            return command;
-        }
-        List<String> command = new ArrayList<>();
-        command.add(javaBin);
-        command.addAll(args);
-        return command;
+        return UpdateRelaunch.relaunchCommand(root, javaBin, args, runtimeJava);
     }
 
-    private static String defaultJavaBin() {
-        return Paths.get(System.getProperty("java.home"), "bin",
-                isWindows() ? "java.exe" : "java").toString();
-    }
-
-    private void gitStatus(Path root, String gitBin, Map<String, Object> map) {
-        map.put("supported", true);
-        map.put("mode", launchMode(System.getProperty("java.class.path", "")));
+    private UpdateStatusDto gitStatus(String version, Path root, String gitBin) {
+        String mode = launchMode(System.getProperty("java.class.path", ""));
         if (gitBin == null) {
-            map.put("needsToolchain", true);
-            map.put("updateAvailable", false);
-            return;
+            return new UpdateStatusDto(version, true, mode, true,
+                    null, null, null, null, false, UpdateState.TOOLCHAIN_REQUIRED,
+                    UpdateState.TOOLCHAIN_REQUIRED.message());
         }
         try {
-            String current = out(root, gitBin, "rev-parse", "HEAD");
-            String[] up = upstream(root, gitBin);
-            String latest = parseLsRemote(out(root, gitBin, "ls-remote", up[0], up[1]));
+            String current = captureOutput(root, gitBin, "rev-parse", "HEAD");
+            runCommand(root, List.of(gitBin, "fetch", "--quiet", UPDATE_REMOTE, UPDATE_BRANCH));
+            String latest = captureOutput(root, gitBin, "rev-parse", "FETCH_HEAD");
             if (latest.isBlank()) {
-                throw new IOException("ветка не найдена");
+                throw new UpdateException(UpdateErrorCode.TARGET_NOT_FOUND);
             }
-            map.put("currentSha", current);
-            map.put("latestSha", latest);
-            int behind = 0;
-            List<String> subjects = List.of();
-            if (!latest.equals(current)) {
-                synchronized (GIT_STATUS_LOCK) {
-                    exec(root, List.of(gitBin, "fetch", "--quiet", up[0], up[1]));
-                    behind = Integer.parseInt(out(root, gitBin, "rev-list", "--count", "HEAD..FETCH_HEAD"));
-                    subjects = subjects(root, gitBin);
-                }
-            }
-            map.put("behindBy", behind);
-            map.put("subjects", subjects);
-            map.put("updateAvailable", behind > 0);
-        } catch (Exception e) {
-            markUnsupported(map, e.getMessage() == null ? e.toString() : e.getMessage());
+            int behind = latest.equals(current)
+                    ? 0 : gitDistance(root, gitBin, "HEAD..FETCH_HEAD");
+            int ahead = latest.equals(current)
+                    ? 0 : gitDistance(root, gitBin, "FETCH_HEAD..HEAD");
+            UpdateState state = historyState(behind, ahead);
+            List<String> subjects = behind > 0 ? subjects(root, gitBin) : List.of();
+            return new UpdateStatusDto(version, true, mode, null,
+                    current, latest, behind, subjects,
+                    state == UpdateState.UPDATE_AVAILABLE, state, state.message());
+        } catch (UpdateException | IOException | NumberFormatException e) {
+            UpdateException failure = e instanceof UpdateException updateException
+                    ? updateException
+                    : new UpdateException(UpdateErrorCode.STATUS_CHECK_FAILED, diagnosticDetail(e), e);
+            return unavailableStatus(version, mode, UpdateState.CHECK_FAILED, failure);
         }
     }
 
-    private static void markUnsupported(Map<String, Object> map, String detail) {
-        String reason = unavailableReason(detail);
-        map.put("supported", false);
-        map.put("reason", reason);
-        logger.warn("Обновления недоступны: {}", scrub(reason));
+    private static int gitDistance(Path root, String gitBin, String range) throws IOException {
+        return Integer.parseInt(captureOutput(root, gitBin, "rev-list", "--count", range));
+    }
+
+    private static UpdateStatusDto unavailableStatus(String version, String mode,
+            UpdateState state, UpdateException failure) {
+        if (state == UpdateState.CHECK_FAILED) {
+            logger.warn("Обновления недоступны [{}]: {}", failure.code(),
+                    scrub(failure.diagnosticMessage()));
+        } else {
+            logger.debug("Обновления недоступны [{}]: {}", failure.code(),
+                    scrub(failure.diagnosticMessage()));
+        }
+        return new UpdateStatusDto(version, false, mode, null,
+                null, null, null, null, null, state, failure.getMessage());
+    }
+
+    private static String diagnosticDetail(Throwable error) {
+        String message = error.getMessage();
+        return message == null || message.isBlank() ? error.toString() : scrub(message);
     }
 
     static List<String> buildCommand(Path root) {
         Path mvn = root.resolve(isWindows() ? "mvnw.cmd" : "mvnw");
-        return List.of(mvn.toString(), "-B", "-DskipTests", "package");
+        return List.of(mvn.toString(), "-B", "-DskipTests", "clean", "package");
     }
 
-    private void runGitUpdate(Path root, Consumer<String> log, String gitBin, String javaHome) throws Exception {
-        if (!out(root, log, gitBin, "status", "--porcelain").isBlank()) {
-            throw new HarmoniaSuiteBadRequestException("Обновление отменено: есть локальные изменения");
+    private void runGitUpdate(Path root, Consumer<String> log, String gitBin, String javaHome) {
+        try {
+            if (!captureOutput(root, log, gitBin, "status", "--porcelain").isBlank()) {
+                throw new UpdateException(UpdateErrorCode.WORKTREE_DIRTY);
+            }
+            UpdatePlan plan = prepareUpdate(root, log, gitBin, javaHome);
+            if (plan.current().isBlank()) {
+                throw new UpdateException(UpdateErrorCode.GIT_COMMAND_FAILED);
+            }
+            if (plan.latest().isBlank()) {
+                throw new UpdateException(UpdateErrorCode.TARGET_NOT_FOUND);
+            }
+            if (plan.ahead() > 0) {
+                throw new UpdateException(plan.behind() > 0
+                        ? UpdateErrorCode.HISTORY_DIVERGED : UpdateErrorCode.LOCAL_VERSION_AHEAD);
+            }
+            if (plan.latest().equals(plan.current())) {
+                log.accept("Уже актуально");
+                return;
+            }
+            log.accept("Получение версии " + shortSha(plan.latest()));
+            updateSourceAndBuild(plan, log);
+            relaunch(plan, log);
+        } catch (UpdateException e) {
+            throw e;
+        } catch (IOException e) {
+            throw new UpdateException(UpdateErrorCode.GIT_COMMAND_FAILED, diagnosticDetail(e), e);
         }
-        String current = out(root, log, gitBin, "rev-parse", "HEAD");
-        String[] up = upstream(root, gitBin, log);
-        String latest = parseLsRemote(out(root, log, gitBin, "ls-remote", up[0], up[1]));
-        if (latest.equals(current)) {
-            log.accept("Уже актуально");
-            return;
+    }
+
+    private UpdatePlan prepareUpdate(Path root, Consumer<String> log, String gitBin, String javaHome) {
+        try {
+            String current = captureOutput(root, log, gitBin, "rev-parse", "HEAD");
+            runCommand(root, List.of(gitBin, "fetch", "--quiet", UPDATE_REMOTE, UPDATE_BRANCH), log);
+            String latest = captureOutput(root, log, gitBin, "rev-parse", "FETCH_HEAD");
+            if (latest.isBlank()) {
+                return new UpdatePlan(root, gitBin, javaHome, current, latest, 0, 0);
+            }
+            int behind = latest.equals(current) ? 0 : gitDistance(root, gitBin, "HEAD..FETCH_HEAD");
+            int ahead = latest.equals(current) ? 0 : gitDistance(root, gitBin, "FETCH_HEAD..HEAD");
+            return new UpdatePlan(root, gitBin, javaHome, current, latest, behind, ahead);
+        } catch (IOException e) {
+            throw new UpdateException(UpdateErrorCode.GIT_COMMAND_FAILED, diagnosticDetail(e), e);
         }
-        log.accept("Тяну " + shortSha(latest));
-        String phase = "git pull";
+    }
+
+    private void updateSourceAndBuild(UpdatePlan plan, Consumer<String> log) {
+        UpdatePhase phase = UpdatePhase.PULL;
         List<String> phaseOutput = new ArrayList<>();
         try {
-            List<String> pullCommand = List.of(gitBin, "pull", "--ff-only", up[0], up[1]);
-            int code = run(root, pullCommand, line -> {
+            List<String> pullCommand = List.of(plan.gitBin(), "pull", "--ff-only",
+                    UPDATE_REMOTE, UPDATE_BRANCH);
+            int code = runProcess(plan.root(), pullCommand, line -> {
                 phaseOutput.add(line);
                 log.accept(line);
             });
             if (code != 0) {
-                throw new IOException(formatFailure(pullCommand, code, phaseOutput));
+                throw new UpdateException(phase.errorCode, formatFailure(pullCommand, code, phaseOutput));
             }
             log.accept("Сборка");
-            phase = "сборка";
+            phase = UpdatePhase.BUILD;
             phaseOutput.clear();
-            List<String> buildCommand = buildCommand(root);
-            code = run(root, buildCommand, line -> {
+            List<String> buildCommand = buildCommand(plan.root());
+            code = runProcess(plan.root(), buildCommand, line -> {
                 phaseOutput.add(line);
                 log.accept(line);
-            }, Map.of("JAVA_HOME", javaHome));
+            }, Map.of("JAVA_HOME", plan.javaHome()));
             if (code != 0) {
-                throw new IOException(formatFailure(buildCommand, code, phaseOutput));
+                throw new UpdateException(phase.errorCode, formatFailure(buildCommand, code, phaseOutput));
             }
-        } catch (Exception e) {
-            String fullOutput = String.join("\n", phaseOutput);
-            if (fullOutput.isBlank()) {
-                logger.error("Обновление: фаза {} завершилась ошибкой", phase, e);
-            } else {
-                logger.error("Обновление: фаза {} завершилась ошибкой; полный вывод:\n{}", phase, fullOutput, e);
-            }
-            rollback(root, log, gitBin, current, e);
+        } catch (UpdateException e) {
+            reportPhaseFailure(phase, phaseOutput, e);
+            rollback(plan.root(), log, plan.gitBin(), plan.current(), e);
             throw e;
+        } catch (IOException e) {
+            UpdateException failure = new UpdateException(phase.errorCode, diagnosticDetail(e), e);
+            reportPhaseFailure(phase, phaseOutput, failure);
+            rollback(plan.root(), log, plan.gitBin(), plan.current(), failure);
+            throw failure;
         }
+    }
+
+    private static void reportPhaseFailure(UpdatePhase phase, List<String> output,
+            UpdateException failure) {
+        String fullOutput = String.join("\n", output);
+        if (fullOutput.isBlank()) {
+            logger.error("Обновление: фаза {} завершилась ошибкой [{}]: {}",
+                    phase.label, failure.code(), failure.diagnosticMessage());
+        } else {
+            logger.error("Обновление: фаза {} завершилась ошибкой [{}]; полный вывод:\n{}",
+                    phase.label, failure.code(), fullOutput);
+        }
+    }
+
+    private void relaunch(UpdatePlan plan, Consumer<String> log) {
         if (!"jar".equals(launchMode(System.getProperty("java.class.path", "")))) {
-            log.accept("Готово. Перезапусти из IDEA (Stop+Run)");
+            log.accept("Готово. Перезапусти приложение из среды разработки");
             return;
         }
         Path relaunchScript = null;
@@ -331,126 +373,70 @@ public class UpdateService {
             Path exe = exeInstallPath();
             if (exe != null && InstallLayout.appDir() != null) {
                 relaunchScript = writeRelaunchVbs(ProcessHandle.current().pid(),
-                        root.resolve("target").resolve(BUILT_JAR),
-                        InstallLayout.appDir().resolve(BUILT_JAR), exe);
+                        UpdateRelaunch.builtJar(plan.root()),
+                        InstallLayout.appDir().resolve(UpdateRelaunch.BUILT_JAR), exe);
                 log.accept("Перезапуск");
                 wdetach(relaunchScript);
             } else {
-                relaunchScript = writeRelaunch(relaunchCommand(root));
+                relaunchScript = writeRelaunch(relaunchCommand(plan.root()));
                 log.accept("Перезапуск");
                 detach(relaunchScript);
             }
         } catch (Exception e) {
+            UpdateException failure = new UpdateException(UpdateErrorCode.RELAUNCH_FAILED,
+                    diagnosticDetail(e), e);
             if (relaunchScript != null) {
                 try {
                     Files.deleteIfExists(relaunchScript);
                 } catch (Exception cleanupFailure) {
-                    e.addSuppressed(cleanupFailure);
+                    failure.addSuppressed(cleanupFailure);
                     logger.warn("Не удалось удалить скрипт перезапуска: {}",
                             scrub(cleanupFailure.getMessage() == null
                                     ? cleanupFailure.toString() : cleanupFailure.getMessage()));
                 }
             }
-            String message = scrub(e.getMessage() == null ? e.toString() : e.getMessage());
-            log.accept("Перезапуск не удался: " + message);
-            logger.error("Перезапуск обновления не удался", e);
-            rollback(root, log, gitBin, current, e);
-            throw e;
+            log.accept(failure.getMessage());
+            logger.error("Перезапуск обновления не удался [{}]: {}",
+                    failure.code(), failure.diagnosticMessage());
+            rollback(plan.root(), log, plan.gitBin(), plan.current(), failure);
+            throw failure;
         }
         Runtime.getRuntime().halt(0);
     }
 
-    private void rollback(Path root, Consumer<String> log, String gitBin, String current, Exception original) {
+    private void rollback(Path root, Consumer<String> log, String gitBin, String current,
+            UpdateException original) {
         List<String> command = List.of(gitBin, "reset", "--hard", current);
         try {
             log.accept("Откат на " + shortSha(current));
             List<String> output = new ArrayList<>();
-            int code = run(root, command, line -> {
+            int code = runProcess(root, command, line -> {
                 output.add(line);
                 log.accept(line);
             });
             if (code != 0) {
                 throw new IOException(formatFailure(command, code, output));
             }
-        } catch (Exception resetFailure) {
-            String message = scrub(resetFailure.getMessage() == null
-                    ? resetFailure.toString() : resetFailure.getMessage());
-            log.accept("Откат не удался: " + message);
-            logger.error("Откат обновления не удался", resetFailure);
-            original.addSuppressed(resetFailure);
+        } catch (Exception e) {
+            UpdateException failure = new UpdateException(UpdateErrorCode.ROLLBACK_FAILED,
+                    diagnosticDetail(e), e);
+            log.accept(failure.getMessage());
+            logger.error("Откат обновления не удался [{}]: {}",
+                    failure.code(), failure.diagnosticMessage());
+            original.addSuppressed(failure);
         }
     }
 
     static Path exeInstallPath() {
-        String appPath = System.getProperty("jpackage.app-path");
-        if (appPath == null || appPath.isBlank()) {
-            return null;
-        }
-        try {
-            Path exe = Paths.get(appPath);
-            return Files.isRegularFile(exe) ? exe : null;
-        } catch (Exception e) {
-            return null;
-        }
+        return UpdateRelaunch.exeInstallPath();
     }
 
     static Path writeRelaunchVbs(long pid, Path built, Path appJar, Path exe) throws IOException {
-        String log = Paths.get(System.getProperty("java.io.tmpdir"))
-                .resolve("harmonia-relaunch.log").toString().replace("\"", "");
-        String nl = "\r\n";
-        String body = "On Error Resume Next" + nl
-                + "Set fso = CreateObject(\"Scripting.FileSystemObject\")" + nl
-                + "Set lg = fso.OpenTextFile(\"" + log + "\", 8, True)" + nl
-                + "lg.WriteLine Now & \" wait " + pid + "\"" + nl
-                + "Set wmi = GetObject(\"winmgmts:\\\\.\\root\\cimv2\")" + nl
-                + "For i = 1 To 120" + nl
-                + "  If wmi.ExecQuery(\"SELECT ProcessId FROM Win32_Process WHERE ProcessId="
-                + pid + "\").Count = 0 Then Exit For" + nl
-                + "  WScript.Sleep 1000" + nl
-                + "Next" + nl
-                + "lg.WriteLine Now & \" copy\"" + nl
-                + "fso.CopyFile \"" + built.toString().replace("\"", "") + "\", \""
-                + appJar.toString().replace("\"", "") + "\", True" + nl
-                + "For i = 1 To 10" + nl
-                + "  If Err.Number = 0 Then Exit For" + nl
-                + "  Err.Clear" + nl
-                + "  WScript.Sleep 1000" + nl
-                + "  fso.CopyFile \"" + built.toString().replace("\"", "") + "\", \""
-                + appJar.toString().replace("\"", "") + "\", True" + nl
-                + "Next" + nl
-                + "If Err.Number = 0 Then" + nl
-                + "  lg.WriteLine Now & \" start\"" + nl
-                + "  Set sh = CreateObject(\"WScript.Shell\")" + nl
-                + "  sh.Environment(\"PROCESS\")(\"HARMONIA_NO_BROWSER\") = \"1\"" + nl
-                + "  sh.Run \"\"\""
-                + exe.toString().replace("\"", "") + "\"\"\", 1, False" + nl
-                + "Else" + nl
-                + "  lg.WriteLine Now & \" copy failed\"" + nl
-                + "End If" + nl
-                + "lg.Close" + nl
-                + "fso.DeleteFile WScript.ScriptFullName" + nl;
-        Path script = Files.createTempFile("harmonia-update-", ".vbs");
-        // wscript без BOM читает .vbs как ANSI и портит не-ASCII пути
-        Files.write(script, ((char) 0xFEFF + body).getBytes(StandardCharsets.UTF_16LE));
-        return script;
+        return UpdateRelaunch.writeRelaunchVbs(pid, built, appJar, exe);
     }
 
     private static void wdetach(Path script) throws IOException {
-        new ProcessBuilder("wscript", "//Nologo", "//B", script.toString())
-                .redirectOutput(ProcessBuilder.Redirect.DISCARD)
-                .redirectError(ProcessBuilder.Redirect.DISCARD)
-                .redirectInput(ProcessBuilder.Redirect.INHERIT)
-                .start();
-    }
-
-    private static Path bundledRuntimeJava() {
-        Path app = InstallLayout.appDir();
-        if (app == null || app.getParent() == null) {
-            return null;
-        }
-        Path java = app.getParent().resolve("runtime").resolve("bin")
-                .resolve(isWindows() ? "java.exe" : "java");
-        return Files.isRegularFile(java) ? java : null;
+        UpdateRelaunch.wdetach(script);
     }
 
     private static String probeGit() {
@@ -463,7 +449,7 @@ public class UpdateService {
             return cached.toString();
         }
         try {
-            out(Paths.get(System.getProperty("user.dir")), "git", "--version");
+            captureOutput(Paths.get(System.getProperty("user.dir")), "git", "--version");
             return "git";
         } catch (Exception e) {
             return null;
@@ -491,75 +477,112 @@ public class UpdateService {
         return Files.isDirectory(toolchain) ? toolchain : null;
     }
 
-    private static String ensureGit(Consumer<String> log, ObjectMapper objectMapper) throws IOException {
+    private static String ensureGit(Consumer<String> log, ObjectMapper objectMapper) {
         String gitBin = probeGit();
         if (gitBin != null) {
             return gitBin;
         }
-        Path root = repoRootFs();
-        if (root == null) {
-            throw new IOException("нет исходников");
+        if (repoRootFs() == null) {
+            throw new UpdateException(UpdateErrorCode.SOURCES_NOT_FOUND);
         }
         if (!isWindows()) {
-            throw new IOException("установи git");
+            throw new UpdateException(UpdateErrorCode.GIT_NOT_FOUND);
         }
-        log.accept("Качаю MinGit");
+        log.accept("Загрузка Git");
         Path dir = toolchainDir().resolve("git");
-        Path zip = Files.createTempFile("harmonia-git-", ".zip");
+        Map<String, Object> json;
         try {
-            Map<String, Object> json = getJson(objectMapper, MINGIT_RELEASES_URL);
-            String url = pickMinGitUrl(assets(json));
-            if (url == null) {
-                throw new IOException("MinGit не найден");
-            }
-            downloadFile(url, zip, log);
-            unzip(zip, dir, log);
-        } finally {
-            Files.deleteIfExists(zip);
+            json = getJson(objectMapper, MINGIT_RELEASES_URL);
+        } catch (IOException e) {
+            throw new UpdateException(UpdateErrorCode.GIT_DOWNLOAD_FAILED, diagnosticDetail(e), e);
         }
+        String url = pickMinGitUrl(assets(json));
+        if (url == null) {
+            throw new UpdateException(UpdateErrorCode.GIT_RELEASE_NOT_FOUND);
+        }
+        downloadAndExtract(url, dir, "harmonia-git-", log, UpdateErrorCode.GIT_DOWNLOAD_FAILED);
         Path exe = dir.resolve("cmd").resolve(gitExe());
         if (!Files.isRegularFile(exe)) {
-            throw new IOException("MinGit битый");
+            throw new UpdateException(UpdateErrorCode.TOOLCHAIN_CORRUPT);
         }
         return exe.toString();
     }
 
-    private static String ensureJava(Consumer<String> log) throws IOException {
+    private static String probeJavaHome() {
+        Path base = installToolchain();
+        if (base != null) {
+            Path installed = findJavacHome(base.resolve("jdk"));
+            if (installed != null) {
+                return installed.toString();
+            }
+        }
+        String system = systemJavaHome();
+        if (system != null) {
+            return system;
+        }
+        Path cached = findJavacHome(toolchainDir().resolve("jdk"));
+        return cached == null ? null : cached.toString();
+    }
+
+    private static String ensureJava(Consumer<String> log) {
         Path base = installToolchain();
         if (base != null) {
             Path found = findJavacHome(base.resolve("jdk"));
             if (found != null) {
-                log.accept("Toolchain: JDK из установки");
+                log.accept("Используется JDK из установки");
                 return found.toString();
             }
         }
         String home = systemJavaHome();
         if (home != null) {
-            log.accept("Toolchain: системный JDK");
+            log.accept("Используется системный JDK");
             return home;
         }
         Path bundled = findJavacHome(toolchainDir().resolve("jdk"));
         if (bundled != null) {
-            log.accept("Toolchain: bundled JDK");
+            log.accept("Используется JDK из кэша");
             return bundled.toString();
         }
         if (!isWindows()) {
-            throw new IOException("установи JDK 21");
+            throw new UpdateException(UpdateErrorCode.JDK_NOT_FOUND);
         }
-        log.accept("Качаю Temurin 21");
+        log.accept("Загрузка JDK 21");
         Path dir = toolchainDir().resolve("jdk");
-        Path zip = Files.createTempFile("harmonia-jdk-", ".zip");
-        try {
-            downloadFile(TEMURIN_URL, zip, log);
-            unzip(zip, dir, log);
-        } finally {
-            Files.deleteIfExists(zip);
-        }
+        downloadAndExtract(TEMURIN_URL, dir, "harmonia-jdk-", log, UpdateErrorCode.JDK_DOWNLOAD_FAILED);
         Path found = findJavacHome(dir);
         if (found == null) {
-            throw new IOException("JDK битый");
+            throw new UpdateException(UpdateErrorCode.TOOLCHAIN_CORRUPT);
         }
         return found.toString();
+    }
+
+    private static void downloadAndExtract(String url, Path directory, String tempPrefix,
+            Consumer<String> log, UpdateErrorCode downloadError) {
+        Path archive;
+        try {
+            archive = Files.createTempFile(tempPrefix, ".zip");
+        } catch (IOException e) {
+            throw new UpdateException(downloadError, diagnosticDetail(e), e);
+        }
+        try {
+            downloadFile(url, archive, log);
+            try {
+                unzip(archive, directory, log);
+            } catch (IOException e) {
+                throw new UpdateException(UpdateErrorCode.TOOLCHAIN_CORRUPT,
+                        diagnosticDetail(e), e);
+            }
+        } catch (UpdateException e) {
+            throw e;
+        } catch (IOException e) {
+            throw new UpdateException(downloadError, diagnosticDetail(e), e);
+        } finally {
+            try {
+                Files.deleteIfExists(archive);
+            } catch (IOException e) {
+                logger.debug("Не удалось удалить временный архив обновления", e);
+            }
+        }
     }
 
     private static String systemJavaHome() {
@@ -568,7 +591,7 @@ public class UpdateService {
             return home;
         }
         try {
-            String where = out(Paths.get(System.getProperty("user.dir")),
+            String where = captureOutput(Paths.get(System.getProperty("user.dir")),
                     isWindows() ? "where" : "which", "java");
             String first = where.lines().findFirst().orElse("");
             if (!first.isBlank()) {
@@ -594,7 +617,7 @@ public class UpdateService {
             if (!Files.isRegularFile(javac)) {
                 return -1;
             }
-            String version = out(Paths.get(System.getProperty("user.dir")), javac.toString(), "-version");
+            String version = captureOutput(Paths.get(System.getProperty("user.dir")), javac.toString(), "-version");
             return parseJavaMajor(version);
         } catch (Exception e) {
             return -1;
@@ -657,6 +680,9 @@ public class UpdateService {
     @SuppressWarnings("unchecked")
     private static List<Map<String, String>> assets(Map<String, Object> json) {
         List<Map<String, String>> assets = new ArrayList<>();
+        if (json == null) {
+            return assets;
+        }
         Object rawAssets = json.get("assets");
         if (rawAssets instanceof List<?> list) {
             for (Object item : list) {
@@ -678,7 +704,8 @@ public class UpdateService {
             HttpClient http = HttpClient.newBuilder()
                     .connectTimeout(Duration.ofSeconds(15))
                     .build();
-            HttpRequest request = HttpRequest.newBuilder(URI.create(url))
+            URI source = trustedDownloadUri(url);
+            HttpRequest request = HttpRequest.newBuilder(source)
                     .header("Accept", "application/vnd.github+json")
                     .header("User-Agent", "harmonia-suite")
                     .timeout(Duration.ofSeconds(30))
@@ -692,7 +719,7 @@ public class UpdateService {
             return objectMapper.readValue(response.body(), Map.class);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            throw new IOException("прервано");
+            throw new UpdateException(UpdateErrorCode.INTERRUPTED, e);
         }
     }
 
@@ -702,7 +729,8 @@ public class UpdateService {
                     .connectTimeout(Duration.ofSeconds(15))
                     .followRedirects(HttpClient.Redirect.ALWAYS)
                     .build();
-            HttpRequest request = HttpRequest.newBuilder(URI.create(url))
+            URI source = trustedDownloadUri(url);
+            HttpRequest request = HttpRequest.newBuilder(source)
                     .header("User-Agent", "harmonia-suite")
                     .timeout(Duration.ofSeconds(600))
                     .GET()
@@ -712,11 +740,32 @@ public class UpdateService {
             if (response.statusCode() != 200) {
                 throw new IOException(httpFailure("скачивание: HTTP", response.statusCode(), bodyExcerpt(target)));
             }
+            if (!isAllowedDownloadUri(response.uri())) {
+                throw new IOException("download redirect host is not allowed");
+            }
             log.accept("Скачано " + Files.size(target) / 1024 / 1024 + " МБ");
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            throw new IOException("прервано");
+            throw new UpdateException(UpdateErrorCode.INTERRUPTED, e);
         }
+    }
+
+    private static URI trustedDownloadUri(String raw) throws IOException {
+        try {
+            URI uri = URI.create(raw);
+            if (!isAllowedDownloadUri(uri)) {
+                throw new IOException("download host is not allowed");
+            }
+            return uri;
+        } catch (IllegalArgumentException e) {
+            throw new IOException("download URL is invalid", e);
+        }
+    }
+
+    private static boolean isAllowedDownloadUri(URI uri) {
+        return uri != null
+                && "https".equalsIgnoreCase(uri.getScheme())
+                && DOWNLOAD_HOSTS.contains(uri.getHost());
     }
 
     private static String httpFailure(String prefix, int status, String body) {
@@ -750,7 +799,7 @@ public class UpdateService {
     }
 
     private static boolean isWindows() {
-        return System.getProperty("os.name", "").toLowerCase().contains("win");
+        return UpdateRelaunch.isWindows();
     }
 
     private static Path resolveRoot(String gitBin) {
@@ -763,7 +812,7 @@ public class UpdateService {
     private static Path repoRoot(String gitBin) {
         for (Path base : candidateRoots()) {
             try {
-                String top = out(base, gitBin, "rev-parse", "--show-toplevel");
+                String top = captureOutput(base, gitBin, "rev-parse", "--show-toplevel");
                 Path path = Paths.get(top);
                 if (Files.isDirectory(path) && isOurRepo(path)) {
                     return path;
@@ -811,146 +860,49 @@ public class UpdateService {
         }
     }
 
-    private static String[] upstream(Path root, String gitBin) {
-        return upstream(root, gitBin, line -> {
-        });
-    }
-
-    private static String[] upstream(Path root, String gitBin, Consumer<String> log) {
-        try {
-            String ref = out(root, log, gitBin, "rev-parse", "--abbrev-ref", "@{upstream}");
-            int slash = ref.indexOf('/');
-            if (slash > 0) {
-                return new String[]{ref.substring(0, slash), ref.substring(slash + 1)};
-            }
-        } catch (Exception e) {
-            logger.warn("Не удалось определить upstream, использую {}/{}: {}",
-                    REMOTE, BRANCH, scrub(e.getMessage() == null ? e.toString() : e.getMessage()));
-        }
-        return new String[]{REMOTE, BRANCH};
-    }
-
     private static List<String> subjects(Path root, String gitBin) throws IOException {
         List<String> lines = new ArrayList<>();
         List<String> command = List.of(gitBin, "log", "--format=%s", "-n", String.valueOf(MAX_SUBJECTS),
                 "HEAD..FETCH_HEAD");
-        int code = run(root, command, lines::add);
+        int code = runProcess(root, command, lines::add);
         if (code != 0) {
             throw new IOException(formatFailure(command, code, lines));
         }
         return lines.stream().filter(l -> !l.isBlank()).toList();
     }
 
-    private static String out(Path dir, String... cmd) throws IOException {
-        return out(dir, line -> {
+    private static String captureOutput(Path dir, String... cmd) throws IOException {
+        return captureOutput(dir, line -> {
         }, cmd);
     }
 
-    private static String out(Path dir, Consumer<String> log, String... cmd) throws IOException {
-        List<String> lines = new ArrayList<>();
-        int code = run(dir, List.of(cmd), line -> {
-            lines.add(line);
-            log.accept(line);
-        }, Map.of());
-        if (code != 0) {
-            throw new IOException(formatFailure(List.of(cmd), code, lines));
-        }
-        return String.join("\n", lines).strip();
+    private static String captureOutput(Path dir, Consumer<String> log, String... cmd) throws IOException {
+        return UpdateProcess.captureOutput(dir, log, cmd);
     }
 
-    private static void exec(Path dir, List<String> cmd) throws IOException {
-        exec(dir, cmd, line -> {
+    private static void runCommand(Path dir, List<String> cmd) throws IOException {
+        runCommand(dir, cmd, line -> {
         });
     }
 
-    private static void exec(Path dir, List<String> cmd, Consumer<String> log) throws IOException {
-        List<String> lines = new ArrayList<>();
-        int code = run(dir, cmd, line -> {
-            lines.add(line);
-            log.accept(line);
-        }, Map.of());
-        if (code != 0) {
-            throw new IOException(formatFailure(cmd, code, lines));
-        }
+    private static void runCommand(Path dir, List<String> cmd, Consumer<String> log) throws IOException {
+        UpdateProcess.requireSuccess(dir, cmd, log);
     }
 
-    private static int run(Path dir, List<String> cmd, Consumer<String> log) throws IOException {
-        return run(dir, cmd, log, Map.of());
+    private static int runProcess(Path dir, List<String> cmd, Consumer<String> log) throws IOException {
+        return runProcess(dir, cmd, log, Map.of());
     }
 
-    private static int run(Path dir, List<String> cmd, Consumer<String> log, Map<String, String> env)
+    private static int runProcess(Path dir, List<String> cmd, Consumer<String> log, Map<String, String> env)
             throws IOException {
-        ProcessBuilder builder = new ProcessBuilder(cmd)
-                .directory(dir.toFile())
-                .redirectErrorStream(true);
-        builder.environment().putAll(env);
-        builder.environment().put("GIT_TERMINAL_PROMPT", "0");
-        builder.environment().put("GCM_INTERACTIVE", "never");
-        builder.environment().put("GIT_CONFIG_COUNT", "2");
-        builder.environment().put("GIT_CONFIG_KEY_0", "credential.helper");
-        builder.environment().put("GIT_CONFIG_VALUE_0", "");
-        builder.environment().put("GIT_CONFIG_KEY_1", "http.https://github.com/.extraheader");
-        builder.environment().put("GIT_CONFIG_VALUE_1", "");
-        Process process = builder.start();
-        try {
-            process.getOutputStream().close();
-        } catch (IOException ignored) {
-        }
-        try (BufferedReader reader = new BufferedReader(
-                new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
-            reader.lines().forEach(line -> log.accept(scrub(line)));
-        }
-        try {
-            return process.waitFor();
-        } catch (InterruptedException e) {
-            process.destroyForcibly();
-            Thread.currentThread().interrupt();
-            throw new IOException("прервано");
-        }
+        return UpdateProcess.runProcess(dir, cmd, log, env).code();
     }
 
     private static Path writeRelaunch(List<String> command) throws IOException {
-        long pid = ProcessHandle.current().pid();
-        boolean windows = isWindows();
-        Path script = Files.createTempFile("harmonia-update-", windows ? ".cmd" : ".sh");
-        StringBuilder body = new StringBuilder();
-        if (windows) {
-            body.append("@echo off\n");
-            body.append(":wait\n");
-            body.append("tasklist /FI \"PID eq ").append(pid).append("\" 2>nul | find \"")
-                    .append(pid).append("\" >nul\n");
-            body.append("if not errorlevel 1 (timeout /t 1 /nobreak >nul & goto wait)\n");
-            body.append("cd /d \"").append(System.getProperty("user.dir")).append("\"\n");
-            body.append("start \"\"");
-            for (String arg : command) {
-                body.append(" \"").append(arg.replace("\"", "")).append("\"");
-            }
-            body.append("\ndel \"%~f0\"\n");
-        } else {
-            body.append("#!/bin/sh\n");
-            body.append("while kill -0 ").append(pid).append(" 2>/dev/null; do sleep 1; done\n");
-            body.append("cd \"").append(System.getProperty("user.dir")).append("\"\n");
-            body.append("rm -- \"$0\"\n");
-            body.append("exec");
-            for (String arg : command) {
-                body.append(" \"").append(arg.replace("\"", "")).append("\"");
-            }
-            body.append("\n");
-            try {
-                Files.setPosixFilePermissions(script,
-                        java.nio.file.attribute.PosixFilePermissions.fromString("rwx------"));
-            } catch (UnsupportedOperationException ignored) {
-            }
-        }
-        Files.writeString(script, body.toString(), StandardCharsets.UTF_8);
-        return script;
+        return UpdateRelaunch.writeRelaunch(command);
     }
 
     private static void detach(Path script) throws IOException {
-        if (isWindows()) {
-            new ProcessBuilder("cmd", "/c", "start", "", script.toString()).start();
-        } else {
-            new ProcessBuilder("sh", "-c", "nohup \"" + script + "\" >/dev/null 2>&1 &").start();
-        }
+        UpdateRelaunch.detach(script);
     }
 }

@@ -16,6 +16,7 @@ async function req(url,opt){
 }
 const enc=encodeURIComponent;
 const mapBackupList=(d)=>({backups:d.backups,retention:d.retention,autoIntervalMinutes:d.auto_interval_minutes,usedBytes:d.used_bytes,estimatedBytes:d.estimated_bytes});
+const mapUpdateStatus=(d)=>({version:d.version,supported:d.supported,mode:d.mode,needsToolchain:d.needs_toolchain,currentSha:d.current_sha,latestSha:d.latest_sha,behindBy:d.behind_by,subjects:d.subjects||[],updateAvailable:d.update_available,state:d.state,reason:d.reason});
 export const api={
   projects:()=>req('/api/projects'),
   createProject:(name,root)=>req('/api/projects',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:name,root})}),
@@ -87,7 +88,7 @@ export const api={
   jobCancel:(jobId)=>req('/api/jobs/'+enc(jobId),{method:'DELETE'}),
   status:()=>req('/api/status'),
   version:()=>req('/api/version'),
-  updateStatus:()=>req('/api/update/status'),
+  updateStatus:()=>req('/api/update/status').then(mapUpdateStatus),
   runUpdate:()=>req('/api/update',{method:'POST'}),
   logTail:(tail=500)=>fetch('/api/log?tail='+encodeURIComponent(tail)).then(async r=>{
     const text=await r.text();

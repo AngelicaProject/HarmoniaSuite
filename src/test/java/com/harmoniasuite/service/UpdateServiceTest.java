@@ -1,5 +1,6 @@
 package com.harmoniasuite.service;
 
+import com.harmoniasuite.dto.UpdateState;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -28,6 +29,15 @@ class UpdateServiceTest {
     }
 
     @Test
+    @DisplayName("classifies local and divergent Git history explicitly")
+    void classifiesHistory() {
+        assertEquals(UpdateState.UP_TO_DATE, UpdateService.historyState(0, 0));
+        assertEquals(UpdateState.UPDATE_AVAILABLE, UpdateService.historyState(3, 0));
+        assertEquals(UpdateState.LOCAL_AHEAD, UpdateService.historyState(0, 2));
+        assertEquals(UpdateState.DIVERGED, UpdateService.historyState(3, 2));
+    }
+
+    @Test
     @DisplayName("short sha is the first 7 characters")
     void shortensSha() {
         assertEquals("e916062", UpdateService.shortSha("e916062abc123"));
@@ -39,6 +49,7 @@ class UpdateServiceTest {
     @DisplayName("classpath mode: target/classes means dev, else jar")
     void detectsLaunchMode() {
         assertEquals("dev", UpdateService.launchMode("target/classes;C:/lib/app.jar"));
+        assertEquals("dev", UpdateService.launchMode("C:\\repo\\target\\classes;C:\\lib\\app.jar"));
         assertEquals("jar", UpdateService.launchMode("C:/dist/harmonia-suite.jar"));
     }
 
@@ -126,7 +137,7 @@ class UpdateServiceTest {
     void updateBuildSkipsTests() {
         List<String> command = UpdateService.buildCommand(Paths.get("D:/repo"));
         assertTrue(command.get(0).contains("mvnw"));
-        assertEquals(List.of("-B", "-DskipTests", "package"), command.subList(1, command.size()));
+        assertEquals(List.of("-B", "-DskipTests", "clean", "package"), command.subList(1, command.size()));
     }
 
     @Test
@@ -191,16 +202,5 @@ class UpdateServiceTest {
                     return "filesystem";
                 }));
         assertEquals(List.of("git"), attempts);
-    }
-
-    @Test
-    @DisplayName("unavailable reason is non-empty and scrubbed")
-    void buildsUnavailableReason() {
-        assertEquals("Исходники приложения не найдены",
-                UpdateService.unavailableReason("Исходники приложения не найдены"));
-        assertEquals("Причина недоступности обновлений не определена",
-                UpdateService.unavailableReason("  "));
-        assertEquals("https://***@example.com/path",
-                UpdateService.unavailableReason("https://user:pass@example.com/path"));
     }
 }
