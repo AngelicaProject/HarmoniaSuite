@@ -1117,20 +1117,21 @@ const App = {
                 logText.value += '\n' + e.message;
             }
             const fallback = page && page.groups.length ? page.groups[0].cells[0] : null;
-            if (first || fallback) focusId.value = (first || fallback).id;
+            if (first || fallback) setFocusId((first || fallback).id);
         }
 
         function backToFiles() {
             leftMode.value = 'files';
             focusFileFilter.value = '';
             phraseSearchQ.value = '';
+            followRowId.value = '';
         }
 
         async function focusPhrase(id) {
             try {
                 const e = await ensureEntry(id);
                 if (!e) return;
-                focusId.value = id;
+                setFocusId(id);
                 const f = e.file || ((entryById.value.get(id) || {}).file || '');
                 if (f && leftMode.value === 'files') {
                     await revealInFiles(f, false, id);
@@ -1151,7 +1152,8 @@ const App = {
         const editorRef = ref(null);
         const deltaRef = ref(null);
         const followFiles = ref((() => { try { return localStorage.getItem('hs-follow') !== 'off'; } catch (e) { return true; } })());
-        const followRow = ref((() => { try { return localStorage.getItem('hs-follow-row') !== 'off'; } catch (e) { return true; } })());
+        const followRow = ref((() => { try { return localStorage.getItem('hs-follow-row') === 'on'; } catch (e) { return false; } })());
+        const followRowId = ref('');
         const revealFile = ref('');
         let lastReveal = '';
         let revealTimer = null;
@@ -1162,21 +1164,31 @@ const App = {
         function toggleFollowRow() {
             followRow.value = !followRow.value;
             try { localStorage.setItem('hs-follow-row', followRow.value ? 'on' : 'off'); } catch (e) {}
+            if (!followRow.value) {
+                rowFollowRequest++;
+                followRowId.value = '';
+            } else if (leftMode.value === 'phrases' && focusId.value) {
+                onEditorEntry(focusId.value, true);
+            }
+        }
+        function setFocusId(id) {
+            focusId.value = id;
+            if (followRow.value && leftMode.value === 'phrases') followRowId.value = id;
         }
         let rowFollowRequest = 0;
-        async function onEditorEntry(id) {
+        async function onEditorEntry(id, force = false) {
             const request = ++rowFollowRequest;
             if (!id) return;
             const previousId = focusId.value;
             const previous = previousId ? localEntry(previousId) : null;
-            focusId.value = id;
-            if (!followRow.value || id === previousId) return;
+            setFocusId(id);
+            if (!followRow.value || leftMode.value !== 'phrases' || (!force && id === previousId)) return;
             const entry = await ensureEntry(id);
             if (!entry || request !== rowFollowRequest || !followRow.value || focusId.value !== id) return;
             const sameRow = previous
                 && previous.file === entry.file
                 && Number(previous.row_index) === Number(entry.row_index);
-            if (sameRow) return;
+            if (sameRow && !force) return;
             if (leftMode.value === 'phrases' && focusFileFilter.value !== entry.file) {
                 focusFileFilter.value = entry.file || '';
                 phrasePage.value = 0;
@@ -1196,6 +1208,7 @@ const App = {
             if (leftMode.value !== 'files') {
                 if (!force) return;
                 leftMode.value = 'files';
+                followRowId.value = '';
             }
             const known = (fileTree.value || []).find(f => f.path === file);
             if (!known) return;
@@ -1368,7 +1381,7 @@ const App = {
                     logText.value += '\n' + e.message;
                 }
                 const fallback = page && page.groups.length ? page.groups[0].cells[0] : null;
-                if (first || fallback) focusId.value = (first || fallback).id;
+                if (first || fallback) setFocusId((first || fallback).id);
             }
         }
 
@@ -1438,7 +1451,7 @@ const App = {
                 leftMode.value = 'phrases';
                 phrasePage.value = targetPage;
                 phraseSearchQ.value = '';
-                focusId.value = m.id;
+                setFocusId(m.id);
                 await nextTick();
                 try {
                     const el = document.querySelector('.dock.left [data-id="' + CSS.escape(m.id) + '"]');
@@ -1833,6 +1846,7 @@ const App = {
             followFiles,
             toggleFollow,
             followRow,
+            followRowId,
             toggleFollowRow,
             onEditorEntry,
             revealFile,
@@ -1966,7 +1980,7 @@ const App = {
               </div>
               <span class="ft-count">{{r.file.translated}}/{{r.file.total}}</span><span v-if="fileUn(r.file)" class="ft-un">{{fileUn(r.file)}} неперев.</span>
             </div>
-            <div v-if="expanded(r.file.path)" class="tree-phrases"><div v-for="g in filePhraseGroups(r.file.path)" :key="g.row" class="tree-ph-group"><div class="muted tree-ph-rowkey">{{g.key||('row '+(g.row+1))}}<span v-if="g.un"> · {{g.un}} неперев.</span></div><div v-for="c in g.cells" :key="c.id" class="tree-phrase" data-ctx="phrase" :data-id="c.id" :class="{active:focusId===c.id}" @click="focusPhrase(c.id)"><span :class="'ed-status-pill status-'+c.status">{{c.status}}</span><div class="tree-ph-text"><div class="tree-ph-src">{{c.source}}</div><div v-if="c.column_name" class="muted">{{c.column_name}}</div></div></div></div><button v-if="filePhrases(r.file.path).total>100" class="ghost tree-more" @click="openFile(r.file.path)">Все {{filePhrases(r.file.path).total}} фраз →</button></div>
+            <div v-if="expanded(r.file.path)" class="tree-phrases"><div v-for="g in filePhraseGroups(r.file.path)" :key="g.row" class="tree-ph-group"><div class="muted tree-ph-rowkey">{{g.key||('row '+(g.row+1))}}<span v-if="g.un"> · {{g.un}} неперев.</span></div><div v-for="c in g.cells" :key="c.id" class="tree-phrase" data-ctx="phrase" :data-id="c.id" :class="{active:followRowId===c.id}" @click="focusPhrase(c.id)"><span :class="'ed-status-pill status-'+c.status">{{c.status}}</span><div class="tree-ph-text"><div class="tree-ph-src">{{c.source}}</div><div v-if="c.column_name" class="muted">{{c.column_name}}</div></div></div></div><button v-if="filePhrases(r.file.path).total>100" class="ghost tree-more" @click="openFile(r.file.path)">Все {{filePhrases(r.file.path).total}} фраз →</button></div>
             </div>
             </div>
           </div>
@@ -1979,9 +1993,9 @@ const App = {
           <template v-else>
           <template v-for="(g,gi) in rowGroupsPaged" :key="g.row">
           <div v-if="gi===0||g.section!==rowGroupsPaged[gi-1].section" class="ft-section">Строки {{g.section*100+1}}–{{Math.min((g.section+1)*100,fileRows.totalGroups)}}</div>
-          <div class="ft-rowcard" :class="{active:g.cells.some(c=>c.id===focusId),done:!g.un}">
+          <div class="ft-rowcard" :class="{active:g.cells.some(c=>c.id===followRowId),done:!g.un}">
             <div class="ft-rowhead" @click="focusPhrase(g.cells[0].id)" :title="'rowIndex '+g.row"><span class="ft-rowkey">{{g.row_key||('row '+(g.row+1))}}</span><span v-if="g.cells.length>1" class="muted">{{g.cells.length}} кол.</span><span style="flex:1"></span><span v-if="g.un" class="ft-un">{{g.un}} неперев.</span><span v-else class="ft-ok">✓</span></div>
-            <div v-for="c in g.cells" :key="c.id" class="ft-cell" data-ctx="phrase" :data-id="c.id" :class="{active:focusId===c.id}" @click="focusPhrase(c.id)" title="Редактировать">
+            <div v-for="c in g.cells" :key="c.id" class="ft-cell" data-ctx="phrase" :data-id="c.id" :class="{active:followRowId===c.id}" @click="focusPhrase(c.id)" title="Редактировать">
               <span :class="'ed-status-pill status-'+c.status">{{c.status}}</span>
               <div style="flex:1;min-width:0">
                 <div class="ft-cell-src">{{c.source}}</div>
