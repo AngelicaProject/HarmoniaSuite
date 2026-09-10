@@ -128,9 +128,9 @@ class PatchWorkflowTest {
         Map<String, TranslationEntry> base =
                 bySource(extract.syncSourcesAuto(input, projectId, log::add));
         base.get("Deal damage to target.").setTranslation("Нанести урон.");
-        base.get("Deal damage to target.").setStatus("needs_human_review");
+        base.get("Deal damage to target.").setStatus("human_reviewed");
         base.get("Restore vigor.").setTranslation("Восстановить силы.");
-        base.get("Restore vigor.").setStatus("needs_human_review");
+        base.get("Restore vigor.").setStatus("human_reviewed");
         persist(projectId, base);
         String firstCell = EntryIds.ofCell("First.csv", "1", 2);
         String firstUpdated = entryRepository.findByCell(projectId, firstCell).getUpdatedAt();
@@ -190,7 +190,7 @@ class PatchWorkflowTest {
         Map<String, TranslationEntry> base =
                 bySource(extract.syncSourcesAuto(input, projectId, log::add));
         base.get("Deal damage to target.").setTranslation("Нанести урон.");
-        base.get("Deal damage to target.").setStatus("needs_human_review");
+        base.get("Deal damage to target.").setStatus("human_reviewed");
         persist(projectId, base);
         writeCsv(input.resolve("First.csv"), List.of("1,Attack,Deal damage to TARGET."));
         log.clear();

@@ -8,15 +8,15 @@ import java.util.Locale;
 /** Centralizes the entry status vocabulary and its write/filter rules. */
 public final class EntryStatusPolicy {
 
-    public static final String DEFAULT_MANUAL_STATUS = "needs_human_review";
+    public static final String DEFAULT_MANUAL_STATUS = "human_reviewed";
 
     private static final List<String> WRITABLE = List.of(
             "untranslated", "machine_translated", "no_translation_required", "stale",
-            "needs_human_review", "approved");
+            "human_reviewed", "approved");
 
     private static final List<String> FILTERABLE = List.of(
             "untranslated", "machine_translated", "no_translation_required", "stale",
-            "needs_human_review", "approved");
+            "human_reviewed", "approved");
 
     private EntryStatusPolicy() {
     }

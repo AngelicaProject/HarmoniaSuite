@@ -77,7 +77,7 @@ class ProjectEntriesTest {
         projectRepository.upsertFiles(projectId, List.of("a.csv"), now);
         entryRepository.batchUpsert(projectId, projectRepository.fileIdMap(projectId),
                 new ArrayList<>(List.of(
-                        entry("a.csv", "10", 1, "Hello", "Привет", "needs_human_review"),
+                        entry("a.csv", "10", 1, "Hello", "Привет", "human_reviewed"),
                         entry("a.csv", "11", 1, "Bye", "", "untranslated"))), now);
         projects = new ProjectService(new WorkspacePaths(properties), projectRepository, entryRepository,
                 new EntryMapperImpl(), new ProjectMapperImpl());
@@ -146,7 +146,7 @@ class ProjectEntriesTest {
                 0, 0).total());
         assertEquals(2L, projects.entries(projectId,
                 new EntryRepository.EntryFilter(
-                        null, List.of("untranslated", "needs_human_review"), null, null, false),
+                        null, List.of("untranslated", "human_reviewed"), null, null, false),
                 0, 0).total());
         assertThrows(IllegalArgumentException.class, () ->
                 ProjectService.normalizeStatuses("untranslated, bogus-status"));
@@ -338,7 +338,7 @@ class ProjectEntriesTest {
     void updateEntryPersistsTranslation() throws Exception {
         var res = projects.updateEntry(projectId, entryUuid("a.csv", "11", 1), "Пока", null);
         assertTrue(res.ok());
-        assertEquals("needs_human_review", res.entry().status());
+        assertEquals("human_reviewed", res.entry().status());
         assertEquals(2L, res.summary().translated());
         assertEquals("Пока", projects.entryByCell(projectId, EntryIds.ofCell("a.csv", "11", 1)).translation());
     }
