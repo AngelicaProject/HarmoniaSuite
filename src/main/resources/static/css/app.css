@@ -273,6 +273,9 @@ input[type="checkbox"]:disabled:checked,input[type="checkbox"]:disabled:indeterm
 .editor-head{display:flex;align-items:center;gap:10px;padding:10px 16px;border-bottom:1px solid var(--border-soft);background:var(--surface);flex-shrink:0;flex-wrap:wrap}
 .editor-head h2{margin:0;font-size:13px;font-weight:700;letter-spacing:-.01em;display:flex;align-items:center;gap:8px}
 .editor-head h2 .icon{width:15px;height:15px;color:var(--muted)}
+.ed-follow-row{display:inline-flex;align-items:center;gap:6px}
+.ed-follow-row.active{background:var(--primary-soft);border-color:rgba(95,141,240,.45);color:var(--text)}
+.ed-follow-row .icon{width:13px;height:13px}
 .ed-toolbar{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
 .ed-grid{flex:1;display:grid;grid-template-columns:1fr 1fr;gap:0;min-height:0;overflow:hidden}
 .ed-col{display:flex;flex-direction:column;min-height:0;overflow:hidden;background:var(--surface)}
@@ -541,14 +544,16 @@ table.csv-table{border-collapse:collapse;font-size:12px;min-width:100%}
 .ft-section{position:sticky;top:0;background:var(--surface);z-index:2;font-size:11px;font-weight:700;color:var(--head);padding:7px 14px;border-bottom:1px solid var(--border-soft);letter-spacing:.05em}
 .ft-rowcard{border:1px solid var(--border-soft);border-radius:10px;margin:6px 10px;overflow:hidden;background:var(--surface-2)}
 .ft-rowcard.done{opacity:.55}
-.ft-rowcard.active{border-color:rgba(95,141,240,.5)}
+.ft-rowcard.active{opacity:1;border-color:var(--primary);box-shadow:0 0 0 2px rgba(95,141,240,.2),inset 3px 0 0 var(--primary)}
+.ft-rowcard.active .ft-rowhead{background:var(--primary-soft)}
+.ft-rowcard.active .ft-rowkey{color:var(--primary)}
 .ft-rowhead{display:flex;align-items:center;gap:8px;padding:6px 10px;cursor:pointer;font-size:11px;background:var(--surface-3)}
 .ft-rowhead:hover{background:var(--hover)}
 .ft-rowkey{font-family:var(--mono);font-weight:700}
 .ft-ok{color:var(--success);font-size:11px}
 .ft-cell{display:flex;gap:8px;align-items:flex-start;padding:7px 10px;cursor:pointer;border-top:1px solid var(--border-soft)}
 .ft-cell:hover{background:var(--hover)}
-.ft-cell.active{background:var(--primary-soft)}
+.ft-cell.active{background:var(--primary-soft);box-shadow:inset 3px 0 0 var(--primary)}
 .ft-cell-src{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:13px}
 .ft-cell-tr{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:11px;color:var(--primary)}
 .ft-cell-col{font-size:10px;font-family:var(--mono)}
