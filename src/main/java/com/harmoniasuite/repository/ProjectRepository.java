@@ -48,34 +48,25 @@ public class ProjectRepository {
             WHERE id = ?""";
 
     private static final String SUMMARY_BY_STATUS = """
-            SELECT e.status, COUNT(e.id) AS n,
-                   COALESCE(SUM(CASE WHEN (TRIM(e.translation) <> '' AND e.status <> 'stale')
-                       OR e.status = 'no_translation_required'
-                       THEN 1 ELSE 0 END), 0) AS translated,
-                   (SELECT COUNT(*) FROM source_files WHERE project_id = ?) AS files
-            FROM source_files f
-            LEFT JOIN entries e ON e.file_id = f.id AND e.project_id = f.project_id
-            WHERE f.project_id = ?
-            GROUP BY e.status""";
-
-    private static final String SUMMARY_WITH_PROJECT = """
-            SELECT p.output_dir AS output_dir, e.status AS status, COUNT(e.id) AS n,
-                   COALESCE(SUM(CASE WHEN (TRIM(e.translation) <> '' AND e.status <> 'stale')
-                       OR e.status = 'no_translation_required'
-                       THEN 1 ELSE 0 END), 0) AS translated,
+            SELECT s.status, s.entries_count AS n, s.translated_count AS translated,
                    (SELECT COUNT(*) FROM source_files sf WHERE sf.project_id = p.id) AS files
             FROM projects p
-            LEFT JOIN source_files f ON f.project_id = p.id
-            LEFT JOIN entries e ON e.file_id = f.id AND e.project_id = f.project_id
+            LEFT JOIN entry_stats s ON s.project_id = p.id
+            WHERE p.id = ?""";
+
+    private static final String SUMMARY_WITH_PROJECT = """
+            SELECT p.output_dir AS output_dir, s.status AS status,
+                   COALESCE(s.entries_count, 0) AS n,
+                   COALESCE(s.translated_count, 0) AS translated,
+                   (SELECT COUNT(*) FROM source_files sf WHERE sf.project_id = p.id) AS files
+            FROM projects p
+            LEFT JOIN entry_stats s ON s.project_id = p.id
             WHERE p.id = ?
-            GROUP BY p.output_dir, e.status""";
+            """;
 
     private static final String SUMMARIES_ALL = """
-            SELECT project_id, status, COUNT(*) AS n,
-                   SUM(CASE WHEN (TRIM(translation) <> '' AND status <> 'stale')
-                       OR status = 'no_translation_required'
-                       THEN 1 ELSE 0 END) AS translated
-            FROM entries GROUP BY project_id, status""";
+            SELECT project_id, status, entries_count AS n, translated_count AS translated
+            FROM entry_stats""";
 
     private static final String FILES_COUNT_BY_PROJECT = """
             SELECT project_id, COUNT(*) AS n FROM source_files GROUP BY project_id""";
@@ -114,9 +105,7 @@ public class ProjectRepository {
     private static final String FILES_LIVE_BREAKDOWN = """
             SELECT f.path AS path, e.status AS status,
                    COUNT(e.id) AS n,
-                   COALESCE(SUM(CASE WHEN (TRIM(e.translation) <> '' AND e.status <> 'stale')
-                       OR e.status = 'no_translation_required'
-                       THEN 1 ELSE 0 END), 0) AS tr
+                   COALESCE(SUM(e.translated_flag), 0) AS tr
             FROM source_files f
             LEFT JOIN entries e ON e.file_id = f.id AND e.project_id = f.project_id
             WHERE f.project_id = ?
@@ -239,7 +228,7 @@ public class ProjectRepository {
         long entries = 0;
         long translated = 0;
         long files = 0;
-        for (Map<String, Object> row : jdbc.queryForList(SUMMARY_BY_STATUS, projectId, projectId)) {
+        for (Map<String, Object> row : jdbc.queryForList(SUMMARY_BY_STATUS, projectId)) {
             files = ((Number) row.get("files")).longValue();
             if (row.get("status") == null) {
                 continue;
