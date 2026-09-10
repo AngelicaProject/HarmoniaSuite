@@ -21,7 +21,11 @@ const App = {
         const root = ref('');
         const showPicker = ref(true);
         const doc = shallowRef(null);
-        const dataRev = ref(0);
+        // Keep cache invalidation separate from revisions that cause network reloads.
+        const cacheRev = ref(0);
+        const statsRev = ref(0);
+        const exportRev = ref(0);
+        const savedEntry = shallowRef(null);
         const fileTree = ref([]);
         const fileTreeLoading = ref(false);
         const fileSearchQ = ref('');
@@ -42,18 +46,15 @@ const App = {
         const filePreviewCache = new Map();
         let rowRequest = 0;
         let phraseSearchTimer = null;
-        let statsTimer = null;
-        function refreshStats() {
-            clearTimeout(statsTimer);
-            statsTimer = setTimeout(() => loadFileTree(), 250);
-        }
+        let trPendingTimer = null;
         async function loadFileTree() {
             if (!projectId.value) return;
             fileTreeLoading.value = true;
             try {
                 const d = await api.fileTree(projectId.value);
                 fileTree.value = d.files || [];
-                dataRev.value++;
+                cacheRev.value++;
+                statsRev.value++;
             } catch (e) {
             }
             fileTreeLoading.value = false;
@@ -147,7 +148,6 @@ const App = {
         const selTranslate = ref([]);
         const trPendingMap = ref({});
         const trPendingReady = ref(false);
-        let trPendingTimer = null;
         async function fetchTrPending() {
             if (!projectId.value) { trPendingMap.value = {}; trPendingReady.value = false; return; }
             try {
@@ -157,7 +157,7 @@ const App = {
             }
             catch (e) { /* карта некритична — список покажем целиком */ }
         }
-        watch(dataRev, () => {
+        watch(statsRev, () => {
             clearTimeout(trPendingTimer);
             trPendingTimer = setTimeout(fetchTrPending, 300);
         });
@@ -821,7 +821,88 @@ const App = {
             const entries = new Map((doc.value?.entries || []).map(e => [e.id, e]));
             for (const entry of items) if (entry && entry.id) entries.set(entry.id, entry);
             doc.value = {...(doc.value || {}), entries: [...entries.values()]};
-            dataRev.value++;
+            cacheRev.value++;
+        }
+
+        function isCountedAsTranslated(entry) {
+            if (!entry) return false;
+            return (String(entry.translation || '').trim() !== '' && entry.status !== 'stale')
+                || entry.status === 'no_translation_required';
+        }
+
+        function isPendingForTranslation(entry) {
+            return !!entry
+                && String(entry.translation || '').trim() === ''
+                && entry.status !== 'no_translation_required';
+        }
+
+        function localEntry(id) {
+            const known = (doc.value?.entries || []).find(entry => entry.id === id);
+            if (known) return known;
+            for (const group of fileRows.value.groups || []) {
+                const entry = (group.cells || []).find(cell => cell.id === id);
+                if (entry) return entry;
+            }
+            for (const preview of filePreviewCache.values()) {
+                const entry = (preview.rows || []).find(cell => cell.id === id);
+                if (entry) return entry;
+            }
+            return null;
+        }
+
+        function replaceEntryInRows(entry) {
+            const state = fileRows.value;
+            if (!entry || state.file !== entry.file) return;
+            let changed = false;
+            const groups = (state.groups || []).map(group => {
+                const old = (group.cells || []).find(cell => cell.id === entry.id);
+                if (!old) return group;
+                changed = true;
+                const cells = group.cells.map(cell => cell.id === entry.id ? entry : cell);
+                const un = (group.un || 0) - (needsWork(old) ? 1 : 0) + (needsWork(entry) ? 1 : 0);
+                return {...group, cells, un};
+            });
+            if (changed) fileRows.value = {...state, groups};
+        }
+
+        function replaceEntryInPreview(entry) {
+            if (!entry) return;
+            const preview = filePreviewCache.get(entry.file);
+            if (!preview) return;
+            const rows = preview.rows || [];
+            const index = rows.findIndex(cell => cell.id === entry.id);
+            if (index >= 0) {
+                preview.rows = [...rows.slice(0, index), entry, ...rows.slice(index + 1)];
+            }
+        }
+
+        function updateLocalStats(previous, entry) {
+            if (!entry || !previous || previous.file !== entry.file) return;
+            const delta = Number(isCountedAsTranslated(entry)) - Number(isCountedAsTranslated(previous));
+            if (!delta) return;
+            fileTree.value = fileTree.value.map(file => file.path === entry.file
+                ? {...file, translated: Math.max(0, (file.translated || 0) + delta)}
+                : file);
+        }
+
+        function updateLocalPending(previous, entry) {
+            if (!entry || !previous || previous.file !== entry.file || !trPendingReady.value) return;
+            const delta = Number(isPendingForTranslation(entry)) - Number(isPendingForTranslation(previous));
+            if (!delta) return;
+            const next = Math.max(0, (trPendingMap.value[entry.file] || 0) + delta);
+            const map = {...trPendingMap.value};
+            if (next) map[entry.file] = next;
+            else delete map[entry.file];
+            trPendingMap.value = map;
+        }
+
+        function syncSavedEntry(previous, entry) {
+            if (!entry || !entry.id) return;
+            updateLocalStats(previous, entry);
+            updateLocalPending(previous, entry);
+            mergeEntries([entry]);
+            replaceEntryInRows(entry);
+            replaceEntryInPreview(entry);
         }
 
         function decorateRowGroups(groups, page) {
@@ -854,7 +935,7 @@ const App = {
                     if (entry && entry.id) entries.set(entry.id, entry);
                 }
                 doc.value = {...(doc.value || {}), entries: [...entries.values()]};
-                dataRev.value++;
+                cacheRev.value++;
                 fileRows.value = {file, q: cleanQ, page: cleanPage, groups,
                     totalGroups: Number(d.total_groups || 0), loading: false};
                 return fileRows.value;
@@ -869,7 +950,7 @@ const App = {
             if (!file || !projectId.value || filePreviewCache.has(file)) return;
             const d = await api.entries(projectId.value, {file}, {limit: 100});
             filePreviewCache.set(file, {rows: d.entries || [], total: d.total || 0});
-            dataRev.value++;
+            cacheRev.value++;
         }
 
         async function ensureEntry(id) {
@@ -894,13 +975,14 @@ const App = {
                 doc.value._loadMs = t1;
                 summary.value = ov.summary || null;
                 loadSelection();
-                dataRev.value++;
+                cacheRev.value++;
                 if (ov.input_root) root.value = ov.input_root;
                 if (ov.name) projectName.value = ov.name;
                 logText.value += '\nПроект загружен: ' + projectId.value + ' (' + (ov.summary?.entries ?? 0) + ' фраз, ' + doc.value._loadMs + ' мс сеть+разбор)';
                 if (!pack.value) await loadPack();
                 expandedDirs.value = {};
                 await loadFileTree();
+                exportRev.value++;
                 if (focusFileFilter.value && leftMode.value === 'phrases') {
                     await loadFileRows(focusFileFilter.value, 0, phraseSearchQ.value);
                 }
@@ -976,7 +1058,7 @@ const App = {
             return out;
         }
         function filePhrases(f) {
-            dataRev.value;
+            cacheRev.value;
             const preview = filePreviewCache.get(f);
             if (!preview) return {rows: [], total: 0};
             const un = [], done = [];
@@ -1473,13 +1555,13 @@ const App = {
 
         async function onSave({id, uuid, translation, status}) {
             try {
+                const previous = localEntry(id);
                 const d = await api.patchEntry(projectId.value, uuid, translation, status);
-                mergeEntries([d.entry]);
+                syncSavedEntry(previous, d.entry);
                 if (d.summary) summary.value = d.summary;
-                refreshStats();
-                if (d.entry && fileRows.value.file === d.entry.file) {
-                    await loadFileRows(fileRows.value.file, fileRows.value.page, fileRows.value.q);
-                }
+                const fileStats = d.entry && fileTree.value.find(file => file.path === d.entry.file);
+                savedEntry.value = d.entry ? {previous, entry: d.entry,
+                    fileStats: fileStats ? {...fileStats} : null} : null;
                 if (editorRef.value && editorRef.value.noteChanged) editorRef.value.noteChanged();
                 (d.warnings || []).forEach(w => logText.value += '\n[Тег] ' + w);
             } catch (e) {
@@ -1651,7 +1733,8 @@ const App = {
             runPalette,
             onPaletteKey,
             job,
-            dataRev,
+            exportRev,
+            savedEntry,
             treeRows,
             treeFileCount,
             treeReadyCount,
@@ -1926,7 +2009,7 @@ const App = {
       <PackView :project-id="projectId" :pack="pack" :errors="packErrors" :manifest="packManifest" :msg="packMsg" :compat="packCompat" :langs="packLangs" @update:compat="packCompat=$event" @update:langs="packLangs=$event" @save="savePack" @add-author="packAddAuthor" @del-author="packDelAuthor" @toast="showToast"/>
       </Teleport>
       <Teleport v-if="hostEl('export')" :to="hostEl('export')">
-      <ExportView :project-id="projectId" :job="job" :scope="selExportSet" :data-rev="dataRev" @build="buildPack" @build-download="buildAndDownloadPack" @toast="showToast" @toggle-scope="toggleExport" @clear-scope="clearExportScope"/>
+      <ExportView :project-id="projectId" :job="job" :scope="selExportSet" :data-rev="exportRev" :entry-update="savedEntry" @build="buildPack" @build-download="buildAndDownloadPack" @toast="showToast" @toggle-scope="toggleExport" @clear-scope="clearExportScope"/>
     </Teleport>
       <Teleport v-if="hostEl('delta')" :to="hostEl('delta')">
       <DeltaView ref="deltaRef" :project-id="projectId" @toast="showToast" @refresh="loadProject" @open-conflict="openConflict"/>

@@ -37,15 +37,16 @@ public class ProjectRepository {
     private static final String SELECT_ALL_PROJECTS = "SELECT " + PROJECT_COLUMNS
             + "FROM projects ORDER BY name";
 
-    private static final String COUNT_FILES = """
-            SELECT COUNT(*) FROM source_files WHERE project_id = ?""";
-
     private static final String SUMMARY_BY_STATUS = """
-            SELECT status, COUNT(*) AS n,
-                   SUM(CASE WHEN (TRIM(translation) <> '' AND status <> 'stale')
-                       OR status = 'no_translation_required'
-                       THEN 1 ELSE 0 END) AS translated
-            FROM entries WHERE project_id = ? GROUP BY status""";
+            SELECT e.status, COUNT(e.id) AS n,
+                   COALESCE(SUM(CASE WHEN (TRIM(e.translation) <> '' AND e.status <> 'stale')
+                       OR e.status = 'no_translation_required'
+                       THEN 1 ELSE 0 END), 0) AS translated,
+                   (SELECT COUNT(*) FROM source_files WHERE project_id = ?) AS files
+            FROM source_files f
+            LEFT JOIN entries e ON e.file_id = f.id AND e.project_id = f.project_id
+            WHERE f.project_id = ?
+            GROUP BY e.status""";
 
     private static final String SUMMARIES_ALL = """
             SELECT project_id, status, COUNT(*) AS n,
@@ -192,17 +193,21 @@ public class ProjectRepository {
     }
 
     public ProjectSummary summarize(UUID projectId) {
-        Long files = jdbc.queryForObject(COUNT_FILES, Long.class, projectId);
         Map<String, Long> byStatus = new LinkedHashMap<>();
         long entries = 0;
         long translated = 0;
-        for (Map<String, Object> row : jdbc.queryForList(SUMMARY_BY_STATUS, projectId)) {
+        long files = 0;
+        for (Map<String, Object> row : jdbc.queryForList(SUMMARY_BY_STATUS, projectId, projectId)) {
+            files = ((Number) row.get("files")).longValue();
+            if (row.get("status") == null) {
+                continue;
+            }
             long n = ((Number) row.get("n")).longValue();
             byStatus.put((String) row.get("status"), n);
             entries += n;
             translated += ((Number) row.get("translated")).longValue();
         }
-        return new ProjectSummary(files == null ? 0 : files, entries, translated, byStatus);
+        return new ProjectSummary(files, entries, translated, byStatus);
     }
 
     public Map<String, ProjectSummary> summaries() {
