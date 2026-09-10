@@ -17,6 +17,6 @@ public class LogController {
 
     @GetMapping(value = "/api/log", produces = MediaType.TEXT_PLAIN_VALUE)
     public String tail(@RequestParam(defaultValue = "500") int tail) throws Exception {
-        return logs.tail(tail);
+        return logs.readTail(tail);
     }
 }

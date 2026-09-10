@@ -58,7 +58,7 @@ public class EntryService {
         int from = Math.max(0, value.offset());
         EntryRepository.EntryPage page = entryRepository.pageWithTotal(projectId, query, from, take);
         if (page.total() == 0) {
-            ensureProjectExists(projectId);
+            requireExistingProject(projectId);
         }
         return new EntriesPageDto(entryMapper.toDtoList(page.entries()), page.total(), from, take);
     }
@@ -103,7 +103,7 @@ public class EntryService {
             throw new HarmoniaSuiteNotFoundException("Entry not found: " + entryId);
         }
         entryRepository.insertHistory(projectId, currentId,
-                valueOrEmpty(current.getTranslation()), valueOrEmpty(current.getStatus()),
+                orEmpty(current.getTranslation()), orEmpty(current.getStatus()),
                 nextTranslation, nextStatus, "editor", now);
 
         current.setTranslation(nextTranslation);
@@ -120,7 +120,7 @@ public class EntryService {
     public RowGroupsPageDto rowGroups(UUID projectId, String file, String query,
             int offset, int limit) {
         String normalizedFile = requireFile(file);
-        String normalizedQuery = normalizeOptional(query);
+        String normalizedQuery = nullIfBlank(query);
         int take = limit <= 0 ? ROW_GROUPS_DEFAULT_PAGE_SIZE
                 : Math.min(limit, ROW_GROUPS_MAX_PAGE_SIZE);
         int from = Math.max(0, offset);
@@ -128,7 +128,7 @@ public class EntryService {
                 projectId, normalizedFile, normalizedQuery, from, take);
         long total = entryRepository.countRowGroups(projectId, normalizedFile, normalizedQuery);
         if (total == 0) {
-            ensureProjectExists(projectId);
+            requireExistingProject(projectId);
         }
         LinkedHashMap<Integer, RowGroupBuilder> grouped = new LinkedHashMap<>();
         for (TranslationEntry entry : entries) {
@@ -150,17 +150,17 @@ public class EntryService {
 
     public long rowGroupPosition(UUID projectId, String file, int rowIndex, String query) {
         long position = entryRepository.rowGroupPosition(projectId, requireFile(file),
-                rowIndex, normalizeOptional(query));
-        ensureProjectExists(projectId);
+                rowIndex, nullIfBlank(query));
+        requireExistingProject(projectId);
         return position;
     }
 
     public EntryDto nextNeedsWork(UUID projectId, String file, int afterRow, int afterCol,
             String query) {
         TranslationEntry entry = entryRepository.nextNeedsWork(
-                projectId, requireFile(file), afterRow, afterCol, normalizeOptional(query));
+                projectId, requireFile(file), afterRow, afterCol, nullIfBlank(query));
         if (entry == null) {
-            ensureProjectExists(projectId);
+            requireExistingProject(projectId);
         }
         return entry == null ? null : entryMapper.toDto(entry);
     }
@@ -168,16 +168,16 @@ public class EntryService {
     public Map<String, Long> pendingByFile(UUID projectId) {
         Map<String, Long> pending = entryRepository.pendingByFile(projectId);
         if (pending.isEmpty()) {
-            ensureProjectExists(projectId);
+            requireExistingProject(projectId);
         }
         return pending;
     }
 
     public static EntryQuery toQuery(EntrySearch search) {
         EntrySearch value = search == null ? EntrySearch.empty() : search;
-        return new EntryQuery(normalizeOptional(value.rowKey()),
-                EntryStatusPolicy.parseFilter(value.status()), normalizeOptionalFile(value.file()),
-                normalizeOptional(value.query()), value.onlyUntranslated());
+        return new EntryQuery(nullIfBlank(value.rowKey()),
+                EntryStatusPolicy.parseFilter(value.status()), nullIfBlankPath(value.file()),
+                nullIfBlank(value.query()), value.onlyUntranslated());
     }
 
     private static int pageSize(String file, int requested) {
@@ -185,17 +185,17 @@ public class EntryService {
         return requested <= 0 ? DEFAULT_LIMIT : Math.min(requested, cap);
     }
 
-    private static String normalizeOptional(String value) {
+    private static String nullIfBlank(String value) {
         return value == null || value.isBlank() ? null : value.trim();
     }
 
-    private static String normalizeOptionalFile(String value) {
-        String normalized = normalizeOptional(value);
+    private static String nullIfBlankPath(String value) {
+        String normalized = nullIfBlank(value);
         return normalized == null ? null : normalized.replace('\\', '/');
     }
 
     private static String requireFile(String file) {
-        String normalized = normalizeOptionalFile(file);
+        String normalized = nullIfBlankPath(file);
         if (normalized == null) {
             throw new HarmoniaSuiteBadRequestException("File is required");
         }
@@ -208,11 +208,11 @@ public class EntryService {
                 || "stale".equals(entry.getStatus()));
     }
 
-    private static String valueOrEmpty(String value) {
+    private static String orEmpty(String value) {
         return value == null ? "" : value;
     }
 
-    private void ensureProjectExists(UUID projectId) {
+    private void requireExistingProject(UUID projectId) {
         if (!projectRepository.exists(projectId)) {
             throw new HarmoniaSuiteNotFoundException("Project not found: " + projectId);
         }

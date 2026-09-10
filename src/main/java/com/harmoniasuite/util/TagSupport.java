@@ -74,19 +74,19 @@ public final class TagSupport {
                 continue;
             }
             if (c == '-' && s.charAt(i + 1) == ')') {
-                return anonTextPresent(s, start + 2, i) ? i + 2 : -1;
+                return hasAnonText(s, start + 2, i) ? i + 2 : -1;
             }
             i++;
         }
         return -1;
     }
 
-    private static boolean anonTextPresent(String s, int from, int to) {
-        return s.substring(from, to).codePoints()
+    private static boolean hasAnonText(String text, int from, int to) {
+        return text.substring(from, to).codePoints()
                 .anyMatch(cp -> cp == '?' || cp == '？' || Character.isLetterOrDigit(cp));
     }
 
-    private static boolean anonOpenNext(char c) {
+    private static boolean opensAnonTag(char c) {
         return c == '?' || c == '？' || c == '<' || c == '"' || c == '\''
                 || c == '“' || c == '”' || Character.isLetterOrDigit(c);
     }
@@ -304,8 +304,8 @@ public final class TagSupport {
         int n = translation.length();
         for (int i = 0; i + 1 < n; i++) {
             if (translation.charAt(i) == '(' && translation.charAt(i + 1) == '-'
-                    && !anonStarts.contains(i) && !escaped(translation, i)
-                    && i + 2 < n && anonOpenNext(translation.charAt(i + 2))) {
+                    && !anonStarts.contains(i) && !isEscaped(translation, i)
+                    && i + 2 < n && opensAnonTag(translation.charAt(i + 2))) {
                 int end = Math.min(n, i + 24);
                 errors.add("похоже на незакрытую конструкцию (-...-) (позиция " + i + "): "
                         + shortTag(translation.substring(i, end) + (end < n ? "..." : "")));
@@ -531,7 +531,7 @@ public final class TagSupport {
         int n = value.length();
         for (int i = 0; i + 1 < n; i++) {
             if (value.charAt(i) == '<' && Character.isLetter(value.charAt(i + 1))
-                    && !starts.contains(i) && !escaped(value, i)) {
+                    && !starts.contains(i) && !isEscaped(value, i)) {
                 int end = Math.min(n, i + 24);
                 strays.add(new Stray(i, value.substring(i, end) + (end < n ? "..." : "")));
             }
@@ -539,9 +539,9 @@ public final class TagSupport {
         return strays;
     }
 
-    private static boolean escaped(String s, int pos) {
+    private static boolean isEscaped(String value, int position) {
         int backslashes = 0;
-        for (int i = pos - 1; i >= 0 && s.charAt(i) == '\\'; i--) {
+        for (int i = position - 1; i >= 0 && value.charAt(i) == '\\'; i--) {
             backslashes++;
         }
         return backslashes % 2 == 1;

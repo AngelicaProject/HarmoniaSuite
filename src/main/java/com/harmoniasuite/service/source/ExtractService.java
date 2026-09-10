@@ -53,15 +53,15 @@ public class ExtractService {
     public record ChangedFiles(
             List<Path> changed,
             List<String> vanished,
-            Map<String, ProjectRepository.FileFp> fps,
-            String treeFp) {
+            Map<String, ProjectRepository.FileFingerprint> fingerprints,
+            String treeFingerprint) {
     }
 
     private record RunScope(
             List<String> processed,
             List<String> vanished,
-            Map<String, ProjectRepository.FileFp> fps,
-            String treeFp) {
+            Map<String, ProjectRepository.FileFingerprint> fingerprints,
+            String treeFingerprint) {
     }
 
     public TranslationDocument syncSourcesAuto(Path inputRoot, UUID projectId, Consumer<String> log)
@@ -78,31 +78,31 @@ public class ExtractService {
         List<String> relatives =
                 diff.changed().stream().map(p -> toRelative(root, p)).sorted().toList();
         return runSync(inputRoot, projectId, relatives,
-                new RunScope(relatives, diff.vanished(), diff.fps(), diff.treeFp()), log);
+                new RunScope(relatives, diff.vanished(), diff.fingerprints(), diff.treeFingerprint()), log);
     }
 
     public ChangedFiles detectChangedFiles(UUID projectId, Path root) throws IOException {
         List<Path> all = csv.findCsvFiles(root);
-        Map<String, ProjectRepository.FileFp> stored = projectRepository.fileFingerprints(projectId);
+        Map<String, ProjectRepository.FileFingerprint> stored = projectRepository.fileFingerprints(projectId);
         Set<String> present = new HashSet<>();
         List<Path> changed = new ArrayList<>();
-        Map<String, ProjectRepository.FileFp> fps = new LinkedHashMap<>();
+        Map<String, ProjectRepository.FileFingerprint> fingerprints = new LinkedHashMap<>();
         for (Path file : all) {
             Path absolute = file.toAbsolutePath().normalize();
             String relative = root.relativize(absolute).toString().replace('\\', '/');
             long size = Files.size(absolute);
             present.add(relative);
-            ProjectRepository.FileFp old = stored.get(relative);
+            ProjectRepository.FileFingerprint old = stored.get(relative);
             if (old != null && old.size() == size && !old.hash().isEmpty()
                     && crc32(absolute).equals(old.hash())) {
                 continue;
             }
             changed.add(file);
-            fps.put(relative, new ProjectRepository.FileFp(size, crc32(absolute)));
+            fingerprints.put(relative, new ProjectRepository.FileFingerprint(size, crc32(absolute)));
         }
         List<String> vanished = stored.keySet().stream()
                 .filter(path -> !present.contains(path)).sorted().toList();
-        return new ChangedFiles(changed.stream().sorted().toList(), vanished, fps,
+        return new ChangedFiles(changed.stream().sorted().toList(), vanished, fingerprints,
                 SourcesFingerprint.of(all, root));
     }
 
@@ -127,16 +127,16 @@ public class ExtractService {
 
         List<Path> paths = resolveSelection(root, selectedFiles);
         log.accept("  Файлов к обработке: " + paths.size());
-        String sourcesFp = scope != null && scope.treeFp() != null
-                ? scope.treeFp()
+        String sourcesFingerprint = scope != null && scope.treeFingerprint() != null
+                ? scope.treeFingerprint()
                 : SourcesFingerprint.of(csv.findCsvFiles(root), root);
-        log.accept("  Отпечаток исходников: " + shortFp(sourcesFp));
+        log.accept("  Отпечаток исходников: " + shortFingerprint(sourcesFingerprint));
         CarryIndex carry = CarryIndex.of(entryRepository.translatedCells(projectId));
         ParsedSources parsed = parseSources(root, paths, carry, log);
         // Одна транзакция на всю запись: прокси не перехватывает внутренние вызовы,
         // поэтому @Transactional здесь не сработает — только программная транзакция.
         return writeTx.execute(status -> storeParsed(
-                projectId, project, projectDir, root, parsed, sourcesFp, now, log,
+                projectId, project, projectDir, root, parsed, sourcesFingerprint, now, log,
                 scope));
     }
 
@@ -211,11 +211,11 @@ public class ExtractService {
     }
 
     private TranslationDocument storeParsed(UUID projectId, ProjectRepository.ProjectRow project, Path projectDir, Path root,
-            ParsedSources parsed, String sourcesFp, String now, Consumer<String> log, RunScope scope) {
+            ParsedSources parsed, String sourcesFingerprint, String now, Consumer<String> log, RunScope scope) {
         projectRepository.updateMeta(projectId, root.toString(), project.projectDir(),
                 project.outputDir(), project.sourceLocale(), project.targetLocale(),
                 project.createdAt(), now);
-        projectRepository.updateSourcesFp(projectId, sourcesFp, now);
+        projectRepository.updateSourcesFingerprint(projectId, sourcesFingerprint, now);
         long writeStarted = System.currentTimeMillis();
         List<TranslationEntry> all = new ArrayList<>(parsed.cells().values());
         log.accept("  Пишу в БД: " + all.size() + " строк…");
@@ -237,9 +237,9 @@ public class ExtractService {
             List<UUID> vanishedIds = uuidsOf(fileIds, scope.vanished());
             entryRepository.deleteEntriesByFiles(projectId, vanishedIds);
             projectRepository.deleteFilesByPaths(projectId, scope.vanished());
-            Map<String, ProjectRepository.FileFp> ok = new LinkedHashMap<>(scope.fps());
+            Map<String, ProjectRepository.FileFingerprint> ok = new LinkedHashMap<>(scope.fingerprints());
             ok.keySet().removeAll(parsed.erroredRelatives());
-            projectRepository.updateFileFps(projectId, ok, now);
+            projectRepository.updateFileFingerprints(projectId, ok, now);
         }
         log.accept("  Чистка: " + (System.currentTimeMillis() - phase) + " мс");
         log.accept("  Запись в БД за " + (System.currentTimeMillis() - writeStarted) + " мс");
@@ -322,7 +322,7 @@ public class ExtractService {
                 if (!source.equals(anchor.source())) {
                     return new Carry(anchor.translation(), "stale", true);
                 }
-                return new Carry(anchor.translation(), liveStatus(anchor.status()), false);
+                return new Carry(anchor.translation(), effectiveStatus(anchor.status()), false);
             }
             EntryRepository.TranslatedCell fallback = byFileSource.get(key(file, source));
             if (fallback == null) {
@@ -331,10 +331,10 @@ public class ExtractService {
             if (fallback == null) {
                 return null;
             }
-            return new Carry(fallback.translation(), liveStatus(fallback.status()), false);
+            return new Carry(fallback.translation(), effectiveStatus(fallback.status()), false);
         }
 
-        private static String liveStatus(String status) {
+        private static String effectiveStatus(String status) {
             return status == null || status.equals("untranslated") ? "untranslated" : status;
         }
 
@@ -377,7 +377,7 @@ public class ExtractService {
         return result;
     }
 
-    private static String shortFp(String fp) {
+    private static String shortFingerprint(String fp) {
         return fp == null || fp.length() <= 12 ? String.valueOf(fp) : fp.substring(0, 12);
     }
 }

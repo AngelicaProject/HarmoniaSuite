@@ -115,8 +115,8 @@ public class ProjectService {
     public OverviewDto overview(UUID projectId) {
         ProjectRepository.ProjectRow row = projectRepository.findById(projectId);
         return projectMapper.toOverviewDto(row, summaryOf(projectId, row.outputDir()),
-                toWorkspaceRelative(row.inputRoot()),
-                toWorkspaceRelative(row.outputDir()));
+                relativizeIfPossible(row.inputRoot()),
+                relativizeIfPossible(row.outputDir()));
     }
 
     public FileTreeDto fileTree(UUID projectId) {
@@ -173,13 +173,6 @@ public class ProjectService {
 
     public static List<String> normalizeStatuses(String raw) {
         return EntryStatusPolicy.parseFilter(raw);
-    }
-
-    private String toWorkspaceRelative(String pathValue) {
-        if (pathValue == null || pathValue.isBlank()) {
-            return pathValue;
-        }
-        return relativizeIfPossible(pathValue);
     }
 
     private String relativizeIfPossible(String pathValue) {

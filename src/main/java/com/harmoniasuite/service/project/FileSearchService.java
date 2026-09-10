@@ -37,7 +37,7 @@ public class FileSearchService {
             files = stream
                     .filter(Files::isRegularFile)
                     .filter(p -> p.getFileName().toString().toLowerCase().endsWith(".csv"))
-                    .map(p -> relativize(root, p))
+                    .map(p -> relativizeIfPossible(root, p))
                     .sorted(String.CASE_INSENSITIVE_ORDER)
                     .toList();
         }
@@ -79,7 +79,7 @@ public class FileSearchService {
         return new SourcePreviewDto(file, rows.size(), cols, translatable, preview, head, data, truncated);
     }
 
-    private String relativize(Path root, Path path) {
+    private String relativizeIfPossible(Path root, Path path) {
         try {
             return root.relativize(path.toAbsolutePath()).toString().replace('\\', '/');
         } catch (Exception e) {

@@ -16,7 +16,7 @@ public final class IcoSupport {
     }
 
     public static BufferedImage readBest(byte[] ico, int width, int height) throws IOException {
-        List<Entry> entries = dir(ico);
+        List<Entry> entries = readDirectory(ico);
         entries.sort(Comparator.comparingInt(e -> score(e.size(), Math.max(16, width))));
         IOException failed = new IOException("no decodable image in ICO");
         for (Entry entry : entries) {
@@ -42,7 +42,7 @@ public final class IcoSupport {
     private record Entry(int size, int offset, int length) {
     }
 
-    private static List<Entry> dir(byte[] ico) throws IOException {
+    private static List<Entry> readDirectory(byte[] ico) throws IOException {
         if (ico.length < 6) {
             throw new IOException("too small for ICO header");
         }

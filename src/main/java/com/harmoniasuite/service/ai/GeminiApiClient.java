@@ -78,7 +78,7 @@ public class GeminiApiClient {
                     }
                     log.accept(truncated
                             ? "[ОШИБКА] Ответ обрезан лимитом maxOutputTokens, делю пачку"
-                            : "[ОШИБКА] Некорректный JSON от Gemini: " + LlmJson.snippet(text));
+                            : "[ОШИБКА] Некорректный JSON от Gemini: " + LlmJson.excerpt(text));
                     return null;
                 }
                 return new LlmResult(byIndex, truncated, usage[0], usage[1], "");

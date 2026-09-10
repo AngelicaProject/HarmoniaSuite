@@ -24,7 +24,7 @@ class LogServiceTest {
                 .orElseThrow());
 
         LogService service = new LogService(file);
-        String output = service.tail(9999);
+        String output = service.readTail(9999);
 
         assertEquals(2000, output.lines().count());
         assertFalse(output.lines().anyMatch(line -> line.equals("line-100")));
@@ -40,7 +40,7 @@ class LogServiceTest {
         Path file = dir.resolve("harmonia.log");
         Files.writeString(file, "x".repeat(LogService.MAX_BYTES + 100));
 
-        String output = new LogService(file).tail(500);
+        String output = new LogService(file).readTail(500);
 
         assertEquals(LogService.MAX_BYTES, output.length());
         assertTrue(output.chars().allMatch(c -> c == 'x'));
@@ -52,7 +52,7 @@ class LogServiceTest {
         Path file = dir.resolve("harmonia.log");
         Files.writeString(file, "reading C:\\Users\\testuser\\AppData\\app.db\nok\n");
 
-        String output = new LogService(file).tail(500);
+        String output = new LogService(file).readTail(500);
 
         assertTrue(output.contains("C:\\Users\\***\\AppData\\app.db"));
         assertFalse(output.contains("testuser"));

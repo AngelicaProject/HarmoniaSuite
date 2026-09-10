@@ -78,7 +78,7 @@ class DeltaServiceTest {
         now = Instant.now().toString();
         projectId = projectRepository.insert(
                 "t", "rawexd/en", "dir", "out", "en", "ru", now);
-        projectRepository.updateSourcesFp(projectId, "fp-one", now);
+        projectRepository.updateSourcesFingerprint(projectId, "fp-one", now);
         projectRepository.upsertFiles(projectId, List.of("a.csv", "b.csv"), now);
         entryRepository.batchUpsert(projectId, projectRepository.fileIdMap(projectId),
                 new ArrayList<>(List.of(

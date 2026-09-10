@@ -153,7 +153,7 @@ public class EntryRepository {
         }
     }
 
-    private static SqlBuilder filtered(UUID projectId, EntryQuery filter) {
+    private static SqlBuilder whereClause(UUID projectId, EntryQuery filter) {
         SqlBuilder builder = SqlBuilder.where("project_id = ?", projectId);
         if (filter == null) {
             return builder;
@@ -184,7 +184,7 @@ public class EntryRepository {
     }
 
     public long countByQuery(UUID projectId, EntryQuery filter) {
-        SqlBuilder builder = filtered(projectId, filter);
+        SqlBuilder builder = whereClause(projectId, filter);
         Long total = jdbc.queryForObject(
                 COUNT_BASE + builder.text(), Long.class, builder.params());
         return total == null ? 0 : total;
@@ -199,7 +199,7 @@ public class EntryRepository {
     }
 
     public List<TranslationEntry> pageByQuery(UUID projectId, EntryQuery filter, int offset, int limit) {
-        SqlBuilder builder = filtered(projectId, filter).orderBy(ENTRY_ORDER).limitOffset(limit, offset);
+        SqlBuilder builder = whereClause(projectId, filter).orderBy(ENTRY_ORDER).limitOffset(limit, offset);
         return jdbc.query(SELECT_BASE + builder.text(), ROW_MAPPER, builder.params());
     }
 
@@ -210,7 +210,7 @@ public class EntryRepository {
     }
 
     public EntryPage pageWithTotal(UUID projectId, EntryQuery filter, int offset, int limit) {
-        SqlBuilder builder = filtered(projectId, filter).orderBy(ENTRY_ORDER).limitOffset(limit, offset);
+        SqlBuilder builder = whereClause(projectId, filter).orderBy(ENTRY_ORDER).limitOffset(limit, offset);
         List<EntryPageRow> rows = jdbc.query(
                 SELECT_PAGE_WITH_TOTAL + builder.text(), PAGE_ROW_MAPPER, builder.params());
         List<TranslationEntry> entries = rows.stream().map(EntryPageRow::entry).toList();
@@ -223,14 +223,14 @@ public class EntryRepository {
         EntryQuery filter = new EntryQuery(null, List.of(), file, query, false);
         int from = Math.max(0, offsetGroups);
         int take = Math.max(0, limitGroups);
-        SqlBuilder groups = filtered(projectId, filter).orderBy("row_index").limitOffset(take, from);
+        SqlBuilder groups = whereClause(projectId, filter).orderBy("row_index").limitOffset(take, from);
         List<Integer> rowIndexes = jdbc.query(
                 SELECT_ROW_GROUPS + groups.text(),
                 (rs, i) -> rs.getInt("row_index"), groups.params());
         if (rowIndexes.isEmpty()) {
             return List.of();
         }
-        SqlBuilder cells = filtered(projectId, new EntryQuery(null, List.of(), file, null, false))
+        SqlBuilder cells = whereClause(projectId, new EntryQuery(null, List.of(), file, null, false))
                 .andIn("row_index", rowIndexes)
                 .orderBy("row_index, column_index");
         return jdbc.query(SELECT_ROW_GROUP_CELLS + cells.text(), ROW_MAPPER, cells.params());
@@ -238,14 +238,14 @@ public class EntryRepository {
 
     public long countRowGroups(UUID projectId, String file, String query) {
         EntryQuery filter = new EntryQuery(null, List.of(), file, query, false);
-        SqlBuilder builder = filtered(projectId, filter);
+        SqlBuilder builder = whereClause(projectId, filter);
         Long total = jdbc.queryForObject(COUNT_ROW_GROUPS + builder.text(), Long.class, builder.params());
         return total == null ? 0 : total;
     }
 
     public long rowGroupPosition(UUID projectId, String file, int rowIndex, String query) {
         EntryQuery filter = new EntryQuery(null, List.of(), file, query, false);
-        SqlBuilder builder = filtered(projectId, filter).and("row_index < ?", rowIndex);
+        SqlBuilder builder = whereClause(projectId, filter).and("row_index < ?", rowIndex);
         Long position = jdbc.queryForObject(COUNT_ROW_GROUPS + builder.text(), Long.class, builder.params());
         return position == null ? 0 : position;
     }
@@ -253,7 +253,7 @@ public class EntryRepository {
     public TranslationEntry nextNeedsWork(UUID projectId, String file, int afterRow,
             int afterCol, String query) {
         EntryQuery filter = new EntryQuery(null, List.of(), file, query, false);
-        SqlBuilder builder = filtered(projectId, filter)
+        SqlBuilder builder = whereClause(projectId, filter)
                 .and(NEEDS_WORK_PREDICATE)
                 .and("(row_index > ? OR (row_index = ? AND column_index > ?))",
                         afterRow, afterRow, afterCol)
@@ -272,14 +272,14 @@ public class EntryRepository {
     }
 
     public TranslationEntry findByCell(UUID projectId, String cellId) {
-        SqlBuilder builder = filtered(projectId, null).and("cell_id = ?", cellId);
+        SqlBuilder builder = whereClause(projectId, null).and("cell_id = ?", cellId);
         List<TranslationEntry> rows =
                 jdbc.query(SELECT_BASE + builder.text(), ROW_MAPPER, builder.params());
         return rows.isEmpty() ? null : rows.get(0);
     }
 
     public TranslationEntry findByUuid(UUID projectId, UUID entryId) {
-        SqlBuilder builder = filtered(projectId, null).and("id = ?", entryId);
+        SqlBuilder builder = whereClause(projectId, null).and("id = ?", entryId);
         List<TranslationEntry> rows =
                 jdbc.query(SELECT_BASE + builder.text(), ROW_MAPPER, builder.params());
         return rows.isEmpty() ? null : rows.get(0);
@@ -343,7 +343,7 @@ public class EntryRepository {
     }
 
     public List<TranslationEntry> pending(UUID projectId, List<String> files) {
-        SqlBuilder builder = filtered(projectId, null).and("TRIM(translation) = ''")
+        SqlBuilder builder = whereClause(projectId, null).and("TRIM(translation) = ''")
                 .and("status <> 'no_translation_required'");
         if (files != null && !files.isEmpty()) {
             builder.andIn("file_path", files.stream().map(f -> f.replace('\\', '/')).toList());
@@ -365,8 +365,8 @@ public class EntryRepository {
                 });
     }
 
-    public long remaining(UUID projectId) {
-        SqlBuilder builder = filtered(projectId, null).and("TRIM(translation) = ''")
+    public long remainingCount(UUID projectId) {
+        SqlBuilder builder = whereClause(projectId, null).and("TRIM(translation) = ''")
                 .and("status <> 'no_translation_required'");
         Long total = jdbc.queryForObject(
                 COUNT_BASE + builder.text(), Long.class, builder.params());
@@ -374,7 +374,7 @@ public class EntryRepository {
     }
 
     public long translatedCount(UUID projectId) {
-        SqlBuilder builder = filtered(projectId, null)
+        SqlBuilder builder = whereClause(projectId, null)
                 .and("TRIM(translation) <> ''")
                 .and("status <> 'stale'");
         Long total = jdbc.queryForObject(
@@ -384,7 +384,7 @@ public class EntryRepository {
 
     public int updateTranslation(UUID id, String translation, String status, String updatedAt) {
         return jdbc.update(UPDATE_TRANSLATION,
-                translation, lower(translation), status, updatedAt, id);
+                translation, lowercase(translation), status, updatedAt, id);
     }
 
     /** Compatibility overload for importers that still carry UUIDs as strings. */
@@ -406,7 +406,7 @@ public class EntryRepository {
         List<Object[]> history = new ArrayList<>(writes.size());
         for (TranslationWrite write : writes) {
             java.util.UUID entry = ProjectRepository.uuidOf(write.entryId());
-            updates.add(new Object[]{write.newTranslation(), lower(write.newTranslation()),
+            updates.add(new Object[]{write.newTranslation(), lowercase(write.newTranslation()),
                     write.newStatus(), now, entry});
             history.add(new Object[]{projectId, entry, write.oldTranslation(), write.oldStatus(),
                     write.newTranslation(), write.newStatus(), origin, now, now});
@@ -480,9 +480,9 @@ public class EntryRepository {
                     entry.getRowKey() == null ? "" : entry.getRowKey(), entry.getColumnIndex(),
                     entry.getColumnName() == null ? "" : entry.getColumnName(), entry.getRowIndex(),
                     entry.getSource() == null ? "" : entry.getSource(),
-                    lower(entry.getSource()),
+                    lowercase(entry.getSource()),
                     entry.getTranslation() == null ? "" : entry.getTranslation(),
-                    lower(entry.getTranslation()),
+                    lowercase(entry.getTranslation()),
                     entry.getStatus() == null ? "untranslated" : entry.getStatus(), now, now});
         }
         if (batch.isEmpty()) {
@@ -495,7 +495,7 @@ public class EntryRepository {
         return jdbc.queryForList(SELECT_PROGRESS, projectId);
     }
 
-    private static String lower(String value) {
+    private static String lowercase(String value) {
         return value == null ? "" : value.toLowerCase(Locale.ROOT);
     }
 }

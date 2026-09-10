@@ -170,7 +170,7 @@ public class ProjectRepository {
             String path) {
     }
 
-    public record FileFp(
+    public record FileFingerprint(
             long size,
             String hash) {
     }
@@ -311,33 +311,33 @@ public class ProjectRepository {
                 createdAt, updatedAt, id);
     }
 
-    public String sourcesFp(UUID projectId) {
-        String fp = jdbc.queryForObject(SELECT_SOURCES_FP, String.class, projectId);
-        return fp == null ? "" : fp;
+    public String sourcesFingerprint(UUID projectId) {
+        String fingerprint = jdbc.queryForObject(SELECT_SOURCES_FP, String.class, projectId);
+        return fingerprint == null ? "" : fingerprint;
     }
 
-    public void updateSourcesFp(UUID projectId, String fp, String updatedAt) {
-        jdbc.update(UPDATE_SOURCES_FP, fp == null ? "" : fp, updatedAt, projectId);
+    public void updateSourcesFingerprint(UUID projectId, String fingerprint, String updatedAt) {
+        jdbc.update(UPDATE_SOURCES_FP, fingerprint == null ? "" : fingerprint, updatedAt, projectId);
     }
 
-    public Map<String, FileFp> fileFingerprints(UUID projectId) {
-        Map<String, FileFp> result = new LinkedHashMap<>();
+    public Map<String, FileFingerprint> fileFingerprints(UUID projectId) {
+        Map<String, FileFingerprint> result = new LinkedHashMap<>();
         for (Map<String, Object> row : jdbc.queryForList(SELECT_FILE_FPS, projectId)) {
             Object size = row.get("content_size");
             Object hash = row.get("content_hash");
-            result.put((String) row.get("path"), new FileFp(
+            result.put((String) row.get("path"), new FileFingerprint(
                     size instanceof Number number ? number.longValue() : -1,
                     hash instanceof String text ? text : ""));
         }
         return result;
     }
 
-    public void updateFileFps(UUID projectId, Map<String, FileFp> fps, String now) {
-        if (fps == null || fps.isEmpty()) {
+    public void updateFileFingerprints(UUID projectId, Map<String, FileFingerprint> fingerprints, String now) {
+        if (fingerprints == null || fingerprints.isEmpty()) {
             return;
         }
-        List<Object[]> batch = new ArrayList<>(fps.size());
-        for (Map.Entry<String, FileFp> item : fps.entrySet()) {
+        List<Object[]> batch = new ArrayList<>(fingerprints.size());
+        for (Map.Entry<String, FileFingerprint> item : fingerprints.entrySet()) {
             batch.add(new Object[]{item.getValue().size(), item.getValue().hash(), now, projectId, item.getKey()});
         }
         jdbc.batchUpdate(UPDATE_FILE_FP, batch);

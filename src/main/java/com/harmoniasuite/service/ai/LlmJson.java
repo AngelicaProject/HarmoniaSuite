@@ -63,7 +63,7 @@ final class LlmJson {
         }
     }
 
-    static String snippet(String text) {
+    static String excerpt(String text) {
         String flat = text.strip().replaceAll("\\s+", " ");
         return flat.length() > 400 ? flat.substring(0, 400) + "…" : flat;
     }

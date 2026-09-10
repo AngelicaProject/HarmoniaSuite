@@ -60,7 +60,7 @@ public class JobService {
                 .findFirst()
                 .orElseThrow(() -> new IllegalArgumentException("unknown action"));
         if ("sync-sources".equals(request.action()) || "update".equals(request.action())) {
-            return launch(handler, request, new JobPaths(null, null, workspace.root(), null));
+            return submit(handler, request, new JobPaths(null, null, workspace.root(), null));
         }
         if (request.projectId() == null) {
             throw new HarmoniaSuiteBadRequestException("projectId is required");
@@ -74,10 +74,10 @@ public class JobService {
                 ? Path.of(project.outputDir())
                 : workspace.resolve(request.output());
         JobPaths paths = new JobPaths(request.projectId(), projectDir, root, output);
-        return launch(handler, request, paths);
+        return submit(handler, request, paths);
     }
 
-    private JobDto launch(JobHandler handler, RunRequest request, JobPaths paths) {
+    private JobDto submit(JobHandler handler, RunRequest request, JobPaths paths) {
         String jobId = UUID.randomUUID().toString().replace("-", "");
         JobState job = new JobState(jobId, request.action());
         jobs.put(job);

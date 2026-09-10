@@ -85,7 +85,8 @@ public class LlmTranslateService extends AbstractBatchTranslator {
         return provider == null ? Integer.MAX_VALUE : provider.maxBatchItems();
     }
 
-    boolean noteAttempt(boolean ok) {
+    /** Records the batch outcome; consecutive failures past the limit abort the run. */
+    boolean recordAttempt(boolean ok) {
         if (ok) {
             consecutiveFails = 0;
             return false;
@@ -140,20 +141,20 @@ public class LlmTranslateService extends AbstractBatchTranslator {
 
     @Override
     protected void onComplete(UUID projectId, Consumer<String> log) {
-        long remaining = entryRepository.remaining(projectId);
-        log.accept("ГОТОВО. Не переведено: " + remaining + ". Запросов: " + requests
+        long remainingCount = entryRepository.remainingCount(projectId);
+        log.accept("ГОТОВО. Не переведено: " + remainingCount + ". Запросов: " + requests
                 + " (неуспешных попыток: " + failedAttempts.get() + ")"
-                + ". Токены: вход " + fmt(inTokens) + " / выход " + fmt(outTokens));
+                + ". Токены: вход " + format(inTokens) + " / выход " + format(outTokens));
     }
 
-    private static String fmt(long value) {
+    private static String format(long value) {
         return String.format("%,d", value).replace(',', ' ');
     }
 
     @Override
     protected boolean executeBatch(List<TranslationEntry> batch, UUID projectId,
             Consumer<String> log) throws Exception {
-        runWithSplitFallback(batch, log, part -> attempt(part, projectId, log));
+        runWithSplitFallback(batch, log, part -> translateBatch(part, projectId, log));
         return true;
     }
 
@@ -165,7 +166,7 @@ public class LlmTranslateService extends AbstractBatchTranslator {
         return est;
     }
 
-    private boolean attempt(List<TranslationEntry> batch, UUID projectId,
+    private boolean translateBatch(List<TranslationEntry> batch, UUID projectId,
             Consumer<String> log) throws Exception {
         List<String> sources = new ArrayList<>();
         int inputChars = 0;
@@ -181,7 +182,7 @@ public class LlmTranslateService extends AbstractBatchTranslator {
         LlmResult result = provider.chat(activeModel(), systemPrompt,
                 sources, maxOut, log, failedAttempts);
         if (result == null) {
-            if (noteAttempt(false)) {
+            if (recordAttempt(false)) {
                 abortRun();
             }
             return false;
@@ -195,7 +196,7 @@ public class LlmTranslateService extends AbstractBatchTranslator {
         inTokens += result.inTokens();
         outTokens += result.outTokens();
         if (requests % 10 == 0) {
-            log.accept("Токены: вход " + fmt(inTokens) + " / выход " + fmt(outTokens)
+            log.accept("Токены: вход " + format(inTokens) + " / выход " + format(outTokens)
                     + " (ток/симв " + String.format("%.2f", tokPerChar) + ")");
         }
         if (result.truncated() || result.byIndex().size() != batch.size()) {
@@ -210,7 +211,7 @@ public class LlmTranslateService extends AbstractBatchTranslator {
                             + maxOut + ") — дальше пачки под него");
                 }
             }
-            if (noteAttempt(false)) {
+            if (recordAttempt(false)) {
                 abortRun();
             }
             return false;
@@ -219,7 +220,7 @@ public class LlmTranslateService extends AbstractBatchTranslator {
         List<Integer> transientBad = new ArrayList<>();
         List<Integer> hardBad = new ArrayList<>();
         for (int i = 0; i < batch.size(); i++) {
-            Check check = checkOne(sources.get(i), result.byIndex().get(i));
+            TranslationCheck check = checkTranslation(sources.get(i), result.byIndex().get(i));
             if (check.problem() == null) {
                 translations.add(check.translation());
             } else {
@@ -257,7 +258,7 @@ public class LlmTranslateService extends AbstractBatchTranslator {
         calibrate(goodChars, result.outTokens());
         if (!transientBad.isEmpty()) {
             log.accept("[РЕТРАЙ] нестабильных: " + transientBad.size() + ", делю пачку");
-            if (noteAttempt(false)) {
+            if (recordAttempt(false)) {
                 abortRun();
             }
             return false;
@@ -265,23 +266,23 @@ public class LlmTranslateService extends AbstractBatchTranslator {
         for (int i : hardBad) {
             acceptSource(batch.get(i), sources.get(i), projectId, now, log);
         }
-        noteAttempt(true);
+        recordAttempt(true);
         provider.noteBatchOk();
         return true;
     }
 
-    private record Check(String translation, String problem, boolean retryable) {
+    private record TranslationCheck(String translation, String problem, boolean retryable) {
     }
 
-    private Check checkOne(String source, String raw) {
+    private TranslationCheck checkTranslation(String source, String raw) {
         if (raw == null || raw.isBlank()) {
-            return new Check(null, "пусто: нет перевода", true);
+            return new TranslationCheck(null, "пусто: нет перевода", true);
         }
         if (raw.equals(source)) {
-            return new Check(null, "эхо: перевод совпадает с исходником", false);
+            return new TranslationCheck(null, "эхо: перевод совпадает с исходником", false);
         }
         String translation = TagSupport.repairCasing(source, raw);
-        return new Check(translation, null, false);
+        return new TranslationCheck(translation, null, false);
     }
 
     private void acceptSource(TranslationEntry entry, String source, UUID projectId,
@@ -293,10 +294,10 @@ public class LlmTranslateService extends AbstractBatchTranslator {
                 provider.id(), now);
         entry.setTranslation("");
         entry.setStatus("no_translation_required");
-        log.accept("[ЭХО] перевод не нужен: " + snippet(source));
+        log.accept("[ЭХО] перевод не нужен: " + excerpt(source));
     }
 
-    private static String snippet(String text) {
+    private static String excerpt(String text) {
         if (text == null) {
             return "";
         }
