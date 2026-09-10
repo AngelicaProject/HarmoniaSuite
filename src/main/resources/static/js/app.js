@@ -1151,12 +1151,45 @@ const App = {
         const editorRef = ref(null);
         const deltaRef = ref(null);
         const followFiles = ref((() => { try { return localStorage.getItem('hs-follow') !== 'off'; } catch (e) { return true; } })());
+        const followRow = ref((() => { try { return localStorage.getItem('hs-follow-row') !== 'off'; } catch (e) { return true; } })());
         const revealFile = ref('');
         let lastReveal = '';
         let revealTimer = null;
         function toggleFollow() {
             followFiles.value = !followFiles.value;
             try { localStorage.setItem('hs-follow', followFiles.value ? 'on' : 'off'); } catch (e) {}
+        }
+        function toggleFollowRow() {
+            followRow.value = !followRow.value;
+            try { localStorage.setItem('hs-follow-row', followRow.value ? 'on' : 'off'); } catch (e) {}
+        }
+        let rowFollowRequest = 0;
+        async function onEditorEntry(id) {
+            const request = ++rowFollowRequest;
+            if (!id) return;
+            const previousId = focusId.value;
+            const previous = previousId ? localEntry(previousId) : null;
+            focusId.value = id;
+            if (!followRow.value || id === previousId) return;
+            const entry = await ensureEntry(id);
+            if (!entry || request !== rowFollowRequest || !followRow.value || focusId.value !== id) return;
+            const sameRow = previous
+                && previous.file === entry.file
+                && Number(previous.row_index) === Number(entry.row_index);
+            if (sameRow) return;
+            if (leftMode.value === 'phrases' && focusFileFilter.value !== entry.file) {
+                focusFileFilter.value = entry.file || '';
+                phrasePage.value = 0;
+                phraseSearchQ.value = '';
+            }
+            await focusPhrase(id);
+            if (request !== rowFollowRequest || !followRow.value || focusId.value !== id) return;
+            await nextTick();
+            try {
+                const el = document.querySelector('.dock.left .ft-rowcard.active')
+                    || document.querySelector('.dock.left .ft-cell.active');
+                if (el && el.scrollIntoView) el.scrollIntoView({block: 'center'});
+            } catch (e) {}
         }
         async function revealInFiles(file, force, phraseId) {
             if (!file || !projectId.value) return;
@@ -1799,6 +1832,9 @@ const App = {
             onResolveConflict,
             followFiles,
             toggleFollow,
+            followRow,
+            toggleFollowRow,
+            onEditorEntry,
             revealFile,
             onEditorFile,
             onRevealFile,
@@ -1961,7 +1997,7 @@ const App = {
       </div>
     </div></Teleport>
     <main class="main-pane">
-      <Editor ref="editorRef" :entries="doc?doc.entries:[]" :focusId="focusId" :store-key="projectId" :csv-open="csvRequest" :csv-root="root" :pin-request="previewPinRequest" :row-context="rowContext" :row-next="editorRowNext" :load-row-page="editorLoadRowPage" @save="onSave" @navigate="onNavigate" @need-entry="ensureEntry" @resolve="onResolveConflict" @file="onEditorFile" @reveal="onRevealFile"/>
+      <Editor ref="editorRef" :entries="doc?doc.entries:[]" :focusId="focusId" :store-key="projectId" :csv-open="csvRequest" :csv-root="root" :pin-request="previewPinRequest" :row-context="rowContext" :row-next="editorRowNext" :load-row-page="editorLoadRowPage" :follow-row="followRow" @save="onSave" @navigate="onNavigate" @need-entry="ensureEntry" @resolve="onResolveConflict" @file="onEditorFile" @entry="onEditorEntry" @toggle-follow-row="toggleFollowRow" @reveal="onRevealFile"/>
     </main>
     <section class="dock right" v-show="railVisible.right">
       <div class="hsplit left" @mousedown="e=>startResize('right',e)" title="Потяните, чтобы изменить ширину"></div>
