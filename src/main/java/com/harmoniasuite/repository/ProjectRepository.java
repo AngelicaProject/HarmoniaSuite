@@ -37,6 +37,16 @@ public class ProjectRepository {
     private static final String SELECT_ALL_PROJECTS = "SELECT " + PROJECT_COLUMNS
             + "FROM projects ORDER BY name";
 
+    private static final String COUNT_PROJECTS_BY_NAME = """
+            SELECT COUNT(*)
+            FROM projects
+            WHERE name = ?""";
+
+    private static final String SELECT_PROJECT_EXISTS = """
+            SELECT 1
+            FROM projects
+            WHERE id = ?""";
+
     private static final String SUMMARY_BY_STATUS = """
             SELECT e.status, COUNT(e.id) AS n,
                    COALESCE(SUM(CASE WHEN (TRIM(e.translation) <> '' AND e.status <> 'stale')
@@ -47,6 +57,18 @@ public class ProjectRepository {
             LEFT JOIN entries e ON e.file_id = f.id AND e.project_id = f.project_id
             WHERE f.project_id = ?
             GROUP BY e.status""";
+
+    private static final String SUMMARY_WITH_PROJECT = """
+            SELECT p.output_dir AS output_dir, e.status AS status, COUNT(e.id) AS n,
+                   COALESCE(SUM(CASE WHEN (TRIM(e.translation) <> '' AND e.status <> 'stale')
+                       OR e.status = 'no_translation_required'
+                       THEN 1 ELSE 0 END), 0) AS translated,
+                   (SELECT COUNT(*) FROM source_files sf WHERE sf.project_id = p.id) AS files
+            FROM projects p
+            LEFT JOIN source_files f ON f.project_id = p.id
+            LEFT JOIN entries e ON e.file_id = f.id AND e.project_id = f.project_id
+            WHERE p.id = ?
+            GROUP BY p.output_dir, e.status""";
 
     private static final String SUMMARIES_ALL = """
             SELECT project_id, status, COUNT(*) AS n,
@@ -228,6 +250,28 @@ public class ProjectRepository {
             translated += ((Number) row.get("translated")).longValue();
         }
         return new ProjectSummary(files, entries, translated, byStatus);
+    }
+
+    public ProjectSnapshot summarizeWithProject(UUID projectId) {
+        List<ProjectSummaryRow> rows = jdbc.query(
+                SUMMARY_WITH_PROJECT, SUMMARY_ROW_MAPPER, projectId);
+        if (rows.isEmpty()) {
+            throw new HarmoniaSuiteNotFoundException("Project not found: " + projectId);
+        }
+        ProjectSummaryRow first = rows.getFirst();
+        Map<String, Long> byStatus = new LinkedHashMap<>();
+        long entries = 0;
+        long translated = 0;
+        for (ProjectSummaryRow row : rows) {
+            if (row.status() == null) {
+                continue;
+            }
+            byStatus.put(row.status(), row.entries());
+            entries += row.entries();
+            translated += row.translated();
+        }
+        return new ProjectSnapshot(
+                new ProjectSummary(first.files(), entries, translated, byStatus), first.outputDir());
     }
 
     public Map<String, ProjectSummary> summaries() {
