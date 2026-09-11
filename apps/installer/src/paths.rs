@@ -178,6 +178,10 @@ impl InstallationPaths {
         self.app_root.join("toolchain")
     }
 
+    pub fn toolchain_trash_dir(&self) -> PathBuf {
+        self.toolchain_dir().join(".trash")
+    }
+
     pub fn source_dir(&self) -> PathBuf {
         self.app_root.join("source")
     }

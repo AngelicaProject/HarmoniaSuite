@@ -531,7 +531,7 @@ fn is_reparse_point(path: &Path) -> io::Result<bool> {
     Ok(attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0)
 }
 
-fn atomic_write_json<T: Serialize>(path: &Path, value: &T) -> Result<(), StateError> {
+pub(crate) fn atomic_write_json<T: Serialize>(path: &Path, value: &T) -> Result<(), StateError> {
     let encoded = serde_json::to_vec_pretty(value)?;
     let parent = path
         .parent()

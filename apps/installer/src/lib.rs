@@ -2,6 +2,7 @@ pub mod checksum;
 pub mod diagnostics;
 pub mod download;
 pub mod extract;
+pub mod git;
 pub mod lock;
 pub mod paths;
 pub mod process;
@@ -22,7 +23,7 @@ pub use state::{
     TransactionPhase, TransactionRecord, TransactionStatus,
 };
 pub use toolchain::{
-    ArchiveFormat, ManagedEnvironment, OfficialToolchainCatalog, ResolvedToolchain,
-    ToolchainDescriptor, ToolchainError, ToolchainKind, ToolchainManager, ToolchainRecord,
-    ToolchainState, ToolchainStateStore,
+    ArchiveFormat, ManagedEnvironment, OfficialToolchainCatalog, PendingGarbageCollection,
+    ResolvedToolchain, ToolchainDescriptor, ToolchainError, ToolchainKind, ToolchainManager,
+    ToolchainRecord, ToolchainState, ToolchainStateStore,
 };

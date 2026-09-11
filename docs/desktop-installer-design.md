@@ -17,7 +17,7 @@ Application root содержит только управляемые артеф
 ```text
 bin/                 launchers and activator
 versions/<sha>/      immutable staged versions
-toolchain/           side-by-side managed Java/Node/Git
+toolchain/           side-by-side managed Java/Node
 source/              managed bare Git mirror
 build/<sha>/         disposable detached worktrees
 cache/               downloads and build caches

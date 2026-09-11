@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 use std::fs::{self, File, OpenOptions};
-use std::io;
+use std::io::{self, Read};
 use std::path::{Component, Path, PathBuf};
 
 use flate2::read::GzDecoder;
@@ -55,11 +55,15 @@ fn extract_zip(archive_path: &Path, destination: &Path) -> Result<(), Extraction
         let mut entry = archive
             .by_index(index)
             .map_err(|error| ExtractionError::Archive(error.to_string()))?;
-        let relative = safe_entry_path(entry.name())?;
+        let entry_name = entry.name().to_owned();
+        let relative = safe_entry_path(&entry_name)?;
         let output = destination.join(&relative);
         register_entry(&mut entries, &relative, &output)?;
         if entry.is_symlink() || is_zip_symlink(entry.unix_mode()) {
-            return Err(ExtractionError::UnsafeEntry(entry.name().to_owned()));
+            let target = read_symlink_target(&mut entry, &entry_name)?;
+            let normalized_target = safe_symlink_target(&relative, &target)?;
+            create_symlink(&normalized_target, &output, &entry_name)?;
+            continue;
         }
         if entry.is_dir() {
             create_directory(&output)?;
@@ -95,8 +99,16 @@ fn extract_tar_gz(archive_path: &Path, destination: &Path) -> Result<(), Extract
         let output = destination.join(&relative);
         register_entry(&mut entries, &relative, &output)?;
         let entry_type = entry.header().entry_type();
-        if entry_type.is_symlink()
-            || entry_type.is_hard_link()
+        if entry_type.is_symlink() {
+            let target = entry
+                .link_name()
+                .map_err(|error| ExtractionError::Archive(error.to_string()))?
+                .ok_or_else(|| ExtractionError::UnsafeEntry(raw_path.clone()))?;
+            let normalized_target = safe_symlink_target(&relative, &target.to_string_lossy())?;
+            create_symlink(&normalized_target, &output, &raw_path)?;
+            continue;
+        }
+        if entry_type.is_hard_link()
             || entry_type.is_block_special()
             || entry_type.is_character_special()
             || entry_type.is_fifo()
@@ -145,6 +157,77 @@ fn safe_entry_path(raw: &str) -> Result<PathBuf, ExtractionError> {
         return Err(ExtractionError::UnsafeEntry(raw.to_owned()));
     }
     Ok(relative)
+}
+
+fn safe_symlink_target(link_path: &Path, raw_target: &str) -> Result<String, ExtractionError> {
+    let normalized = raw_target.replace('\\', "/");
+    let target = Path::new(&normalized);
+    let mut resolved = PathBuf::new();
+    if target.is_absolute() {
+        return Err(ExtractionError::UnsafeEntry(raw_target.to_owned()));
+    }
+    if let Some(parent) = link_path.parent() {
+        for component in parent.components() {
+            if let Component::Normal(value) = component {
+                resolved.push(value);
+            }
+        }
+    }
+    for component in target.components() {
+        match component {
+            Component::Normal(value) => {
+                if value.to_string_lossy().contains(':') {
+                    return Err(ExtractionError::UnsafeEntry(raw_target.to_owned()));
+                }
+                resolved.push(value);
+            }
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !resolved.pop() {
+                    return Err(ExtractionError::UnsafeEntry(raw_target.to_owned()));
+                }
+            }
+            Component::RootDir | Component::Prefix(_) => {
+                return Err(ExtractionError::UnsafeEntry(raw_target.to_owned()));
+            }
+        }
+    }
+    if resolved.as_os_str().is_empty() {
+        return Err(ExtractionError::UnsafeEntry(raw_target.to_owned()));
+    }
+    Ok(normalized)
+}
+
+fn read_symlink_target<R: Read>(reader: &mut R, name: &str) -> Result<String, ExtractionError> {
+    const MAX_SYMLINK_TARGET_BYTES: usize = 4096;
+    let mut bytes = Vec::new();
+    reader
+        .take((MAX_SYMLINK_TARGET_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > MAX_SYMLINK_TARGET_BYTES {
+        return Err(ExtractionError::UnsafeEntry(name.to_owned()));
+    }
+    let target =
+        String::from_utf8(bytes).map_err(|_| ExtractionError::UnsafeEntry(name.to_owned()))?;
+    let target = target.trim_end_matches(['\r', '\n']);
+    if target.is_empty() {
+        return Err(ExtractionError::UnsafeEntry(name.to_owned()));
+    }
+    Ok(target.to_owned())
+}
+
+fn create_symlink(target: &str, output: &Path, _entry_name: &str) -> Result<(), ExtractionError> {
+    ensure_parent(output)?;
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(target, output)?;
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (target, output);
+        Err(ExtractionError::UnsafeEntry(_entry_name.to_owned()))
+    }
 }
 
 fn register_entry(
@@ -275,6 +358,99 @@ mod tests {
             Err(ExtractionError::UnsafeEntry(_))
         ));
         assert!(!destination.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn extracts_realistic_node_internal_symlinks() {
+        let root = tempdir().unwrap();
+        let archive = root.path().join("node.tar.gz");
+        write_tar(&archive, |builder| {
+            append_directory(builder, "node-v24.21.0");
+            append_directory(builder, "node-v24.21.0/bin");
+            append_directory(builder, "node-v24.21.0/lib");
+            append_directory(builder, "node-v24.21.0/lib/node_modules");
+            append_directory(builder, "node-v24.21.0/lib/node_modules/npm");
+            append_directory(builder, "node-v24.21.0/lib/node_modules/npm/bin");
+            append_file(builder, "node-v24.21.0/bin/node", b"node");
+            append_file(
+                builder,
+                "node-v24.21.0/lib/node_modules/npm/bin/npm-cli.js",
+                b"npm",
+            );
+            append_file(
+                builder,
+                "node-v24.21.0/lib/node_modules/npm/bin/npx-cli.js",
+                b"npx",
+            );
+            append_symlink(
+                builder,
+                "node-v24.21.0/bin/npm",
+                "../lib/node_modules/npm/bin/npm-cli.js",
+            );
+            append_symlink(
+                builder,
+                "node-v24.21.0/bin/npx",
+                "../lib/node_modules/npm/bin/npx-cli.js",
+            );
+            Ok(())
+        });
+        let destination = root.path().join("staging");
+        extract_archive(&archive, ArchiveFormat::TarGz, &destination).unwrap();
+        assert_eq!(
+            fs::read_link(destination.join("node-v24.21.0/bin/npm")).unwrap(),
+            PathBuf::from("../lib/node_modules/npm/bin/npm-cli.js")
+        );
+        assert_eq!(
+            fs::read_link(destination.join("node-v24.21.0/bin/npx")).unwrap(),
+            PathBuf::from("../lib/node_modules/npm/bin/npx-cli.js")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_symlink_that_escapes_extraction_root() {
+        let root = tempdir().unwrap();
+        let archive = root.path().join("escape.tar.gz");
+        write_tar(&archive, |builder| {
+            append_symlink(builder, "node/bin/npm", "../../../outside");
+            Ok(())
+        });
+        let destination = root.path().join("staging");
+        assert!(matches!(
+            extract_archive(&archive, ArchiveFormat::TarGz, &destination),
+            Err(ExtractionError::UnsafeEntry(_))
+        ));
+        assert!(!destination.exists());
+    }
+
+    #[cfg(unix)]
+    fn append_directory(builder: &mut Builder<GzEncoder<File>>, path: &str) {
+        let mut header = Header::new_gnu();
+        header.set_entry_type(EntryType::dir());
+        header.set_size(0);
+        header.set_mode(0o755);
+        header.set_cksum();
+        builder.append_data(&mut header, path, &[][..]).unwrap();
+    }
+
+    #[cfg(unix)]
+    fn append_file(builder: &mut Builder<GzEncoder<File>>, path: &str, content: &[u8]) {
+        let mut header = Header::new_gnu();
+        header.set_size(content.len() as u64);
+        header.set_mode(0o755);
+        header.set_cksum();
+        builder.append_data(&mut header, path, content).unwrap();
+    }
+
+    #[cfg(unix)]
+    fn append_symlink(builder: &mut Builder<GzEncoder<File>>, path: &str, target: &str) {
+        let mut header = Header::new_gnu();
+        header.set_entry_type(EntryType::symlink());
+        header.set_size(0);
+        header.set_link_name(target).unwrap();
+        header.set_cksum();
+        builder.append_data(&mut header, path, &[][..]).unwrap();
     }
 
     fn write_tar<F>(path: &Path, append: F)
