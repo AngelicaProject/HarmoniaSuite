@@ -48,7 +48,8 @@ pub fn extract_archive(
 
 fn extract_zip(archive_path: &Path, destination: &Path) -> Result<(), ExtractionError> {
     let file = File::open(archive_path)?;
-    let mut archive = ZipArchive::new(file).map_err(|error| ExtractionError::Archive(error.to_string()))?;
+    let mut archive =
+        ZipArchive::new(file).map_err(|error| ExtractionError::Archive(error.to_string()))?;
     let mut entries = BTreeSet::new();
     for index in 0..archive.len() {
         let mut entry = archive
@@ -193,7 +194,8 @@ fn reject_links(path: &Path) -> Result<(), ExtractionError> {
 }
 
 fn is_zip_symlink(mode: Option<u32>) -> bool {
-    mode.map(|mode| mode & 0o170000 == 0o120000).unwrap_or(false)
+    mode.map(|mode| mode & 0o170000 == 0o120000)
+        .unwrap_or(false)
 }
 
 #[cfg(unix)]

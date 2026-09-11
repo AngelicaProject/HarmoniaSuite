@@ -87,7 +87,11 @@ impl ToolchainDescriptor {
         }
     }
 
-    pub fn executable(mut self, name: impl Into<String>, relative_path: impl Into<PathBuf>) -> Self {
+    pub fn executable(
+        mut self,
+        name: impl Into<String>,
+        relative_path: impl Into<PathBuf>,
+    ) -> Self {
         self.executables.insert(name.into(), relative_path.into());
         self
     }
@@ -311,7 +315,10 @@ pub enum ToolchainError {
         actual_architecture: TargetArchitecture,
     },
     #[error("toolchain {kind:?} version {version} was not found")]
-    NotFound { kind: ToolchainKind, version: String },
+    NotFound {
+        kind: ToolchainKind,
+        version: String,
+    },
     #[error("toolchain state schema {0} is not supported")]
     UnsupportedStateSchema(u32),
     #[error("toolchain catalog schema {0} is not supported")]
@@ -551,7 +558,10 @@ impl<D: DownloadClient> ToolchainManager<D> {
         Ok(root)
     }
 
-    fn resolve_record(&self, record: &ToolchainRecord) -> Result<ResolvedToolchain, ToolchainError> {
+    fn resolve_record(
+        &self,
+        record: &ToolchainRecord,
+    ) -> Result<ResolvedToolchain, ToolchainError> {
         let root = self.record_root(record)?;
         if !root.is_dir() {
             return Err(ToolchainError::Incomplete(root));
@@ -890,7 +900,12 @@ mod tests {
         .executable("node", "node");
         manager.ensure(&second_descriptor).unwrap();
         assert_ne!(first.id, second_descriptor.id());
-        assert!(manager.paths().toolchain_dir().join("node").join(first.id).is_dir());
+        assert!(manager
+            .paths()
+            .toolchain_dir()
+            .join("node")
+            .join(first.id)
+            .is_dir());
         assert!(manager
             .paths()
             .toolchain_dir()

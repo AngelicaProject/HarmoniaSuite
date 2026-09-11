@@ -9,11 +9,11 @@ pub mod state;
 pub mod toolchain;
 
 pub use diagnostics::DiagnosticLogger;
-pub use extract::ExtractionError;
 pub use download::{
     DownloadClient, DownloadError, DownloadReceipt, DownloadRequest, DownloadResponse,
     DownloadTransport, HttpDownloader, ResumableDownloader,
 };
+pub use extract::ExtractionError;
 pub use lock::{InstallationLock, LockError};
 pub use paths::{InstallationPaths, PathEnvironment, PathError, Platform, TargetArchitecture};
 pub use process::{CommandSpec, ProcessError, ProcessOutput, ProcessRunner, SystemProcessRunner};

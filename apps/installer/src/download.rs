@@ -238,10 +238,7 @@ impl DownloadTransport for HttpDownloader {
         let client = Client::builder()
             .timeout(timeout)
             .redirect(Policy::custom(|attempt| {
-                let all_https = attempt
-                    .previous()
-                    .iter()
-                    .all(|url| url.scheme() == "https");
+                let all_https = attempt.previous().iter().all(|url| url.scheme() == "https");
                 if attempt.url().scheme() == "https" && all_https && attempt.previous().len() < 5 {
                     attempt.follow()
                 } else {

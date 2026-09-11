@@ -70,8 +70,11 @@ impl CommandSpec {
         K: Into<String>,
         V: Into<String>,
     {
-        self.environment
-            .extend(values.into_iter().map(|(name, value)| (name.into(), value.into())));
+        self.environment.extend(
+            values
+                .into_iter()
+                .map(|(name, value)| (name.into(), value.into())),
+        );
         self
     }
 
