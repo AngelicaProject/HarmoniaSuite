@@ -36,6 +36,7 @@ impl InstallationLock {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
+        let owner_path = owner_metadata_path(&path);
         let mut file = OpenOptions::new()
             .create(true)
             .truncate(false)
@@ -46,7 +47,7 @@ impl InstallationLock {
             if is_lock_contention(&error) {
                 return Err(LockError::Busy {
                     path,
-                    owner: read_owner(&mut file),
+                    owner: read_owner(&mut file, &owner_path),
                 });
             }
             return Err(LockError::Io(error));
@@ -63,6 +64,7 @@ impl InstallationLock {
         file.write_all(&encoded)?;
         file.write_all(b"\n")?;
         file.sync_all()?;
+        write_owner_metadata(&owner_path, &encoded)?;
         Ok(Self { file, path })
     }
 
@@ -77,18 +79,40 @@ impl Drop for InstallationLock {
     }
 }
 
-fn read_owner(file: &mut File) -> String {
-    if file.seek(SeekFrom::Start(0)).is_err() {
-        return "owner metadata unavailable".to_owned();
-    }
+fn read_owner(file: &mut File, owner_path: &Path) -> String {
     let mut content = String::new();
-    if file.read_to_string(&mut content).is_err() || content.trim().is_empty() {
+    if file.seek(SeekFrom::Start(0)).is_ok() {
+        let _ = file.read_to_string(&mut content);
+    }
+    if content.trim().is_empty() {
+        content = std::fs::read_to_string(owner_path).unwrap_or_default();
+    }
+    parse_owner(&content)
+}
+
+fn parse_owner(content: &str) -> String {
+    if content.trim().is_empty() {
         return "owner metadata unavailable".to_owned();
     }
-    match serde_json::from_str::<LockOwner>(&content) {
+    match serde_json::from_str::<LockOwner>(content) {
         Ok(owner) => format!("pid={} operation={}", owner.pid, owner.operation),
         Err(_) => "owner metadata invalid".to_owned(),
     }
+}
+
+fn write_owner_metadata(path: &Path, encoded: &[u8]) -> Result<(), std::io::Error> {
+    let mut file = OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .open(path)?;
+    file.write_all(encoded)?;
+    file.write_all(b"\n")?;
+    file.sync_all()
+}
+
+fn owner_metadata_path(path: &Path) -> PathBuf {
+    path.with_extension("owner.json")
 }
 
 fn is_lock_contention(error: &std::io::Error) -> bool {

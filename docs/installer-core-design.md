@@ -40,8 +40,9 @@ is safe. Unknown paths and user-data paths are never deleted from a recovery sca
 ## Locking and diagnostics
 
 `state/install.lock` is an OS-backed exclusive lock held for the complete installer operation. The
-file also contains non-secret owner metadata for diagnostics; the OS lock, not a stale timestamp,
-is the authority. Persistent diagnostics are JSON Lines under `state/diagnostics/`, with event,
+file contains non-secret owner metadata for diagnostics, with a small owner sidecar used when the
+platform does not permit reading the locked file; the OS lock, not a stale timestamp, is the
+authority. Persistent diagnostics are JSON Lines under `state/diagnostics/`, with event,
 level, timestamp and structured fields. Commands must be passed as argv and logged after redaction;
 environment values, credentials and authorization headers are not logged.
 
