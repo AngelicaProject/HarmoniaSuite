@@ -25,6 +25,12 @@ jobs:
       - run: cargo clippy --manifest-path apps/installer/Cargo.toml --all-targets -- -D warnings
       - run: cargo test --manifest-path apps/installer/Cargo.toml
       - run: cargo build --release --manifest-path apps/installer/Cargo.toml
+      - name: capture resolved installer lock
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: installer-cargo-lock-${{ matrix.os }}
+          path: apps/installer/Cargo.lock
 
   desktop:
     name: desktop (${{ matrix.os }})

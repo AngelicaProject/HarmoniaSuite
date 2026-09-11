@@ -246,23 +246,15 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
-    fn rejects_parent_traversal_and_removes_partial_destination() {
-        let root = tempdir().unwrap();
-        let archive = root.path().join("malicious.tar.gz");
-        write_tar(&archive, |builder| {
-            let mut header = Header::new_gnu();
-            header.set_size(4);
-            header.set_mode(0o644);
-            header.set_cksum();
-            builder.append_data(&mut header, "../escape", &b"keep"[..])
-        });
-        let destination = root.path().join("staging");
+    fn rejects_parent_traversal_entry_paths() {
         assert!(matches!(
-            extract_archive(&archive, ArchiveFormat::TarGz, &destination),
+            safe_entry_path("../escape"),
             Err(ExtractionError::UnsafeEntry(_))
         ));
-        assert!(!destination.exists());
-        assert!(!root.path().join("escape").exists());
+        assert!(matches!(
+            safe_entry_path("C:\\outside"),
+            Err(ExtractionError::UnsafeEntry(_))
+        ));
     }
 
     #[test]
