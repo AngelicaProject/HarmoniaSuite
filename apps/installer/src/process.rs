@@ -479,6 +479,22 @@ mod tests {
         assert!(!marker.exists(), "grandchild survived timeout");
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn timeout_terminates_grandchild_process_on_windows() {
+        let directory = tempfile::tempdir().unwrap();
+        let marker = directory.path().join("grandchild-alive.txt");
+        let script = r#"start "" /B cmd /C "timeout /T 2 /NOBREAK >NUL & echo grandchild > grandchild-alive.txt" & timeout /T 10 /NOBREAK >NUL"#;
+        let command = CommandSpec::new("cmd")
+            .args(["/C", script])
+            .current_dir(directory.path())
+            .timeout(Some(Duration::from_millis(100)));
+        let result = SystemProcessRunner::default().run(&command).unwrap();
+        assert!(result.timed_out);
+        thread::sleep(Duration::from_millis(2500));
+        assert!(!marker.exists(), "grandchild survived timeout");
+    }
+
     #[cfg(unix)]
     #[test]
     fn bounds_captured_output() {
