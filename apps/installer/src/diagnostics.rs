@@ -26,7 +26,7 @@ struct LogEvent<'a> {
     fields: BTreeMap<String, Value>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct DiagnosticLogger {
     path: PathBuf,
     file: Arc<Mutex<File>>,

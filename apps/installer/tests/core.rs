@@ -8,7 +8,7 @@ use harmonia_installer::{
 use tempfile::tempdir;
 
 fn paths() -> InstallationPaths {
-    let root = tempdir().unwrap().keep().unwrap();
+    let root = tempdir().unwrap().keep();
     InstallationPaths {
         platform: Platform::Linux,
         architecture: TargetArchitecture::X64,

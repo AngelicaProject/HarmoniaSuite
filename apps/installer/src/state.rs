@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -10,6 +10,9 @@ use uuid::Uuid;
 
 use crate::diagnostics::{DiagnosticError, DiagnosticLogger};
 use crate::paths::InstallationPaths;
+
+#[cfg(not(windows))]
+use std::fs::File;
 
 const STATE_SCHEMA_VERSION: u32 = 1;
 
@@ -498,7 +501,7 @@ mod tests {
     use tempfile::tempdir;
 
     fn store() -> StateStore {
-        let root = tempdir().unwrap().keep().unwrap();
+        let root = tempdir().unwrap().keep();
         StateStore::new(InstallationPaths {
             platform: Platform::Linux,
             architecture: TargetArchitecture::X64,
