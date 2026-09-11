@@ -1,13 +1,12 @@
 <script lang="ts">
 import { defineComponent } from "vue";
-import { computed, nextTick, onMounted, ref, shallowRef, watch } from "vue";
+import { computed, nextTick, onMounted, ref } from "vue";
 import { api } from "./api/client";
 import {
   ENTRY_STATUS,
-  isNoTranslationRequired,
-  isTranslated as isEntryTranslated,
   needsWork as entryNeedsWork,
 } from "./domain/translationStatus";
+import { buildContextMenuItems } from "./domain/contextMenu";
 import Picker from "./components/Picker.vue";
 import Editor from "./components/Editor.vue";
 import Settings from "./components/Settings.vue";
@@ -25,50 +24,17 @@ import { useUpdater } from "./composables/useUpdater";
 import { useCommandPalette } from "./composables/useCommandPalette";
 import { useDockLayout } from "./composables/useDockLayout";
 import { useJobs } from "./composables/useJobs";
-import type {
-  AiStatus,
-  Entry,
-  FileStats,
-  Job,
-  PackMeta,
-  PackResponse,
-  Summary,
-  SourceSettings,
-  DeltaConflict,
-} from "./api/types";
-
-interface ProjectDocument {
-  files: FileStats[];
-  entries: Entry[];
-  _loadMs?: number;
-}
-
-interface DisplayRowGroup {
-  row: number;
-  rowKey?: string;
-  key?: string;
-  section?: number;
-  cells: Entry[];
-  un: number;
-  pos?: number;
-}
-
-interface FileRowState {
-  file: string;
-  q: string;
-  page: number;
-  groups: DisplayRowGroup[];
-  totalGroups: number;
-  loading: boolean;
-}
-
-interface UiAiStatus extends AiStatus {
-  configured: boolean;
-  model: string;
-  models: string[];
-  openrouterConfigured: boolean;
-  openrouterModel: string;
-}
+import {
+  useFileRows,
+  type FileRowsController,
+} from "./composables/useFileRows";
+import { useFileSelections } from "./composables/useFileSelections";
+import { useEntryMutations } from "./composables/useEntryMutations";
+import { useProjectWorkspace } from "./composables/useProjectWorkspace";
+import { useContextMenu } from "./composables/useContextMenu";
+import { usePack } from "./composables/usePack";
+import { VIEWS, VIEW_IDS } from "./workspace/views";
+import type { Entry, FileStats, Job, DeltaConflict } from "./api/types";
 
 interface SearchMatch {
   id: string;
@@ -76,24 +42,6 @@ interface SearchMatch {
   rowKey: string;
   source: string;
   translation: string;
-}
-
-interface ContextItem {
-  t: string;
-  sel?: boolean;
-  run: () => void | Promise<void>;
-}
-
-interface ContextMenuState {
-  x: number;
-  y: number;
-  items: ContextItem[];
-}
-
-interface SavedEntry {
-  previous: Entry | null;
-  entry: Entry;
-  fileStats: FileStats | null;
 }
 
 interface EditorHandle {
@@ -138,17 +86,17 @@ const App = defineComponent({
   },
   setup() {
     const projectId = ref("");
-    const projectName = ref("");
-    const root = ref("");
     const showPicker = ref(true);
-    const doc = shallowRef<ProjectDocument | null>(null);
-    // Keep cache invalidation separate from revisions that cause network reloads.
-    const cacheRev = ref(0);
     const statsRev = ref(0);
     const exportRev = ref(0);
-    const savedEntry = shallowRef<SavedEntry | null>(null);
+    const logText = ref("Готово к работе.");
+    const showSettings = ref(false);
+    const settingsSection = ref("sources");
+    function openSettings(section = ""): void {
+      settingsSection.value = section || settingsSection.value;
+      showSettings.value = true;
+    }
     const fileTreeState = useFileTree(projectId, () => {
-      cacheRev.value++;
       statsRev.value++;
     });
     const {
@@ -169,102 +117,116 @@ const App = defineComponent({
       toggleHideEmpty,
       setSort,
     } = fileTreeState;
-    const rowGroupPageSize = 60;
-    const fileRows = ref<FileRowState>({
-      file: "",
-      q: "",
-      page: 0,
-      groups: [],
-      totalGroups: 0,
-      loading: false,
+    const leftMode = ref("files");
+    const focusId = ref("");
+    const focusFileFilter = ref("");
+    const editorRef = ref<EditorHandle | null>(null);
+    const deltaRef = ref<DeltaHandle | null>(null);
+    let rowsController: FileRowsController | null = null;
+    let loadPackForProject = async (): Promise<void> => {};
+    let loadSelectionForProject = (): void => {};
+
+    const workspace = useProjectWorkspace({
+      projectId,
+      fileTree: fileTreeState,
+      fileRows: () => rowsController,
+      loadSelection: () => loadSelectionForProject(),
+      loadPack: () => loadPackForProject(),
+      invalidateExport: () => exportRev.value++,
+      openSettings,
+      log: (message) => (logText.value += message),
+      getFocusFileFilter: () => focusFileFilter.value,
+      getPhraseSearchQuery: () => phraseSearchQ.value,
+      isPhraseMode: () => leftMode.value === "phrases",
     });
-    const filePreviewCache = new Map<
-      string,
-      { rows: Entry[]; total: number }
-    >();
-    let rowRequest = 0;
-    let phraseSearchTimer: Timer | null = null;
-    let trPendingTimer: Timer | null = null;
-    const summary = ref<Summary | null>(null);
-    const projectLoading = ref(false);
-    const sourceFiles = ref<string[]>([]);
-    const sourceLoading = ref(false);
-    const sourceError = ref("");
-    const selTranslate = ref<string[]>([]);
-    const trPendingMap = ref<Record<string, number>>({});
-    const trPendingReady = ref(false);
-    async function fetchTrPending() {
-      if (!projectId.value) {
-        trPendingMap.value = {};
-        trPendingReady.value = false;
-        return;
-      }
-      try {
-        const d = await api.pendingByFile(projectId.value);
-        trPendingMap.value = (d && d.files) || {};
-        trPendingReady.value = true;
-      } catch {
-        /* карта некритична — список покажем целиком */
-      }
-    }
-    watch(statsRev, () => {
-      if (trPendingTimer) clearTimeout(trPendingTimer);
-      trPendingTimer = setTimeout(fetchTrPending, 300);
+    const {
+      projectName,
+      root,
+      document: doc,
+      summary,
+      projectLoading,
+      sourceFiles,
+      sourceLoading,
+      sourceError,
+      sourceStatus,
+      sourceLabel,
+      geminiStatus,
+      aiTitle,
+      loadProject,
+      loadSourceStatus,
+      scanSource,
+      loadGeminiStatus,
+    } = workspace;
+
+    const packState = usePack(projectId, sourceStatus, (message) => {
+      logText.value += message;
     });
-    const trEstimate = computed(() => {
-      let n = 0;
-      const m = trPendingMap.value || {};
-      for (const f of selTranslate.value) n += m[f] || 0;
-      return { entries: n };
+    loadPackForProject = packState.loadPack;
+    const {
+      pack,
+      packErrors,
+      packManifest,
+      packMsg,
+      packCompat,
+      packLangs,
+      loadPack,
+      savePack,
+      addAuthor: packAddAuthor,
+      deleteAuthor: packDelAuthor,
+    } = packState;
+
+    const selections = useFileSelections(projectId, statsRev, sourceFiles);
+    loadSelectionForProject = selections.loadSelection;
+    const {
+      selTranslate,
+      selExport,
+      selTranslateSet,
+      selExportSet,
+      trEstimate,
+      trPendingMap,
+      trPendingReady,
+      toggleTranslate,
+      selectVisibleForTranslation,
+      clearTranslateSelection,
+      toggleExport,
+      clearExportSelection,
+    } = selections;
+
+    const rows = useFileRows({
+      projectId,
+      document: doc,
+      scopeFile: () => focusFileFilter.value,
+      activeEntryId: () => focusId.value || editorRef.value?.current?.id || "",
+      onError: (error) => (logText.value += "\n" + errorMessage(error)),
     });
-    const selExport = ref<string[]>([]);
-    const selTranslateSet = computed(() => new Set(selTranslate.value));
-    const selExportSet = computed(() => new Set(selExport.value));
-    function selStorageKey() {
-      return "hs-sel-" + projectId.value;
-    }
-    function saveSelection() {
-      try {
-        localStorage.setItem(
-          selStorageKey(),
-          JSON.stringify({
-            translate: selTranslate.value,
-            export: selExport.value,
-          }),
-        );
-      } catch (e) {}
-    }
-    function loadSelection() {
-      try {
-        const s = JSON.parse(localStorage.getItem(selStorageKey()) || "null");
-        selTranslate.value = Array.isArray(s?.translate) ? s.translate : [];
-        selExport.value = Array.isArray(s?.export) ? s.export : [];
-      } catch (e) {
-        selTranslate.value = [];
-        selExport.value = [];
-      }
-    }
-    const logText = ref("Готово к работе.");
-    const geminiStatus = ref<UiAiStatus>({
-      configured: false,
-      model: "",
-      models: [],
-      openrouterConfigured: false,
-      openrouterModel: "",
+    rowsController = rows;
+    const {
+      rowGroupPageSize,
+      fileRows,
+      phrasePage,
+      phraseSearchQ,
+      rowGroupsPaged,
+      rowGroupPages,
+      rowContext,
+      loadFileRows,
+      loadFilePreview,
+      filePhrases,
+      filePhraseGroups,
+      ensureEntry,
+      setRowGroupPage,
+      setPhraseSearch,
+    } = rows;
+
+    const mutations = useEntryMutations({
+      document: doc,
+      fileTree,
+      fileRows,
+      findCachedEntry: rows.localEntry,
+      replaceEntryInPreview: rows.replaceEntryInPreview,
+      reconcilePending: selections.reconcilePending,
     });
-    async function loadGeminiStatus() {
-      try {
-        const s = await api.status();
-        geminiStatus.value = {
-          configured: !!s.geminiConfigured,
-          model: s.geminiModel || "",
-          models: s.geminiModels || [],
-          openrouterConfigured: !!s.openrouterConfigured,
-          openrouterModel: s.openrouterModel || "",
-        };
-      } catch (e) {}
-    }
-    loadGeminiStatus();
+    const { savedEntry, localEntry, mergeEntries, applySavedEntry } = mutations;
+    void loadGeminiStatus();
     let jobController: ReturnType<typeof useJobs>;
     const startJob = (details: Job) => jobController.startJob(details);
     const updater = useUpdater(startJob, showToast);
@@ -306,105 +268,16 @@ const App = defineComponent({
       jobActive,
       cancelJob,
     } = jobs;
-    const aiTitle = computed(() => {
-      const g = geminiStatus.value;
-      const gl = g.configured
-        ? "ключ задан" + (g.model ? ", " + g.model : "")
-        : "без ключа";
-      const ol = g.openrouterConfigured
-        ? "ключ задан" + (g.openrouterModel ? ", " + g.openrouterModel : "")
-        : "без ключа";
-      return "Gemini: " + gl + "\nOpenRouter: " + ol;
-    });
-    const sourceStatus = ref<SourceSettings>({
-      gamePath: "",
-      gameValid: false,
-      gameVersion: "",
-      activeRoot: "",
-      ready: false,
-      configured: false,
-    });
-    const showSettings = ref(false);
-    const settingsSection = ref("sources");
-    function openSettings(s = "") {
-      settingsSection.value = s || settingsSection.value;
-      showSettings.value = true;
-    }
-    async function loadSourceStatus() {
-      try {
-        const s = await api.settings();
-        sourceStatus.value = s;
-        if (s.activeRoot) root.value = s.activeRoot;
-        if (!s.configured) openSettings("sources");
-      } catch (e) {
-        logText.value += "\nИсточники: " + errorMessage(e);
-      }
-    }
-    const sourceLabel = computed(() => {
-      const s = sourceStatus.value;
-      if (!s.configured) return "источники не настроены";
-      return s.gameVersion || s.activeRoot || "источники";
-    });
     const badge = computed(() => {
       const s = summary.value;
       if (!s || s.entries === undefined) return "—";
       return `${s.translated ?? 0} / ${s.entries}`;
     });
-    const rg = ref("");
     const theme = ref(
       document.documentElement.getAttribute("data-theme") || "dark",
     );
 
     // ---- IDE docking: state and interactions live in a dedicated composable ----
-    const VIEWS: Record<string, { title: string; icon: string }> = {
-      project: {
-        title: "Проект",
-        icon: '<svg class="icon" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h3l2 2h9a2 2 0 0 1 2 2v8a2 2 0 0 1 2 2H5a2 2 0 0 1-2-2V7z"/></svg>',
-      },
-      search: {
-        title: "Поиск",
-        icon: '<svg class="icon" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>',
-      },
-      translate: {
-        title: "AI перевод",
-        icon: '<svg class="icon" viewBox="0 0 24 24"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/><path d="M19 15l.9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9z"/></svg>',
-      },
-      tags: {
-        title: "Теги",
-        icon: '<svg class="icon" viewBox="0 0 24 24"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><circle cx="7" cy="7" r="1.2"/></svg>',
-      },
-      summary: {
-        title: "Сводка",
-        icon: '<svg class="icon" viewBox="0 0 24 24"><path d="M3 3v18h18"/><rect x="7" y="11" width="3" height="7"/><rect x="12" y="7" width="3" height="11"/><rect x="17" y="13" width="3" height="5"/></svg>',
-      },
-      pack: {
-        title: "Пак",
-        icon: '<svg class="icon" viewBox="0 0 24 24"><path d="M21 8l-9-5-9 5v8l9 5 9-5V8z"/><path d="M3 8l9 5 9-5M12 13v8"/></svg>',
-      },
-      export: {
-        title: "Экспорт",
-        icon: '<svg class="icon" viewBox="0 0 24 24"><path d="M12 3v12M8 11l4 4 4-4"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>',
-      },
-      delta: {
-        title: "Дельты",
-        icon: '<svg class="icon" viewBox="0 0 24 24"><path d="M7 8h11l-3-3M17 16H6l3 3"/></svg>',
-      },
-      log: {
-        title: "Журнал",
-        icon: '<svg class="icon" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg>',
-      },
-    };
-    const VIEW_IDS = [
-      "project",
-      "translate",
-      "search",
-      "tags",
-      "summary",
-      "pack",
-      "export",
-      "delta",
-      "log",
-    ];
     const dock = useDockLayout(VIEWS, VIEW_IDS, {
       onActivateView: (view) => {
         if (view === "pack" && !pack.value) loadPack();
@@ -463,104 +336,6 @@ const App = defineComponent({
       if (inside) return;
       if (menuFor.value) menuFor.value = null;
       if (addMenu.value) addMenu.value = null;
-      if (ctxMenu.value) ctxMenu.value = null;
-    }
-
-    const ctxMenu = ref<ContextMenuState | null>(null);
-    async function copyText(t: unknown): Promise<void> {
-      const s = String(t ?? "");
-      try {
-        await navigator.clipboard.writeText(s);
-      } catch {
-        try {
-          const ta = document.createElement("textarea");
-          ta.value = s;
-          ta.style.position = "fixed";
-          ta.style.opacity = "0";
-          document.body.appendChild(ta);
-          ta.select();
-          document.execCommand("copy");
-          ta.remove();
-        } catch {
-          showToast("Не скопировалось");
-          return;
-        }
-      }
-      showToast("Скопировано");
-    }
-    function ctxItems(el: HTMLElement): ContextItem[] | null {
-      const kind = el.dataset.ctx;
-      if (kind === "file") {
-        const p = el.dataset.path || "";
-        return [
-          { t: "Открыть", run: () => openFile(p) },
-          {
-            t: expanded(p) ? "Свернуть строки" : "Показать строки",
-            run: () => toggleExpand(p),
-          },
-          { t: "Копировать путь", run: () => copyText(p) },
-          {
-            t: "В перевод",
-            sel: selTranslateSet.value.has(p),
-            run: () => toggleTranslate(p, !selTranslateSet.value.has(p)),
-          },
-          {
-            t: "В сборку",
-            sel: selExportSet.value.has(p),
-            run: () => toggleExport(p, !selExportSet.value.has(p)),
-          },
-        ];
-      }
-      if (kind === "phrase") {
-        const id = el.dataset.id || "";
-        const e = entryById.value.get(id) || null;
-        const items: ContextItem[] = [
-          { t: "Открыть в редакторе", run: () => focusPhrase(id) },
-        ];
-        if (e) {
-          items.push({
-            t: "Копировать оригинал",
-            run: () => copyText(e.source || ""),
-          });
-          items.push({
-            t: "Копировать перевод",
-            run: () => copyText(e.translation || ""),
-          });
-          items.push({ t: "Копировать id", run: () => copyText(e.id || "") });
-        }
-        return items;
-      }
-      if (kind === "log")
-        return [{ t: "Копировать журнал", run: () => copyText(logText.value) }];
-      return null;
-    }
-    function onGlobalCtx(e: MouseEvent): void {
-      if (e.defaultPrevented) return;
-      const target = e.target instanceof Element ? e.target : null;
-      if (target?.closest('input,textarea,select,[contenteditable="true"]'))
-        return;
-      const el = target?.closest("[data-ctx]") as HTMLElement | null;
-      e.preventDefault();
-      if (menuFor.value) menuFor.value = null;
-      if (addMenu.value) addMenu.value = null;
-      if (!el) {
-        ctxMenu.value = null;
-        return;
-      }
-      const items = ctxItems(el);
-      if (!items || !items.length) {
-        ctxMenu.value = null;
-        return;
-      }
-      ctxMenu.value = {
-        x: Math.min(e.clientX, window.innerWidth - 230),
-        y: Math.min(e.clientY, window.innerHeight - items.length * 34 - 16),
-        items,
-      };
-    }
-    function runCtx(it: ContextItem): void {
-      ctxMenu.value = null;
-      if (it && it.run) it.run();
     }
 
     function toggleTheme() {
@@ -569,285 +344,11 @@ const App = defineComponent({
       document.documentElement.setAttribute("data-theme", theme.value);
     }
 
-    function mergeEntries(items: Entry[]): void {
-      if (!items || !items.length) return;
-      const entries = new Map((doc.value?.entries || []).map((e) => [e.id, e]));
-      for (const entry of items)
-        if (entry && entry.id) entries.set(entry.id, entry);
-      doc.value = {
-        files: doc.value?.files || [],
-        entries: [...entries.values()],
-        _loadMs: doc.value?._loadMs,
-      };
-      cacheRev.value++;
-    }
-
-    function isCountedAsTranslated(entry: Entry): boolean {
-      return isEntryTranslated(entry);
-    }
-
-    function isPendingForTranslation(entry: Entry): boolean {
-      return (
-        !!entry &&
-        String(entry.translation || "").trim() === "" &&
-        !isNoTranslationRequired(entry.status)
-      );
-    }
-
-    function localEntry(id: string): Entry | null {
-      const known = (doc.value?.entries || []).find((entry) => entry.id === id);
-      if (known) return known;
-      for (const group of fileRows.value.groups || []) {
-        const entry = (group.cells || []).find((cell) => cell.id === id);
-        if (entry) return entry;
-      }
-      for (const preview of filePreviewCache.values()) {
-        const entry = (preview.rows || []).find((cell) => cell.id === id);
-        if (entry) return entry;
-      }
-      return null;
-    }
-
-    function replaceEntryInRows(entry: Entry): void {
-      const state = fileRows.value;
-      if (!entry || state.file !== entry.file) return;
-      let changed = false;
-      const groups = (state.groups || []).map((group) => {
-        const old = (group.cells || []).find((cell) => cell.id === entry.id);
-        if (!old) return group;
-        changed = true;
-        const cells = group.cells.map((cell) =>
-          cell.id === entry.id ? entry : cell,
-        );
-        const un =
-          (group.un || 0) -
-          (needsWork(old) ? 1 : 0) +
-          (needsWork(entry) ? 1 : 0);
-        return { ...group, cells, un };
-      });
-      if (changed) fileRows.value = { ...state, groups };
-    }
-
-    function replaceEntryInPreview(entry: Entry): void {
-      if (!entry) return;
-      const preview = filePreviewCache.get(entry.file);
-      if (!preview) return;
-      const rows = preview.rows || [];
-      const index = rows.findIndex((cell) => cell.id === entry.id);
-      if (index >= 0) {
-        preview.rows = [
-          ...rows.slice(0, index),
-          entry,
-          ...rows.slice(index + 1),
-        ];
-      }
-    }
-
-    function updateLocalStats(previous: Entry | null, entry: Entry): void {
-      if (!entry || !previous || previous.file !== entry.file) return;
-      const delta =
-        Number(isCountedAsTranslated(entry)) -
-        Number(isCountedAsTranslated(previous));
-      if (!delta) return;
-      fileTree.value = fileTree.value.map((file) =>
-        file.path === entry.file
-          ? { ...file, translated: Math.max(0, (file.translated || 0) + delta) }
-          : file,
-      );
-    }
-
-    function updateLocalPending(previous: Entry | null, entry: Entry): void {
-      if (
-        !entry ||
-        !previous ||
-        previous.file !== entry.file ||
-        !trPendingReady.value
-      )
-        return;
-      const delta =
-        Number(isPendingForTranslation(entry)) -
-        Number(isPendingForTranslation(previous));
-      if (!delta) return;
-      const next = Math.max(0, (trPendingMap.value[entry.file] || 0) + delta);
-      const map = { ...trPendingMap.value };
-      if (next) map[entry.file] = next;
-      else delete map[entry.file];
-      trPendingMap.value = map;
-    }
-
-    function syncSavedEntry(previous: Entry | null, entry: Entry): void {
-      if (!entry || !entry.id) return;
-      updateLocalStats(previous, entry);
-      updateLocalPending(previous, entry);
-      mergeEntries([entry]);
-      replaceEntryInRows(entry);
-      replaceEntryInPreview(entry);
-    }
-
-    function decorateRowGroups(
-      groups: DisplayRowGroup[],
-      page: number,
-    ): DisplayRowGroup[] {
-      return (groups || []).map((group, i) => {
-        const pos = page * rowGroupPageSize + i;
-        return { ...group, pos, section: Math.floor(pos / 100) };
-      });
-    }
-
-    async function loadFileRows(
-      file: string,
-      page = 0,
-      q = "",
-    ): Promise<FileRowState | null> {
-      if (!file || !projectId.value) return null;
-      const cleanPage = Math.max(0, page | 0);
-      const cleanQ = String(q || "").trim();
-      const previousPageIds = new Set(
-        (fileRows.value.groups || []).flatMap((g) =>
-          (g.cells || []).map((cell) => cell.id),
-        ),
-      );
-      const activeEntryId = focusId.value || editorRef.value?.current?.id || "";
-      const request = ++rowRequest;
-      fileRows.value = { ...fileRows.value, loading: true };
-      try {
-        const d = await api.rowsPage(projectId.value, {
-          file,
-          offset: cleanPage * rowGroupPageSize,
-          limit: rowGroupPageSize,
-          q: cleanQ,
-        });
-        if (request !== rowRequest) return null;
-        const groups = decorateRowGroups(d.groups || [], cleanPage);
-        const pageEntries = groups.flatMap((g) => g.cells || []);
-        const entries = new Map<string, Entry>();
-        for (const entry of doc.value?.entries || []) {
-          if (
-            entry &&
-            entry.id &&
-            (!previousPageIds.has(entry.id) || entry.id === activeEntryId)
-          )
-            entries.set(entry.id, entry);
-        }
-        for (const entry of pageEntries) {
-          if (entry && entry.id) entries.set(entry.id, entry);
-        }
-        doc.value = {
-          files: doc.value?.files || [],
-          entries: [...entries.values()],
-          _loadMs: doc.value?._loadMs,
-        };
-        cacheRev.value++;
-        fileRows.value = {
-          file,
-          q: cleanQ,
-          page: cleanPage,
-          groups,
-          totalGroups: Number(d.totalGroups || 0),
-          loading: false,
-        };
-        return fileRows.value;
-      } catch (e) {
-        if (request === rowRequest)
-          fileRows.value = { ...fileRows.value, loading: false };
-        throw e;
-      }
-    }
-
-    async function loadFilePreview(file: string): Promise<void> {
-      if (!file || !projectId.value || filePreviewCache.has(file)) return;
-      const d = await api.entries(projectId.value, { file }, { limit: 100 });
-      filePreviewCache.set(file, {
-        rows: d.entries || [],
-        total: d.total || 0,
-      });
-      cacheRev.value++;
-    }
-
-    async function ensureEntry(id: string): Promise<Entry | null> {
-      if (!id || !projectId.value) return null;
-      const e = (doc.value?.entries || []).find((x) => x.id === id);
-      if (e) return e;
-      const loaded = await api.entryByCell(projectId.value, id);
-      if (loaded && loaded.id) mergeEntries([loaded]);
-      return loaded || null;
-    }
-
-    async function loadProject() {
-      projectLoading.value = true;
-      try {
-        const t0 = performance.now();
-        const ov = await api.overview(projectId.value);
-        const t1 = Math.round(performance.now() - t0);
-        doc.value = { files: [], entries: [] };
-        fileRows.value = {
-          file: "",
-          q: "",
-          page: 0,
-          groups: [],
-          totalGroups: 0,
-          loading: false,
-        };
-        filePreviewCache.clear();
-        rowRequest++;
-        doc.value._loadMs = t1;
-        summary.value = ov.summary || null;
-        loadSelection();
-        cacheRev.value++;
-        if (ov.inputRoot) root.value = ov.inputRoot;
-        if (ov.name) projectName.value = ov.name;
-        logText.value +=
-          "\nПроект загружен: " +
-          projectId.value +
-          " (" +
-          (ov.summary?.entries ?? 0) +
-          " фраз, " +
-          doc.value._loadMs +
-          " мс сеть+разбор)";
-        if (!pack.value) await loadPack();
-        expandedDirs.value = {};
-        await loadFileTree();
-        exportRev.value++;
-        if (focusFileFilter.value && leftMode.value === "phrases") {
-          await loadFileRows(focusFileFilter.value, 0, phraseSearchQ.value);
-        }
-      } catch (e) {
-        logText.value += "\nОшибка: " + errorMessage(e);
-      }
-      projectLoading.value = false;
-    }
-
-    async function scanSource() {
-      sourceLoading.value = true;
-      sourceError.value = "";
-      sourceFiles.value = [];
-      try {
-        const f0 = performance.now();
-        const d = await api.sourceFiles(root.value);
-        sourceFiles.value = d.files || [];
-        logText.value +=
-          "\nИсходники: " +
-          sourceFiles.value.length +
-          " файлов (" +
-          Math.round(performance.now() - f0) +
-          " мс)";
-        rg.value = "активен";
-      } catch (e) {
-        sourceError.value = errorMessage(e) || "не удалось загрузить файлы";
-        logText.value += "\n" + errorMessage(e);
-      }
-      sourceLoading.value = false;
-    }
-
     const entryById = computed<Map<string, Entry>>(() => {
       const m = new Map<string, Entry>();
       for (const e of doc.value?.entries || []) m.set(e.id, e);
       return m;
     });
-    function scopeFile(): string {
-      return focusFileFilter.value || "";
-    }
-    const leftMode = ref("files");
     function progPct(f: FileStats | null | undefined): number {
       if (!f || !f.total) return 0;
       return Math.round((f.translated / f.total) * 100);
@@ -894,72 +395,32 @@ const App = defineComponent({
           (e) => (logText.value += "\n" + errorMessage(e)),
         );
     }
-    function filePhraseGroups(f: string): DisplayRowGroup[] {
-      const groups = new Map<number, DisplayRowGroup>();
-      for (const e of filePhrases(f).rows || []) {
-        let g = groups.get(e.rowIndex);
-        if (!g) {
-          g = { row: e.rowIndex, key: e.rowKey, cells: [], un: 0 };
-          groups.set(e.rowIndex, g);
-        }
-        g.cells.push(e);
-        if (needsWork(e)) g.un++;
-      }
-      const out = [...groups.values()].sort((a, b) => a.row - b.row);
-      out.forEach((g) => g.cells.sort((a, b) => a.columnIndex - b.columnIndex));
-      return out;
-    }
-    function filePhrases(f: string): { rows: Entry[]; total: number } {
-      cacheRev.value;
-      const preview = filePreviewCache.get(f);
-      if (!preview) return { rows: [], total: 0 };
-      const un: Entry[] = [],
-        done: Entry[] = [];
-      for (const e of preview.rows || []) (needsWork(e) ? un : done).push(e);
-      return { rows: un.concat(done).slice(0, 100), total: preview.total || 0 };
-    }
-    const phrasePage = ref(0);
-    const phraseSearchQ = ref("");
-    const fileRowGroups = computed(() => {
-      return fileRows.value.file === scopeFile() ? fileRows.value.groups : [];
+    const contextMenu = useContextMenu({
+      getItems: (element) =>
+        buildContextMenuItems(
+          element.dataset.ctx,
+          { path: element.dataset.path, id: element.dataset.id },
+          {
+            openFile,
+            toggleExpand,
+            isExpanded: expanded,
+            toggleTranslate,
+            isTranslateSelected: (path) => selTranslateSet.value.has(path),
+            toggleExport,
+            isExportSelected: (path) => selExportSet.value.has(path),
+            focusPhrase,
+            entryById: (id) => entryById.value.get(id) || null,
+            copyText: (value) => contextMenu.copyText(value),
+            logText: () => logText.value,
+          },
+        ),
+      closeOtherMenus: () => {
+        menuFor.value = null;
+        addMenu.value = null;
+      },
+      showToast,
     });
-    const rowGroupsPaged = computed(() => fileRowGroups.value);
-    const rowGroupPages = computed(
-      () => Math.ceil(fileRows.value.totalGroups / rowGroupPageSize) || 1,
-    );
-    const rowContext = computed(() => ({
-      file: fileRows.value.file,
-      q: fileRows.value.q,
-      page: fileRows.value.page,
-      pageSize: rowGroupPageSize,
-      totalGroups: fileRows.value.totalGroups,
-      groups: fileRows.value.groups,
-    }));
-
-    async function setRowGroupPage(page: number): Promise<void> {
-      const f = scopeFile();
-      if (!f) return;
-      phrasePage.value = Math.max(0, Math.min(rowGroupPages.value - 1, page));
-      try {
-        await loadFileRows(f, phrasePage.value, phraseSearchQ.value);
-      } catch (e) {
-        logText.value += "\n" + errorMessage(e);
-      }
-    }
-
-    function setPhraseSearch(value: string): void {
-      phraseSearchQ.value = value || "";
-      phrasePage.value = 0;
-      if (phraseSearchTimer) clearTimeout(phraseSearchTimer);
-      phraseSearchTimer = setTimeout(() => {
-        const f = scopeFile();
-        if (!f) return;
-        loadFileRows(f, 0, phraseSearchQ.value).catch(
-          (e) => (logText.value += "\n" + errorMessage(e)),
-        );
-      }, 250);
-    }
-
+    const { ctxMenu, runCtx } = contextMenu;
     async function openFile(f: string): Promise<void> {
       focusFileFilter.value = f;
       leftMode.value = "phrases";
@@ -1021,10 +482,6 @@ const App = defineComponent({
     }
 
     const tab = ref("translate");
-    const focusId = ref("");
-    const focusFileFilter = ref("");
-    const editorRef = ref<EditorHandle | null>(null);
-    const deltaRef = ref<DeltaHandle | null>(null);
     const followFiles = ref(
       (() => {
         try {
@@ -1277,11 +734,7 @@ const App = defineComponent({
       return entry;
     }
 
-    async function editorLoadRowPage(
-      file: string,
-      page: number,
-      q: string,
-    ): Promise<FileRowState | null> {
+    async function editorLoadRowPage(file: string, page: number, q: string) {
       return loadFileRows(file, page, q);
     }
 
@@ -1486,34 +939,16 @@ const App = defineComponent({
       await run("merge");
     }
 
-    function toggleTranslate(f: string, v: boolean): void {
-      const s = new Set(selTranslate.value);
-      v ? s.add(f) : s.delete(f);
-      selTranslate.value = [...s];
-      saveSelection();
-    }
-
     function selTranslateVisible(v: boolean, list?: string[]): void {
-      const s = new Set(selTranslate.value);
-      (list || sourceFiles.value).forEach((f) => (v ? s.add(f) : s.delete(f)));
-      selTranslate.value = [...s];
-      saveSelection();
-    }
-    function clearTranslateSel() {
-      selTranslate.value = [];
-      saveSelection();
+      selectVisibleForTranslation(v, list || sourceFiles.value);
     }
 
-    function toggleExport(f: string, v: boolean): void {
-      const s = new Set(selExport.value);
-      v ? s.add(f) : s.delete(f);
-      selExport.value = [...s];
-      saveSelection();
+    function clearTranslateSel(): void {
+      clearTranslateSelection();
     }
 
-    function clearExportScope() {
-      selExport.value = [];
-      saveSelection();
+    function clearExportScope(): void {
+      clearExportSelection();
     }
 
     async function runTranslate(
@@ -1562,17 +997,8 @@ const App = defineComponent({
           translation,
           status,
         );
-        syncSavedEntry(previous, d.entry);
+        if (d.entry) applySavedEntry(previous, d.entry);
         if (d.summary) summary.value = d.summary;
-        const fileStats =
-          d.entry && fileTree.value.find((file) => file.path === d.entry.file);
-        savedEntry.value = d.entry
-          ? {
-              previous,
-              entry: d.entry,
-              fileStats: fileStats ? { ...fileStats } : null,
-            }
-          : null;
         if (editorRef.value && editorRef.value.noteChanged)
           editorRef.value.noteChanged();
         (d.warnings || []).forEach((w) => (logText.value += "\n[Тег] " + w));
@@ -1585,7 +1011,7 @@ const App = defineComponent({
     async function onConfirm(p: string): Promise<void> {
       projectId.value = p;
       showPicker.value = false;
-      pack.value = null;
+      packState.reset();
       await loadProject();
       await scanSource();
       if (!summary.value || !summary.value.entries) {
@@ -1601,115 +1027,8 @@ const App = defineComponent({
       setTimeout(() => (toast.value = ""), 3000);
     }
 
-    // pack settings (Harmonia manifest.json)
-    const pack = ref<PackMeta | null>(null);
-    const packErrors = ref<string[]>([]);
-    const packManifest = ref<Record<string, unknown> | null>(null);
-    const packMsg = ref("");
-    const packCompat = ref("");
-    const packLangs = ref("");
-
-    function blankPack(): PackMeta {
-      return {
-        packId: "",
-        translationVersion: "",
-        gameVersion: "",
-        compatibleGameVersions: [],
-        vendorId: "",
-        vendorName: "",
-        vendorUrl: "",
-        vendorContact: "",
-        authors: [],
-        languages: ["ru"],
-        title: "",
-        description: "",
-        changelog: "",
-        homepage: "",
-        license: "",
-        minPluginVersion: "",
-      };
-    }
-
-    function applyPack(d: PackResponse): void {
-      pack.value = Object.assign(blankPack(), d.pack || {});
-      const currentPack = pack.value;
-      if (!currentPack) return;
-      if (!currentPack.gameVersion && sourceStatus.value.gameVersion)
-        currentPack.gameVersion = sourceStatus.value.gameVersion;
-      if (!Array.isArray(currentPack.authors)) currentPack.authors = [];
-      packCompat.value = (currentPack.compatibleGameVersions || []).join(", ");
-      packLangs.value = (currentPack.languages || []).join(", ");
-      packErrors.value = d.errors || [];
-      packManifest.value = d.manifest || null;
-    }
-
-    async function loadPack() {
-      try {
-        applyPack(await api.getPack(projectId.value));
-      } catch (e) {
-        packMsg.value = errorMessage(e);
-      }
-    }
-
-    function packAddAuthor() {
-      if (!pack.value) return;
-      const authors = pack.value.authors || (pack.value.authors = []);
-      authors.push({ name: "", role: "" });
-    }
-
-    function packDelAuthor(i: number): void {
-      if (!pack.value) return;
-      pack.value.authors?.splice(i, 1);
-    }
-
-    async function savePack() {
-      if (!pack.value) return;
-      packMsg.value = "";
-      const p = Object.assign({}, pack.value, {
-        compatibleGameVersions: packCompat.value
-          .split(",")
-          .map((s: string) => s.trim())
-          .filter(Boolean),
-        languages: packLangs.value
-          .split(",")
-          .map((s: string) => s.trim())
-          .filter(Boolean),
-        authors: (pack.value.authors || [])
-          .filter((a) => a && (a.name || "").trim())
-          .map((a) => ({
-            name: (a.name || "").trim(),
-            role: (a.role || "").trim(),
-          })),
-      });
-      try {
-        const d = await api.savePack(projectId.value, p);
-        applyPack(d);
-        packMsg.value =
-          d.errors && d.errors.length
-            ? "Сохранено, но манифест невалиден"
-            : "Сохранено";
-        logText.value += "\nНастройки пака сохранены";
-      } catch (e) {
-        packMsg.value = errorMessage(e);
-      }
-    }
-
-    function esc(s: unknown): string {
-      return String(s).replace(
-        /[&<>]/g,
-        (c) =>
-          (
-            ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }) as Record<
-              string,
-              string
-            >
-          )[c],
-      );
-    }
-
     onMounted(() => {
       document.addEventListener("click", closeMenusOnDocClick, true);
-      document.addEventListener("contextmenu", onGlobalCtx);
       loadSourceStatus();
       loadUpdateStatus();
       setInterval(loadUpdateStatus, 3600000);
@@ -1738,7 +1057,6 @@ const App = defineComponent({
       selExportSet,
       logText,
       badge,
-      rg,
       theme,
       toggleTheme,
       layoutStyle,
@@ -1825,7 +1143,6 @@ const App = defineComponent({
       backToFiles,
       rowGroupsPaged,
       rowGroupPages,
-      fileRowGroups,
       phrasePage,
       phraseSearchQ,
       setRowGroupPage,

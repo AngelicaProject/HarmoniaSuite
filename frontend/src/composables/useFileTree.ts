@@ -7,10 +7,7 @@ import {
   type FileTreeSort,
 } from "../domain/fileTree";
 
-export function useFileTree(
-  projectId: Ref<string>,
-  onLoaded?: () => void,
-): {
+export interface FileTreeState {
   fileTree: Ref<FileStats[]>;
   fileTreeLoading: Ref<boolean>;
   fileSearchQ: Ref<string>;
@@ -27,7 +24,12 @@ export function useFileTree(
   toggleHideReady: () => void;
   toggleHideEmpty: () => void;
   setSort: (sort: FileTreeSort) => void;
-} {
+}
+
+export function useFileTree(
+  projectId: Ref<string>,
+  onLoaded?: () => void,
+): FileTreeState {
   const fileTree = ref<FileStats[]>([]);
   const fileTreeLoading = ref(false);
   const fileSearchQ = ref("");
