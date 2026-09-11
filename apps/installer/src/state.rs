@@ -715,6 +715,7 @@ mod tests {
         let external_file = outside.join("partial");
         fs::write(&external_file, b"keep").unwrap();
         let link = store.paths().build_dir().join("external");
+        fs::create_dir_all(link.parent().unwrap()).unwrap();
         symlink(&outside, &link).unwrap();
         let candidate = link.join("partial");
         let transaction = Transaction::begin(
