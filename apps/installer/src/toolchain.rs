@@ -260,6 +260,14 @@ impl ToolchainStateStore {
         if state.schema_version != TOOLCHAIN_STATE_SCHEMA_VERSION {
             return Err(ToolchainError::UnsupportedStateSchema(state.schema_version));
         }
+        for (key, record) in &state.records {
+            if key != &record.id {
+                return Err(ToolchainError::InvalidState(format!(
+                    "toolchain state key {key:?} does not match record ID {:?}",
+                    record.id
+                )));
+            }
+        }
         Ok(state)
     }
 
@@ -323,6 +331,8 @@ pub enum ToolchainError {
     UnsupportedStateSchema(u32),
     #[error("toolchain catalog schema {0} is not supported")]
     UnsupportedCatalogSchema(u32),
+    #[error("toolchain state is invalid: {0}")]
+    InvalidState(String),
     #[error("toolchain download failed: {0}")]
     Download(#[from] DownloadError),
     #[error("Maven Wrapper checksum failed: {0}")]
@@ -394,6 +404,7 @@ impl<D: DownloadClient> ToolchainManager<D> {
             &archive_path,
             &descriptor.sha256,
         ))?;
+        verify_sha256(&receipt.path, &descriptor.sha256)?;
 
         let kind_root = self.paths.toolchain_dir().join(descriptor.kind.as_str());
         validate_managed_path(&kind_root)?;

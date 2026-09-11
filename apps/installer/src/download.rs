@@ -69,6 +69,8 @@ pub enum DownloadError {
     Io(#[from] io::Error),
     #[error("download checksum failed: {0}")]
     Checksum(#[from] ChecksumError),
+    #[error("download destination is a symlink or reparse point: {0}")]
+    UnsafeDestination(PathBuf),
     #[error("download resume range mismatch: expected start {expected}, got {actual:?}")]
     ResumeRangeMismatch { expected: u64, actual: Option<u64> },
 }
@@ -118,6 +120,9 @@ impl<T: DownloadTransport> DownloadClient for ResumableDownloader<T> {
     fn download(&self, request: &DownloadRequest) -> Result<DownloadReceipt, DownloadError> {
         validate_request(request)?;
         let expected = &request.expected_sha256;
+        let partial = partial_path(&request.destination)?;
+        reject_unsafe_path(&request.destination)?;
+        reject_unsafe_path(&partial)?;
         if request.destination.is_file() && verify_sha256(&request.destination, expected).is_ok() {
             return receipt_for(&request.destination, false);
         }
@@ -127,7 +132,6 @@ impl<T: DownloadTransport> DownloadClient for ResumableDownloader<T> {
         if let Some(parent) = request.destination.parent() {
             fs::create_dir_all(parent)?;
         }
-        let partial = partial_path(&request.destination)?;
         let mut resumed = false;
         for attempt in 0..=request.max_retries {
             let existing = if request.resume && partial.is_file() {
@@ -328,6 +332,44 @@ fn receipt_for(path: &Path, resumed: bool) -> Result<DownloadReceipt, DownloadEr
     })
 }
 
+fn reject_unsafe_path(path: &Path) -> Result<(), DownloadError> {
+    for ancestor in path.ancestors().collect::<Vec<_>>().into_iter().rev() {
+        match fs::symlink_metadata(ancestor) {
+            Ok(metadata) => {
+                if metadata.file_type().is_symlink() || is_reparse_point(ancestor)? {
+                    return Err(DownloadError::UnsafeDestination(ancestor.to_path_buf()));
+                }
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn is_reparse_point(_path: &Path) -> io::Result<bool> {
+    Ok(false)
+}
+
+#[cfg(windows)]
+fn is_reparse_point(path: &Path) -> io::Result<bool> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        GetFileAttributesW, FILE_ATTRIBUTE_REPARSE_POINT, INVALID_FILE_ATTRIBUTES,
+    };
+    let wide: Vec<u16> = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let attributes = unsafe { GetFileAttributesW(wide.as_ptr()) };
+    if attributes == INVALID_FILE_ATTRIBUTES {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -493,5 +535,31 @@ mod tests {
         ));
         assert_eq!(fs::read(partial).unwrap(), b"hello ");
         assert!(!destination.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_symlink_partial_before_writing() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempdir().unwrap();
+        let destination = directory.path().join("tool.zip");
+        let external = directory.path().join("external");
+        fs::write(&external, b"must stay unchanged").unwrap();
+        symlink(&external, destination.with_file_name("tool.zip.partial")).unwrap();
+        let request = DownloadRequest::new(
+            "https://example.test/tool.zip",
+            &destination,
+            "0000000000000000000000000000000000000000000000000000000000000000",
+        );
+        let downloader = ResumableDownloader::with_retry_delay(
+            FakeTransport::new(vec![response(200, b"unused")]),
+            Duration::ZERO,
+        );
+        assert!(matches!(
+            downloader.download(&request),
+            Err(DownloadError::UnsafeDestination(_))
+        ));
+        assert_eq!(fs::read(external).unwrap(), b"must stay unchanged");
     }
 }

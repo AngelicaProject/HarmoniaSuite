@@ -35,9 +35,10 @@ is explicit and never falls back to the host's system Java, Node, or Git.
 tool kind, exact version, target, HTTPS URL, archive format, SHA-256, and the
 relative executable paths. Descriptor validation rejects missing or malformed
 digests, non-HTTPS URLs, path traversal, and a target that differs from the
-requested platform/architecture. A checked-in descriptor catalog is the
-production source of these values; its URL and digest are copied from the
-official upstream release metadata. Test descriptors use a local fake transport
+requested platform/architecture. The release/update layer supplies a
+versioned catalog containing these values; its URL and digest must be copied
+from official upstream release metadata. The installer accepts the catalog only
+after validating every descriptor. Test descriptors use a local fake transport
 and are never treated as production metadata.
 
 ## Metadata and protection
@@ -76,4 +77,3 @@ toolchain preparation inside a transaction.
 The installer pins Rust 1.89.0 in `apps/installer/rust-toolchain.toml` and CI
 uses the same channel. This pin applies to the installer build only; it does not
 install or select the product JDK, Node, or Git.
-
