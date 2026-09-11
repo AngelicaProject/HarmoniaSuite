@@ -1,9 +1,10 @@
 <script lang="ts">
 import { defineComponent } from "vue";
+type DropdownOption = { value: unknown; label: string };
 export default defineComponent({
   props: {
     modelValue: { default: "" },
-    options: { type: Array, default: () => [] },
+    options: { type: Array as () => DropdownOption[], default: () => [] },
     title: { type: String, default: "" },
     width: { type: String, default: "" },
     menuAlign: { type: String, default: "left" },
@@ -14,7 +15,7 @@ export default defineComponent({
   },
   computed: {
     norm() {
-      return (this.options || []).map((o) =>
+      return (this.options || []).map((o): DropdownOption =>
         o && typeof o === "object" ? o : { value: o, label: String(o) },
       );
     },

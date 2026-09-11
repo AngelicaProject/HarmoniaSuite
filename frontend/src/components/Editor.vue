@@ -570,7 +570,7 @@ export default defineComponent({
         this.closeTab(t);
       }
     },
-    closeTab(t, ev) {
+    closeTab(t, ev?: Event) {
       if (ev) ev.stopPropagation();
       const i = this.tabs.indexOf(t);
       if (i < 0) return;
@@ -592,7 +592,7 @@ export default defineComponent({
     jumpToPos(pos) {
       this.preview = false;
       this.$nextTick(() => {
-        const ta = this.$refs.ta;
+        const ta = this.$refs.ta as HTMLTextAreaElement | undefined;
         if (!ta) return;
         ta.focus();
         try {
@@ -723,7 +723,7 @@ export default defineComponent({
       if (!this.current) return;
       const open = typeof t === "string" ? t : t.open;
       const close = typeof t === "string" ? "" : t.close || "";
-      const ta = this.$refs.ta;
+      const ta = this.$refs.ta as HTMLTextAreaElement | undefined;
       if (!ta) {
         this.translation += open + close;
         return;

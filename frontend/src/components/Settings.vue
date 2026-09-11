@@ -1,6 +1,7 @@
 <script lang="ts">
 import { defineComponent } from "vue";
 import { api } from "../api/client";
+import type { AiModel, AiStatus, Backup, Job, SourceSettings } from "../api/types";
 export default defineComponent({
   props: ["initial", "forced"],
   emits: ["close", "changed"],
@@ -8,11 +9,11 @@ export default defineComponent({
     return {
       section: this.initial || "sources",
       gamePath: "",
-      srcSt: { gameVersion: "", ready: false },
+      srcSt: { gameVersion: "", ready: false } as SourceSettings,
       srcError: "",
       srcSaved: "",
       srcSaving: false,
-      syncJob: null,
+      syncJob: null as Job | null,
       syncTimer: null,
       provider: "gemini",
       geminiKey: "",
@@ -21,19 +22,21 @@ export default defineComponent({
       openrouterReasoning: "",
       aiSt: {
         geminiKeySet: false,
+        geminiKeyHint: "",
         geminiKeySource: "",
         openrouterKeySet: false,
+        openrouterKeyHint: "",
         openrouterKeySource: "",
-      },
+      } as AiStatus,
       aiError: "",
       aiSaved: "",
       aiSaving: false,
-      orModels: [],
+      orModels: [] as AiModel[],
       orComboOpen: false,
       orComboQ: "",
       checkBusy: "",
       checkMsg: { gemini: null, openrouter: null },
-      bkItems: [],
+      bkItems: [] as Backup[],
       bkRetention: 10,
       bkInput: "10",
       bkUsed: 0,
@@ -126,7 +129,7 @@ export default defineComponent({
   watch: {
     syncTail() {
       this.$nextTick(() => {
-        const el = this.$refs.syncBox;
+        const el = this.$refs.syncBox as HTMLElement | undefined;
         if (el) el.scrollTop = el.scrollHeight;
       });
     },
@@ -185,7 +188,12 @@ export default defineComponent({
       if (this.srcError) return;
       try {
         const d = await api.startJob({ action: "sync-sources" });
-        this.syncJob = { id: d.id, status: d.status || "running", output: "" };
+        this.syncJob = {
+          id: d.id,
+          action: d.action,
+          status: d.status || "running",
+          output: "",
+        };
         this.pollSync();
       } catch (e) {
         this.srcError = e.message;
@@ -266,15 +274,15 @@ export default defineComponent({
       this.orComboQ = "";
       setTimeout(() => {
         document.addEventListener("click", this.closeOrCombo, true);
-        if (this.$refs.orComboQ) this.$refs.orComboQ.focus();
+        const input = this.$refs.orComboQ as HTMLInputElement | undefined;
+        if (input) input.focus();
       }, 0);
     },
-    closeOrCombo(e) {
+    closeOrCombo(e?: Event) {
+      const target = e?.target as Element | null;
       if (
-        e &&
-        e.target &&
-        e.target.closest &&
-        e.target.closest(".or-combo,.or-combo-btn")
+        target?.closest &&
+        target.closest(".or-combo,.or-combo-btn")
       )
         return;
       this.orComboOpen = false;

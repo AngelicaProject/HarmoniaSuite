@@ -4,7 +4,12 @@
     "strict": true,
     "noEmit": true
   },
-  "include": ["src/api/**/*.ts"],
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.vue",
+    "vite.config.ts",
+    "eslint.config.js"
+  ],
   "vueCompilerOptions": {
     "strictTemplates": false
   }

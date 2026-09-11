@@ -20,6 +20,11 @@ import ExportView from "./components/ExportView.vue";
 import DeltaView from "./components/DeltaView.vue";
 import LogView from "./components/LogView.vue";
 import Dropdown from "./components/Dropdown.vue";
+import { useFileTree } from "./composables/useFileTree";
+import { useUpdater } from "./composables/useUpdater";
+import { useCommandPalette } from "./composables/useCommandPalette";
+import { useDockLayout } from "./composables/useDockLayout";
+import { useJobs } from "./composables/useJobs";
 import type {
   AiStatus,
   Entry,
@@ -28,7 +33,6 @@ import type {
   PackMeta,
   Summary,
   SourceSettings,
-  UpdateStatus,
 } from "./api/types";
 
 interface ProjectDocument {
@@ -97,41 +101,28 @@ const App = defineComponent({
     const statsRev = ref(0);
     const exportRev = ref(0);
     const savedEntry = shallowRef(null);
-    const fileTree = ref<FileStats[]>([]);
-    const fileTreeLoading = ref(false);
-    const fileSearchQ = ref("");
-    const fileHideReady = ref(false);
-    const hideEmpty = ref(
-      (() => {
-        try {
-          return localStorage.getItem("hs-hide-empty") !== "off";
-        } catch (e) {
-          return true;
-        }
-      })(),
-    );
-    function toggleHideEmpty() {
-      hideEmpty.value = !hideEmpty.value;
-      try {
-        localStorage.setItem("hs-hide-empty", hideEmpty.value ? "on" : "off");
-      } catch (e) {}
-    }
-    const fileSort = ref(
-      (() => {
-        try {
-          return localStorage.getItem("hs-sort") || "name";
-        } catch (e) {
-          return "name";
-        }
-      })(),
-    );
-    function setSort(v) {
-      fileSort.value = v;
-      try {
-        localStorage.setItem("hs-sort", v);
-      } catch (e) {}
-    }
-    const expandedDirs = ref<Record<string, boolean>>({});
+    const fileTreeState = useFileTree(projectId, () => {
+      cacheRev.value++;
+      statsRev.value++;
+    });
+    const {
+      fileTree,
+      fileTreeLoading,
+      fileSearchQ,
+      fileHideReady,
+      hideEmpty,
+      fileSort,
+      expandedDirs,
+      treeRows,
+      treeFileCount,
+      treeReadyCount,
+      treeEmptyCount,
+      loadFileTree,
+      toggleDir,
+      toggleHideReady,
+      toggleHideEmpty,
+      setSort,
+    } = fileTreeState;
     const rowGroupPageSize = 60;
     const fileRows = ref<FileRowState>({
       file: "",
@@ -148,139 +139,6 @@ const App = defineComponent({
     let rowRequest = 0;
     let phraseSearchTimer = null;
     let trPendingTimer = null;
-    async function loadFileTree() {
-      if (!projectId.value) return;
-      fileTreeLoading.value = true;
-      try {
-        const d = await api.fileTree(projectId.value);
-        fileTree.value = d.files || [];
-        cacheRev.value++;
-        statsRev.value++;
-      } catch (e) {}
-      fileTreeLoading.value = false;
-    }
-    function toggleDir(d) {
-      expandedDirs.value[d] = !expandedDirs.value[d];
-    }
-    function toggleHideReady() {
-      fileHideReady.value = !fileHideReady.value;
-    }
-    const treeFileCount = computed(() => (fileTree.value || []).length);
-    const treeReadyCount = computed(() => {
-      const q = fileSearchQ.value.trim().toLowerCase();
-      let n = 0;
-      for (const f of fileTree.value || []) {
-        if (q && !(f.path || "").toLowerCase().includes(q)) continue;
-        if ((f.total || 0) > 0 && (f.total || 0) === (f.translated || 0)) n++;
-      }
-      return n;
-    });
-    const treeEmptyCount = computed(() => {
-      const q = fileSearchQ.value.trim().toLowerCase();
-      let n = 0;
-      for (const f of fileTree.value || []) {
-        if (q && !(f.path || "").toLowerCase().includes(q)) continue;
-        if ((f.total || 0) === 0) n++;
-      }
-      return n;
-    });
-    const treeRows = computed(() => {
-      const q = fileSearchQ.value.trim().toLowerCase();
-      const items = fileTree.value || [];
-      const vis = (f) => {
-        if (q && !(f.path || "").toLowerCase().includes(q)) return false;
-        if (hideEmpty.value && (f.total || 0) === 0) return false;
-        if (fileHideReady.value && (f.total || 0) <= (f.translated || 0))
-          return false;
-        return true;
-      };
-      const needOf = (f) => (f.total || 0) - (f.translated || 0);
-      const kidName = (k) => (k.type === "dir" ? k.dir.name : k.file.path);
-      const kidPct = (k) => {
-        const t = k.type === "dir" ? k.dir.total || 0 : k.file.total || 0;
-        const d = k.type === "dir" ? k.dir.done || 0 : k.file.translated || 0;
-        return t ? d / t : 0;
-      };
-      function sortKids(kids) {
-        if (fileSort.value === "name")
-          kids.sort((a, b) => (kidName(a) < kidName(b) ? -1 : 1));
-        else if (fileSort.value === "progress")
-          kids.sort(
-            (a, b) =>
-              kidPct(b) - kidPct(a) || (kidName(a) < kidName(b) ? -1 : 1),
-          );
-        else
-          kids.sort(
-            (a, b) => b.need - a.need || (kidName(a) < kidName(b) ? -1 : 1),
-          );
-      }
-      const root = { dirs: new Map(), files: [] };
-      for (const f of items) {
-        if (!vis(f)) continue;
-        const parts = (f.path || "").split("/");
-        let node = root;
-        for (let i = 0; i < parts.length - 1; i++) {
-          let d = node.dirs.get(parts[i]);
-          if (!d) {
-            d = {
-              name: parts[i],
-              path: parts.slice(0, i + 1).join("/"),
-              dirs: new Map(),
-              files: [],
-            };
-            node.dirs.set(parts[i], d);
-          }
-          node = d;
-        }
-        node.files.push(f);
-      }
-      const rows = [];
-      function fold(d) {
-        let t = 0,
-          dn = 0;
-        for (const f of d.files) {
-          t += f.total || 0;
-          dn += f.translated || 0;
-        }
-        for (const c of d.dirs.values()) {
-          const s = fold(c);
-          t += s.total;
-          dn += s.done;
-        }
-        d.total = t;
-        d.done = dn;
-        return d;
-      }
-      function emit(node, depth) {
-        const kids = [];
-        for (const d of node.dirs.values()) {
-          fold(d);
-          kids.push({
-            type: "dir",
-            depth,
-            key: "d:" + d.path,
-            dir: d,
-            open: !!q || !!expandedDirs.value[d.path],
-            need: (d.total || 0) - (d.done || 0),
-          });
-        }
-        for (const f of node.files)
-          kids.push({
-            type: "file",
-            depth,
-            key: "f:" + f.path,
-            file: f,
-            need: needOf(f),
-          });
-        sortKids(kids);
-        for (const k of kids) {
-          rows.push(k);
-          if (k.type === "dir" && k.open) emit(k.dir, depth + 1);
-        }
-      }
-      emit(root, 0);
-      return rows;
-    });
     const summary = ref<Summary | null>(null);
     const projectLoading = ref(false);
     const sourceFiles = ref<string[]>([]);
@@ -361,75 +219,47 @@ const App = defineComponent({
       } catch (e) {}
     }
     loadGeminiStatus();
-    const upd = ref<UpdateStatus>({
-      supported: false,
-      mode: "",
-      version: "dev",
-      needsToolchain: false,
-      currentSha: "",
-      latestSha: "",
-      behindBy: 0,
-      subjects: [],
-      updateAvailable: false,
-      state: "unavailable",
-      reason: "",
+    let jobController: ReturnType<typeof useJobs>;
+    const startJob = (details: Job) => jobController.startJob(details);
+    const updater = useUpdater(startJob, showToast);
+    const {
+      upd,
+      updModal,
+      updRestarting,
+      updRestartDead,
+      updLogBusy,
+      updLabel,
+      updTitle,
+      loadUpdateStatus,
+      runUpdate,
+      copyUpdateLog,
+    } = updater;
+    const jobs = useJobs({
+      projectId,
+      projectName,
+      summary,
+      logText,
+      updModal,
+      updRestarting,
+      updRestartDead,
+      loadFileTree,
+      loadProject,
+      loadSourceStatus,
+      scanSource,
+      loadUpdateStatus,
+      showToast,
     });
-    const updModal = ref(false);
-    const updRestarting = ref(false);
-    const updRestartDead = ref(false);
-    const updLogBusy = ref(false);
-    async function loadUpdateStatus() {
-      try {
-        upd.value = await api.updateStatus();
-      } catch (e) {}
-    }
-    const updLabel = computed(() => {
-      const u = upd.value;
-      const sha = (u.currentSha || "").slice(0, 7);
-      if (u.state === "toolchain_required") return "Компоненты обновления";
-      if (u.updateAvailable)
-        return "v" + (u.version || "dev") + " (+" + u.behindBy + ") " + sha;
-      return "v" + (u.version || "dev") + " · " + sha;
-    });
-    const updTitle = computed(() => {
-      const u = upd.value;
-      if (u.state === "toolchain_required")
-        return "Для обновления потребуется один раз установить JDK, Git и Node.js";
-      if (u.state === "local_ahead")
-        return "Локальная версия новее origin/main\n" + (u.currentSha || "");
-      if (u.state === "diverged")
-        return (
-          "История исходников расходится с origin/main\n" + (u.currentSha || "")
-        );
-      if (!u.supported)
-        return "Обновления недоступны" + (u.reason ? "\n" + u.reason : "");
-      if (!u.updateAvailable) return "Актуально\n" + (u.currentSha || "");
-      return (
-        "Текущий: " + (u.currentSha || "") + "\nНа main: " + (u.latestSha || "")
-      );
-    });
-    async function runUpdate() {
-      updModal.value = false;
-      try {
-        startJob(await api.runUpdate());
-      } catch (e) {
-        showToast(e.message);
-      }
-    }
-    async function copyUpdateLog() {
-      updLogBusy.value = true;
-      try {
-        const text = await api.logTail();
-        if (!navigator.clipboard || !navigator.clipboard.writeText) {
-          throw Error("Буфер обмена недоступен");
-        }
-        await navigator.clipboard.writeText(text);
-        showToast("Журнал скопирован");
-      } catch (e) {
-        showToast(e.message);
-      }
-      updLogBusy.value = false;
-    }
+    jobController = jobs;
+    const {
+      job,
+      pendingPack,
+      jobLog,
+      jobMainOutput,
+      updateFailed,
+      onJobScroll,
+      jobActive,
+      cancelJob,
+    } = jobs;
     const aiTitle = computed(() => {
       const g = geminiStatus.value;
       const gl = g.configured
@@ -479,7 +309,7 @@ const App = defineComponent({
       document.documentElement.getAttribute("data-theme") || "dark",
     );
 
-    // ---- IDE docking: views move between left/right/bottom zones ----
+    // ---- IDE docking: state and interactions live in a dedicated composable ----
     const VIEWS = {
       project: {
         title: "Проект",
@@ -529,416 +359,52 @@ const App = defineComponent({
       "delta",
       "log",
     ];
-    const defaultZones = () => ({
-      layout: {
-        left: ["project", "delta"],
-        right: ["translate", "search", "tags", "summary", "pack", "export"],
-        bottom: ["log"],
+    const dock = useDockLayout(VIEWS, VIEW_IDS, {
+      onActivateView: (view) => {
+        if (view === "pack" && !pack.value) loadPack();
       },
-      active: { left: "project", right: "translate", bottom: "log" },
+      onToast: showToast,
     });
-    const savedLayout = (() => {
-      try {
-        return JSON.parse(localStorage.getItem("hs-layout") || "null");
-      } catch (e) {
-        return null;
-      }
-    })();
-    const layout = ref(defaultZones().layout);
-    const active = ref(defaultZones().active);
-    const zoneVisible = ref({ left: true, right: true, bottom: true });
-    const railVisible = ref({ left: true, right: true, bottom: true });
-    const sideW = ref(300),
-      ctxW = ref(360),
-      bottomH = ref(190);
-    if (savedLayout) {
-      if (savedLayout.v === 2 && savedLayout.layout) {
-        for (const z of ["left", "right", "bottom"]) {
-          const arr = (savedLayout.layout[z] || []).filter((v) =>
-            VIEW_IDS.includes(v),
-          );
-          layout.value[z] = arr;
-        }
-        for (const z of ["left", "right", "bottom"]) {
-          if (
-            savedLayout.active &&
-            layout.value[z].includes(savedLayout.active[z])
-          )
-            active.value[z] = savedLayout.active[z];
-          else active.value[z] = layout.value[z][0] || null;
-        }
-        if (savedLayout.zoneVisible)
-          zoneVisible.value = {
-            left: savedLayout.zoneVisible.left !== false,
-            right: savedLayout.zoneVisible.right !== false,
-            bottom: savedLayout.zoneVisible.bottom !== false,
-          };
-        if (savedLayout.railVisible)
-          railVisible.value = {
-            left: savedLayout.railVisible.left !== false,
-            right: savedLayout.railVisible.right !== false,
-            bottom: savedLayout.railVisible.bottom !== false,
-          };
-        sideW.value = savedLayout.sideW || 300;
-        ctxW.value = savedLayout.ctxW || 360;
-        bottomH.value = savedLayout.bottomH || 190;
-      } else {
-        sideW.value = savedLayout.sideW || 300;
-        ctxW.value = savedLayout.ctxW || 360;
-        zoneVisible.value = {
-          left: savedLayout.leftVisible !== false,
-          right: (savedLayout.rightMode || "dock") !== "hidden",
-          bottom: true,
-        };
-      }
-    }
-    // every view lives in exactly one zone
-    for (const v of VIEW_IDS) {
-      if (
-        !layout.value.left.includes(v) &&
-        !layout.value.right.includes(v) &&
-        !layout.value.bottom.includes(v)
-      ) {
-        layout.value.right.push(v);
-      }
-    }
-
-    const narrow = ref(window.matchMedia("(max-width:1000px)").matches);
-    try {
-      window
-        .matchMedia("(max-width:1000px)")
-        .addEventListener("change", (e) => (narrow.value = e.matches));
-    } catch (e) {}
-
-    function persistLayout() {
-      try {
-        localStorage.setItem(
-          "hs-layout",
-          JSON.stringify({
-            v: 2,
-            layout: layout.value,
-            active: active.value,
-            zoneVisible: zoneVisible.value,
-            railVisible: railVisible.value,
-            sideW: sideW.value,
-            ctxW: ctxW.value,
-            bottomH: bottomH.value,
-          }),
-        );
-      } catch (e) {}
-    }
-
-    const hiddenViews = computed(() =>
-      VIEW_IDS.filter(
-        (v) =>
-          !layout.value.left.includes(v) &&
-          !layout.value.right.includes(v) &&
-          !layout.value.bottom.includes(v),
-      ),
-    );
-
-    const layoutStyle = computed(() => {
-      if (narrow.value) return {};
-      const leftOpen =
-        railVisible.value.left &&
-        zoneVisible.value.left &&
-        layout.value.left.length > 0;
-      const rightOpen =
-        railVisible.value.right &&
-        zoneVisible.value.right &&
-        layout.value.right.length > 0;
-      const left = !railVisible.value.left
-        ? "0px"
-        : leftOpen
-          ? Math.max(180, Math.min(560, sideW.value)) + "px"
-          : "50px";
-      const right = !railVisible.value.right
-        ? "0px"
-        : rightOpen
-          ? Math.max(240, Math.min(640, ctxW.value)) + "px"
-          : "50px";
-      const showBottom =
-        railVisible.value.bottom &&
-        zoneVisible.value.bottom !== false &&
-        layout.value.bottom.length > 0;
-      const bottomRail = railVisible.value.bottom;
-      const rows = showBottom
-        ? "1fr " + Math.max(110, Math.min(480, bottomH.value)) + "px"
-        : bottomRail
-          ? "1fr auto"
-          : "1fr";
-      return {
-        gridTemplateColumns: left + " 1fr " + right,
-        gridTemplateRows: rows,
-      };
-    });
-
-    function zoneShown(z) {
-      if (z === "bottom")
-        return (
-          zoneVisible.value.bottom !== false && layout.value.bottom.length > 0
-        );
-      return zoneVisible.value[z] && layout.value[z].length > 0;
-    }
-
-    function zoneStyle(z) {
-      if (z === "bottom")
-        return { height: Math.max(110, Math.min(480, bottomH.value)) + "px" };
-      return {};
-    }
-
-    function activateView(zone, view) {
-      active.value[zone] = view;
-      if (view === "pack" && !pack.value) loadPack();
-      persistLayout();
-    }
-
-    function toggleView(zone, view) {
-      if (active.value[zone] === view && zoneShown(zone)) hideZone(zone);
-      else {
-        if (zone === "bottom") zoneVisible.value.bottom = true;
-        else zoneVisible.value[zone] = true;
-        activateView(zone, view);
-      }
-    }
-
-    const ctxZone = ref(null);
-    function openZoneMenu(zone, e, view = null) {
-      ctxZone.value = {
-        zone,
-        view: view || null,
-        x: Math.min(e.clientX, window.innerWidth - 190),
-        y: Math.min(e.clientY, window.innerHeight - 60),
-      };
-    }
-    function hideWidget() {
-      if (!ctxZone.value || !ctxZone.value.view) return;
-      closeTab(ctxZone.value.zone, ctxZone.value.view);
-      ctxZone.value = null;
-    }
-
-    function activeTitle(zone) {
-      const v = active.value[zone];
-      return v && VIEWS[v] ? VIEWS[v].title : "";
-    }
-
-    function gotoView(view) {
-      for (const z of ["left", "right", "bottom"]) {
-        if (layout.value[z].includes(view)) {
-          railVisible.value[z] = true;
-          zoneVisible.value[z] = true;
-          activateView(z, view);
-          return;
-        }
-      }
-      railVisible.value.right = true;
-      zoneVisible.value.right = true;
-      addView("right", view);
-    }
-
-    function addView(zone, view) {
-      if (!layout.value[zone].includes(view)) {
-        for (const z of ["left", "right", "bottom"]) {
-          const i = layout.value[z].indexOf(view);
-          if (i >= 0) layout.value[z].splice(i, 1);
-        }
-        layout.value[zone].push(view);
-      }
-      menuFor.value = null;
-      addMenu.value = null;
-      activateView(zone, view);
-    }
-
-    function closeTab(zone, view) {
-      const arr = layout.value[zone];
-      const i = arr.indexOf(view);
-      if (i >= 0) arr.splice(i, 1);
-      if (active.value[zone] === view)
-        active.value[zone] = arr[Math.min(i, arr.length - 1)] || null;
-      layoutRev.value++;
-      persistLayout();
-    }
-
-    function resetLayout(_event?: Event) {
-      const d = defaultZones();
-      layout.value = d.layout;
-      active.value = d.active;
-      zoneVisible.value = { left: true, right: true, bottom: true };
-      railVisible.value = { left: true, right: true, bottom: true };
-      menuFor.value = null;
-      addMenu.value = null;
-      ctxZone.value = null;
-      layoutRev.value++;
-      persistLayout();
-      showToast("Раскладка сброшена");
-    }
-
-    // drag-and-drop tabs between zones
-    const dragView = ref(null);
-    const dropPos = ref(null);
-    const menuFor = ref(null);
-    const addMenu = ref(null);
-    function openAddMenu(zone, e) {
-      if (addMenu.value && addMenu.value.zone === zone) {
-        addMenu.value = null;
-        return;
-      }
-      menuFor.value = null;
-      addMenu.value = {
-        zone,
-        x: Math.min(e.clientX, window.innerWidth - 220),
-        y: Math.min(e.clientY, window.innerHeight - 320),
-      };
-    }
-    function onTabDragStart(zone, view, e) {
-      dragView.value = { view, from: zone };
-      e.dataTransfer.effectAllowed = "move";
-      try {
-        e.dataTransfer.setData("text/plain", view);
-      } catch (err) {}
-    }
-    function onTabDragOver(zone, index, e) {
-      e.preventDefault();
-      e.dataTransfer.dropEffect = "move";
-      dropPos.value = { zone, index };
-    }
-    function onDrop(zone, e) {
-      e.preventDefault();
-      e.stopPropagation();
-      const d = dragView.value;
-      dragView.value = null;
-      dropPos.value = null;
-      if (!d) return;
-      moveView(d.view, d.from, zone, null);
-    }
-    function onDropOnTab(zone, index, e) {
-      e.preventDefault();
-      e.stopPropagation();
-      const d = dragView.value;
-      dragView.value = null;
-      dropPos.value = null;
-      if (!d) return;
-      moveView(d.view, d.from, zone, index);
-    }
-    function onDragEnd() {
-      dragView.value = null;
-      dropPos.value = null;
-    }
-    function moveView(view, from, zone, index) {
-      const src = layout.value[from];
-      const si = src.indexOf(view);
-      if (si >= 0) src.splice(si, 1);
-      const dst = layout.value[zone];
-      let idx =
-        index == null ? dst.length : Math.max(0, Math.min(index, dst.length));
-      if (from === zone && si >= 0 && si < idx) idx--;
-      dst.splice(idx, 0, view);
-      active.value[zone] = view;
-      if (!dst.includes(active.value[from]) && from !== zone)
-        active.value[from] = layout.value[from][0] || null;
-      else if (from === zone && !dst.includes(active.value[zone]))
-        active.value[zone] = dst[0] || null;
-      if (view === "pack" && !pack.value) loadPack();
-      layoutRev.value++;
-      persistLayout();
-    }
-    function dropClass(zone, i) {
-      if (!dropPos.value || dropPos.value.zone !== zone) return "";
-      return dropPos.value.index === i ? "drop-before" : "";
-    }
-
-    // teleport hosts: view content follows its host element
-    const hosts = {};
-    const layoutRev = ref(0);
-    function setHost(view, el) {
-      if (el) {
-        if (hosts[view] !== el) {
-          hosts[view] = el;
-          layoutRev.value++;
-        }
-      } else {
-        const cur = hosts[view];
-        if (!cur) return;
-        if (!cur.isConnected) {
-          delete hosts[view];
-          layoutRev.value++;
-        } else
-          nextTick(() => {
-            const c = hosts[view];
-            if (c && !c.isConnected) {
-              delete hosts[view];
-              layoutRev.value++;
-            }
-          });
-      }
-    }
-    function hostEl(view) {
-      layoutRev.value;
-      const el = hosts[view];
-      return el && el.isConnected ? el : null;
-    }
-
-    function startResize(pane, e) {
-      if (narrow.value) return;
-      e.preventDefault();
-      const el = e.target.closest ? e.target : null;
-      if (el && el.classList) el.classList.add("on");
-      const x0 = e.clientX,
-        w0 = pane === "left" ? sideW.value : ctxW.value;
-      const move = (ev) => {
-        const dx = ev.clientX - x0;
-        if (pane === "left") sideW.value = w0 + dx;
-        else ctxW.value = w0 - dx;
-      };
-      const up = () => {
-        window.removeEventListener("mousemove", move);
-        window.removeEventListener("mouseup", up);
-        if (el && el.classList) el.classList.remove("on");
-        persistLayout();
-      };
-      window.addEventListener("mousemove", move);
-      window.addEventListener("mouseup", up);
-    }
-
-    function startResizeY(e) {
-      if (narrow.value) return;
-      e.preventDefault();
-      const y0 = e.clientY,
-        h0 = bottomH.value;
-      const move = (ev) => {
-        bottomH.value = h0 + (y0 - ev.clientY);
-      };
-      const up = () => {
-        window.removeEventListener("mousemove", move);
-        window.removeEventListener("mouseup", up);
-        persistLayout();
-      };
-      window.addEventListener("mousemove", move);
-      window.addEventListener("mouseup", up);
-    }
-
-    function toggleLeft() {
-      railVisible.value.left = !railVisible.value.left;
-      persistLayout();
-    }
-    function toggleRight() {
-      railVisible.value.right = !railVisible.value.right;
-      persistLayout();
-    }
-    function toggleBottom() {
-      railVisible.value.bottom = !railVisible.value.bottom;
-      persistLayout();
-    }
-    function hideZone(zone) {
-      zoneVisible.value[zone] = false;
-      menuFor.value = null;
-      persistLayout();
-    }
-    function hidePanel(zone) {
-      railVisible.value[zone] = false;
-      ctxZone.value = null;
-      persistLayout();
-    }
+    const {
+      layout,
+      active,
+      zoneVisible,
+      railVisible,
+      narrow,
+      hiddenViews,
+      layoutStyle,
+      zoneStyle,
+      zoneShown,
+      activateView,
+      toggleView,
+      openZoneMenu,
+      ctxZone,
+      hideWidget,
+      activeTitle,
+      gotoView,
+      addView,
+      closeTab,
+      resetLayout,
+      menuFor,
+      addMenu,
+      openAddMenu,
+      dropPos,
+      onTabDragStart,
+      onTabDragOver,
+      onDrop,
+      onDropOnTab,
+      onDragEnd,
+      dropClass,
+      setHost,
+      hostEl,
+      startResize,
+      startResizeY,
+      toggleLeft,
+      toggleRight,
+      toggleBottom,
+      hideZone,
+      hidePanel,
+    } = dock;
 
     function closeMenusOnDocClick(e) {
       const inside =
@@ -1059,191 +525,6 @@ const App = defineComponent({
       theme.value = theme.value === "dark" ? "light" : "dark";
       localStorage.setItem("theme", theme.value);
       document.documentElement.setAttribute("data-theme", theme.value);
-    }
-
-    // live job progress
-    const job = ref<Job | null>(null);
-    let jobTimer: ReturnType<typeof setInterval> | null = null;
-    const pendingPack = ref(false);
-    const jobLog = ref<HTMLElement | null>(null);
-    const jobStick = ref(true);
-    const jobMainOutput = computed(() =>
-      ((job.value && job.value.output) || "")
-        .split("\n")
-        .filter((l) => !l.startsWith("[REASONING]"))
-        .join("\n"),
-    );
-    const updateFailed = computed(
-      () =>
-        !!job.value &&
-        job.value.action === "update" &&
-        job.value.status === "failed",
-    );
-    function onJobScroll() {
-      const el = jobLog.value;
-      if (!el) return;
-      jobStick.value = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
-    }
-    watch(
-      () => job.value && job.value.output,
-      () => {
-        if (!jobStick.value) return;
-        nextTick(() => {
-          const el = jobLog.value;
-          if (el) el.scrollTop = el.scrollHeight;
-        });
-      },
-    );
-    watch(
-      () => job.value && job.value.id,
-      () => {
-        jobStick.value = true;
-      },
-    );
-
-    async function downloadPackZip() {
-      const b = await api.downloadExportZip(projectId.value);
-      const u = URL.createObjectURL(b);
-      const a = document.createElement("a");
-      a.href = u;
-      a.download = (projectName.value || projectId.value || "export") + ".zip";
-      a.click();
-      URL.revokeObjectURL(u);
-    }
-
-    function jobActive() {
-      return !!(
-        job.value &&
-        (job.value.status === "running" || job.value.status === "queued")
-      );
-    }
-
-    function pollJob(id) {
-      if (jobTimer) clearInterval(jobTimer);
-      let fails = 0;
-      let lastLive = 0;
-      jobTimer = setInterval(async () => {
-        try {
-          const d = await api.jobGet(id);
-          fails = 0;
-          job.value = d;
-          if (
-            (d.status === "running" || d.status === "queued") &&
-            Date.now() - lastLive > 15000
-          ) {
-            lastLive = Date.now();
-            loadFileTree();
-            try {
-              const ov = await api.overview(projectId.value);
-              if (ov.summary) summary.value = ov.summary;
-            } catch (e) {}
-          }
-          if (d.status !== "running" && d.status !== "queued") {
-            clearInterval(jobTimer);
-            jobTimer = null;
-            if (pendingPack.value && d.action === "merge") {
-              pendingPack.value = false;
-              if (
-                d.status === "completed" ||
-                d.status === "completed_with_errors"
-              ) {
-                try {
-                  await downloadPackZip();
-                  logText.value += "\nПак Harmonia собран и скачан (.zip)";
-                } catch (e) {
-                  showToast(e.message);
-                  logText.value += "\n" + e.message;
-                }
-              } else {
-                logText.value +=
-                  "\nСборка не завершена (" + d.status + ") — архив не скачан";
-              }
-            }
-            if (d.action === "update") {
-              if (d.status === "failed") updModal.value = true;
-              setTimeout(loadUpdateStatus, 400);
-            } else if (d.action === "sync-sources") {
-              setTimeout(async () => {
-                await loadSourceStatus();
-                if (projectId.value) loadProject();
-                else scanSource();
-              }, 400);
-            } else if (d.action === "merge") {
-              setTimeout(async () => {
-                await loadFileTree();
-                try {
-                  const ov = await api.overview(projectId.value);
-                  if (ov.summary) summary.value = ov.summary;
-                } catch (e) {}
-              }, 400);
-            } else {
-              setTimeout(loadProject, 400);
-            }
-          }
-        } catch (e) {
-          if (job.value && job.value.action === "update") onUpdateGone();
-          if (++fails >= 10) {
-            clearInterval(jobTimer);
-            jobTimer = null;
-            if (job.value) {
-              job.value = {
-                ...job.value,
-                status: "error",
-                output:
-                  (job.value.output || "") +
-                  "\nНет ответа сервера (перезапуск?) — задача потеряна, запустите заново",
-              };
-            }
-          }
-        }
-      }, 700);
-    }
-
-    let updWatch = null;
-    function onUpdateGone() {
-      updRestarting.value = true;
-      if (updWatch) return;
-      let updWatchFails = 0;
-      updWatch = setInterval(async () => {
-        try {
-          await api.version();
-          clearInterval(updWatch);
-          updWatch = null;
-          location.reload();
-        } catch (e) {
-          if (++updWatchFails >= 40) {
-            clearInterval(updWatch);
-            updWatch = null;
-            updRestartDead.value = true;
-          }
-        }
-      }, 3000);
-    }
-    function startJob(d) {
-      updRestarting.value = false;
-      updRestartDead.value = false;
-      if (updWatch) {
-        clearInterval(updWatch);
-        updWatch = null;
-      }
-      job.value = {
-        id: d.id,
-        status: d.status || "running",
-        action: d.action,
-        output: "",
-      };
-      pollJob(d.id);
-    }
-
-    async function cancelJob() {
-      pendingPack.value = false;
-      if (!job.value) return;
-      try {
-        const d = await api.jobCancel(job.value.id);
-        job.value = d;
-      } catch (e) {
-        logText.value += "\n" + e.message;
-      }
     }
 
     function mergeEntries(items) {
@@ -1859,154 +1140,25 @@ const App = defineComponent({
       ed.insertTag(text);
     }
 
-    // command palette (Ctrl+K): files, phrases, commands
-    const paletteOpen = ref(false);
-    const paletteQ = ref("");
-    const paletteIdx = ref(0);
-    const paletteInput = ref<HTMLInputElement | null>(null);
-
-    function fuzzyScore(q, s) {
-      const a = String(s || "").toLowerCase(),
-        b = String(q || "")
-          .toLowerCase()
-          .trim();
-      if (!b) return 0;
-      if (a.startsWith(b)) return 0;
-      const at = a.indexOf(b);
-      if (at >= 0) return 1 + at / 1000;
-      let qi = 0,
-        gaps = 0,
-        last = -1;
-      for (let k = 0; k < a.length && qi < b.length; k++) {
-        if (a[k] === b[qi]) {
-          if (last >= 0) gaps += k - last - 1;
-          last = k;
-          qi++;
-        }
-      }
-      return qi >= b.length ? 2 + gaps / 100 : Infinity;
-    }
-
-    const paletteResults = computed(() => {
-      const q = paletteQ.value.trim();
-      const cmds = [
-        {
-          t: "Gemini: перевести всё",
-          hint: "команда",
-          run: () => run("gemini"),
-        },
-        { t: "Собрать CSV", hint: "команда", run: () => run("merge") },
-        {
-          t: "Левая панель: скрыть/показать",
-          hint: "команда",
-          run: toggleLeft,
-        },
-        {
-          t: "Правая панель: скрыть/показать",
-          hint: "команда",
-          run: toggleRight,
-        },
-        {
-          t: "Нижняя панель: скрыть/показать",
-          hint: "команда",
-          run: toggleBottom,
-        },
-        { t: "Сбросить раскладку", hint: "команда", run: resetLayout },
-        ...VIEW_IDS.map((v) => ({
-          t: "Панель: " + VIEWS[v].title,
-          hint: "панель",
-          run: () => gotoView(v),
-        })),
-      ];
-      if (!q) return cmds.map((c, i) => ({ ...c, key: "c" + i }));
-      const out = [];
-      cmds.forEach((c, i) => {
-        const s = fuzzyScore(q, c.t);
-        if (s !== Infinity) out.push({ ...c, key: "c" + i, score: s });
-      });
-      (fileTree.value || []).forEach((f) => {
-        const s = fuzzyScore(q, f.path);
-        if (s !== Infinity)
-          out.push({
-            t: f.path,
-            hint: "файл",
-            key: "f" + f.path,
-            score: s + 0.01,
-            run: () => openFile(f.path),
-          });
-      });
-      palFiles.value.forEach((path) => {
-        out.push({
-          t: path,
-          hint: "файл",
-          key: "f" + path,
-          score: 0.02,
-          run: () => openFile(path),
-        });
-      });
-      return out.sort((a, b) => a.score - b.score).slice(0, 25);
+    const palette = useCommandPalette(projectId, fileTree, VIEWS, VIEW_IDS, {
+      run,
+      toggleLeft,
+      toggleRight,
+      toggleBottom,
+      resetLayout,
+      gotoView,
+      openFile,
     });
-    const palFiles = ref([]);
-    let palTimer = null;
-    watch(paletteQ, () => {
-      clearTimeout(palTimer);
-      const q = paletteQ.value.trim();
-      palFiles.value = [];
-      if (!q || !projectId.value) return;
-      palTimer = setTimeout(async () => {
-        try {
-          const d = await api.files(projectId.value, { q }, { limit: 25 });
-          palFiles.value = (d.files || []).map((f) => f.path);
-        } catch (e) {
-          palFiles.value = [];
-        }
-      }, 300);
-    });
-
-    function openPalette() {
-      paletteOpen.value = true;
-      paletteQ.value = "";
-      paletteIdx.value = 0;
-      setTimeout(() => {
-        if (paletteInput.value) paletteInput.value.focus();
-      }, 0);
-    }
-
-    function runPalette(it) {
-      paletteOpen.value = false;
-      if (it && it.run) it.run();
-    }
-
-    function onPaletteKey(e) {
-      if (e.key === "ArrowDown") {
-        e.preventDefault();
-        paletteIdx.value = Math.min(
-          paletteIdx.value + 1,
-          paletteResults.value.length - 1,
-        );
-      } else if (e.key === "ArrowUp") {
-        e.preventDefault();
-        paletteIdx.value = Math.max(0, paletteIdx.value - 1);
-      } else if (e.key === "Enter") {
-        const it = paletteResults.value[paletteIdx.value];
-        if (it) runPalette(it);
-      }
-    }
-
-    onMounted(() => {
-      window.addEventListener("keydown", (e) => {
-        if (
-          (e.ctrlKey || e.metaKey) &&
-          !e.shiftKey &&
-          !e.altKey &&
-          e.code === "KeyK"
-        ) {
-          e.preventDefault();
-          openPalette();
-        } else if (e.key === "Escape" && paletteOpen.value)
-          paletteOpen.value = false;
-      });
-    });
+    const {
+      paletteOpen,
+      paletteQ,
+      paletteIdx,
+      paletteInput,
+      paletteResults,
+      openPalette,
+      runPalette,
+      onPaletteKey,
+    } = palette;
 
     async function focusFile(f) {
       focusFileFilter.value = f || "";

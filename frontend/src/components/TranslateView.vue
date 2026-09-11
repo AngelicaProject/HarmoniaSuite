@@ -234,15 +234,15 @@ export default defineComponent({
       this.orComboQ = "";
       setTimeout(() => {
         document.addEventListener("click", this.closeOrCombo, true);
-        if (this.$refs.orComboQ) this.$refs.orComboQ.focus();
+        const input = this.$refs.orComboQ as HTMLInputElement | undefined;
+        if (input) input.focus();
       }, 0);
     },
-    closeOrCombo(e) {
+    closeOrCombo(e?: Event) {
+      const target = e?.target as Element | null;
       if (
-        e &&
-        e.target &&
-        e.target.closest &&
-        e.target.closest(".or-combo,.or-combo-btn")
+        target?.closest &&
+        target.closest(".or-combo,.or-combo-btn")
       )
         return;
       this.orComboOpen = false;
@@ -253,7 +253,7 @@ export default defineComponent({
       this.closeOrCombo();
     },
     onReasonScroll() {
-      const el = this.$refs.reasonBox;
+      const el = this.$refs.reasonBox as HTMLElement | undefined;
       if (!el) return;
       this.reasonStick = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
     },
@@ -265,7 +265,7 @@ export default defineComponent({
     reasonLines() {
       if (!this.reasonStick || !this.reasonOpen) return;
       this.$nextTick(() => {
-        const el = this.$refs.reasonBox;
+        const el = this.$refs.reasonBox as HTMLElement | undefined;
         if (el) el.scrollTop = el.scrollHeight;
       });
     },

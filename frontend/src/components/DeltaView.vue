@@ -9,6 +9,7 @@ export default defineComponent({
     return {
       author: "",
       authorBad: false,
+      expTimer: null as ReturnType<typeof setTimeout> | null,
       fileQ: "",
       fileList: [],
       fileLoading: false,
@@ -122,8 +123,8 @@ export default defineComponent({
       } catch (e) {}
     },
     scheduleExpSearch() {
-      clearTimeout(this._expTimer);
-      this._expTimer = setTimeout(() => this.loadExportFiles(), 300);
+      clearTimeout(this.expTimer);
+      this.expTimer = setTimeout(() => this.loadExportFiles(), 300);
     },
     async loadExportFiles() {
       if (!this.projectId) return;
@@ -268,7 +269,7 @@ export default defineComponent({
         this.$emit("toast", "Укажите автора дельты — поле «Автор»");
         this.$nextTick(() => {
           try {
-            const el = this.$refs.authorInput;
+            const el = this.$refs.authorInput as HTMLInputElement | undefined;
             if (el) {
               if (el.scrollIntoView) el.scrollIntoView({ block: "center" });
               el.classList.add("flash");

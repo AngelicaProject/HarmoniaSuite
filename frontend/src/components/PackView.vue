@@ -17,6 +17,7 @@ type PackViewMeta = {
   minPluginVersion?: string;
   authors?: Array<{ name?: string; role?: string; contact?: string }>;
 };
+type PackTextKey = Exclude<keyof PackViewMeta, "authors">;
 export default defineComponent({
   props: {
     projectId: { type: String, required: true },
@@ -73,7 +74,7 @@ export default defineComponent({
     packValue(key: keyof PackViewMeta): string {
       return String(this.pack?.[key] || "");
     },
-    setPackValue(key: keyof PackViewMeta, value: string) {
+    setPackValue(key: PackTextKey, value: string) {
       this.pack[key] = value;
     },
     packAuthors(): Array<{ name?: string; role?: string; contact?: string }> {
