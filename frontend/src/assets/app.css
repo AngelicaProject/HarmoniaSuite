@@ -570,6 +570,12 @@ input[type="checkbox"]:disabled:indeterminate {
   gap: 9px;
   font-size: 13px;
 }
+.job-status {
+  margin-left: 8px;
+}
+.job-action {
+  margin-left: auto;
+}
 .job-spin {
   width: 14px;
   height: 14px;

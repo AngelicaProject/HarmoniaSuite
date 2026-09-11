@@ -65,6 +65,9 @@ export default defineComponent({
       logError: "",
       logSaved: "",
       logBusy: false,
+      comboFocusTimer: null as ReturnType<typeof setTimeout> | null,
+      returnFocusEl: null as HTMLElement | null,
+      disposed: false,
     };
   },
   computed: {
@@ -151,16 +154,63 @@ export default defineComponent({
     },
   },
   async mounted() {
+    this.returnFocusEl =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+    this.$nextTick(() => this.focusDialog());
     await Promise.all([this.srcReload(), this.aiReload(), this.bkReload()]);
+    if (this.disposed) return;
     try {
-      this.orModels = await api.aiModels();
+      const models = await api.aiModels();
+      if (!this.disposed) this.orModels = models;
     } catch (e) {}
   },
-  unmounted() {
+  beforeUnmount() {
+    this.disposed = true;
     if (this.syncTimer) clearInterval(this.syncTimer);
+    if (this.comboFocusTimer) clearTimeout(this.comboFocusTimer);
     document.removeEventListener("click", this.closeOrCombo, true);
+    this.returnFocusEl?.focus();
   },
   methods: {
+    focusDialog(): void {
+      const dialog = this.$refs.dialog as HTMLElement | undefined;
+      if (!dialog) return;
+      const first = dialog.querySelector<HTMLElement>(
+        'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [href], [tabindex]:not([tabindex="-1"])',
+      );
+      (first || dialog).focus();
+    },
+    onDialogKeydown(event: KeyboardEvent): void {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        if (!this.forced) this.$emit("close");
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const dialog = this.$refs.dialog as HTMLElement | undefined;
+      if (!dialog) return;
+      const focusable = Array.from(
+        dialog.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [href], [tabindex]:not([tabindex="-1"])',
+        ),
+      );
+      if (!focusable.length) {
+        event.preventDefault();
+        dialog.focus();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    },
     bkSlide(e: Event): void {
       const el = e.target as HTMLInputElement | null;
       if (!el || !el.style) return;
@@ -218,6 +268,7 @@ export default defineComponent({
     pollSync() {
       if (this.syncTimer) clearInterval(this.syncTimer);
       this.syncTimer = setInterval(async () => {
+        if (this.disposed) return;
         const j = this.syncJob;
         if (!j) {
           if (this.syncTimer) clearInterval(this.syncTimer);
@@ -226,15 +277,18 @@ export default defineComponent({
         }
         try {
           const d = await api.jobGet(j.id);
+          if (this.disposed || this.syncJob !== j) return;
           j.output = d.output || "";
           j.status = d.status;
           if (d.status && d.status !== "running" && d.status !== "queued") {
             if (this.syncTimer) clearInterval(this.syncTimer);
             this.syncTimer = null;
             await this.srcReload();
+            if (this.disposed) return;
             this.$emit("changed");
           }
         } catch (e) {
+          if (this.disposed || this.syncJob !== j) return;
           j.output += "\n" + errorMessage(e);
         }
       }, 700);
@@ -288,7 +342,10 @@ export default defineComponent({
       }
       this.orComboOpen = true;
       this.orComboQ = "";
-      setTimeout(() => {
+      if (this.comboFocusTimer) clearTimeout(this.comboFocusTimer);
+      this.comboFocusTimer = setTimeout(() => {
+        this.comboFocusTimer = null;
+        if (!this.orComboOpen || this.disposed) return;
         document.addEventListener("click", this.closeOrCombo, true);
         const input = this.$refs.orComboQ as HTMLInputElement | undefined;
         if (input) input.focus();
@@ -297,6 +354,8 @@ export default defineComponent({
     closeOrCombo(e?: Event) {
       const target = e?.target as Element | null;
       if (target?.closest && target.closest(".or-combo,.or-combo-btn")) return;
+      if (this.comboFocusTimer) clearTimeout(this.comboFocusTimer);
+      this.comboFocusTimer = null;
       this.orComboOpen = false;
       document.removeEventListener("click", this.closeOrCombo, true);
     },
@@ -488,9 +547,17 @@ export default defineComponent({
 
 <template>
   <div class="overlay" style="z-index: 1500">
-    <div class="modal set-modal">
+    <div
+      ref="dialog"
+      class="modal set-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="settings-title"
+      tabindex="-1"
+      @keydown="onDialogKeydown"
+    >
       <div class="set-head">
-        <h2 class="set-title">Настройки</h2>
+        <h2 id="settings-title" class="set-title">Настройки</h2>
         <button
           v-if="!forced"
           class="ghost icon-btn sm"
@@ -533,9 +600,12 @@ export default defineComponent({
         <div class="set-content">
           <template v-if="section === 'sources'">
             <div class="set-field">
-              <span class="set-label">Путь к игре</span>
+              <label class="set-label" for="settings-game-path"
+                >Путь к игре</label
+              >
               <div class="set-row">
                 <input
+                  id="settings-game-path"
                   class="grow"
                   v-model="gamePath"
                   placeholder="C:/Program Files (x86)/Steam/steamapps/common/FINAL FANTASY XIV Online"
@@ -601,9 +671,12 @@ export default defineComponent({
             </div>
             <template v-if="provider === 'gemini'">
               <div class="set-field">
-                <span class="set-label">API-ключ Gemini</span>
+                <label class="set-label" for="settings-gemini-key"
+                  >API-ключ Gemini</label
+                >
                 <div class="set-row">
                   <input
+                    id="settings-gemini-key"
                     v-model="geminiKey"
                     type="password"
                     class="grow"
@@ -657,9 +730,12 @@ export default defineComponent({
             </template>
             <template v-else>
               <div class="set-field">
-                <span class="set-label">API-ключ OpenRouter</span>
+                <label class="set-label" for="settings-openrouter-key"
+                  >API-ключ OpenRouter</label
+                >
                 <div class="set-row">
                   <input
+                    id="settings-openrouter-key"
                     v-model="openrouterKey"
                     type="password"
                     class="grow"
@@ -709,9 +785,15 @@ export default defineComponent({
                 </div>
               </div>
               <div class="set-field">
-                <span class="set-label">Модель по умолчанию</span>
+                <label class="set-label" for="settings-openrouter-model"
+                  >Модель по умолчанию</label
+                >
                 <div v-if="orModels.length" style="position: relative">
-                  <button class="set-combo or-combo-btn" @click="toggleOrCombo">
+                  <button
+                    id="settings-openrouter-model"
+                    class="set-combo or-combo-btn"
+                    @click="toggleOrCombo"
+                  >
                     <span>{{ orModelName }}</span
                     ><svg
                       class="icon"
@@ -779,6 +861,7 @@ export default defineComponent({
                 </div>
                 <input
                   v-else
+                  id="settings-openrouter-model"
                   v-model="openrouterModel"
                   class="set-control"
                   placeholder="google/gemini-flash-1.5"
@@ -854,9 +937,12 @@ export default defineComponent({
               <div v-else-if="logSaved" class="set-ok">{{ logSaved }}</div>
             </div>
             <div class="set-field">
-              <span class="set-label">Хранить копий</span>
+              <label class="set-label" for="settings-backup-retention"
+                >Хранить копий</label
+              >
               <div class="set-row" style="align-items: center">
                 <input
+                  id="settings-backup-retention"
                   v-model="bkInput"
                   type="range"
                   min="1"
@@ -883,11 +969,12 @@ export default defineComponent({
               </div>
             </div>
             <div class="set-field">
-              <span class="set-label"
-                >Автоматическое создание резервных копий</span
+              <label class="set-label" for="settings-backup-auto"
+                >Автоматическое создание резервных копий</label
               >
               <div class="set-row" style="align-items: center">
                 <input
+                  id="settings-backup-auto"
                   v-model="bkAutoInput"
                   type="number"
                   min="0"

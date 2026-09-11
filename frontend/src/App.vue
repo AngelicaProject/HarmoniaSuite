@@ -1,11 +1,8 @@
 <script lang="ts">
 import { defineComponent } from "vue";
-import { computed, nextTick, onMounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref } from "vue";
 import { api } from "./api/client";
-import {
-  ENTRY_STATUS,
-  needsWork as entryNeedsWork,
-} from "./domain/translationStatus";
+import { ENTRY_STATUS } from "./domain/translationStatus";
 import { buildContextMenuItems } from "./domain/contextMenu";
 import Picker from "./components/Picker.vue";
 import Editor from "./components/Editor.vue";
@@ -19,6 +16,9 @@ import ExportView from "./components/ExportView.vue";
 import DeltaView from "./components/DeltaView.vue";
 import LogView from "./components/LogView.vue";
 import Dropdown from "./components/Dropdown.vue";
+import AppTopBar from "./components/shell/AppTopBar.vue";
+import JobBar from "./components/shell/JobBar.vue";
+import UiToast from "./components/ui/UiToast.vue";
 import { useFileTree } from "./composables/useFileTree";
 import { useUpdater } from "./composables/useUpdater";
 import { useCommandPalette } from "./composables/useCommandPalette";
@@ -33,16 +33,10 @@ import { useEntryMutations } from "./composables/useEntryMutations";
 import { useProjectWorkspace } from "./composables/useProjectWorkspace";
 import { useContextMenu } from "./composables/useContextMenu";
 import { usePack } from "./composables/usePack";
+import { useNotifications } from "./composables/useNotifications";
+import { useWorkspaceNavigation } from "./composables/useWorkspaceNavigation";
 import { VIEWS, VIEW_IDS } from "./workspace/views";
 import type { Entry, FileStats, Job, DeltaConflict } from "./api/types";
-
-interface SearchMatch {
-  id: string;
-  file: string;
-  rowKey: string;
-  source: string;
-  translation: string;
-}
 
 interface EditorHandle {
   current?: Entry | null;
@@ -63,8 +57,6 @@ interface ConflictResolution {
   status: string;
 }
 
-type Timer = ReturnType<typeof setTimeout>;
-
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -83,8 +75,12 @@ const App = defineComponent({
     LogView,
     Settings,
     Dropdown,
+    AppTopBar,
+    JobBar,
+    UiToast,
   },
   setup() {
+    const { toast, showToast } = useNotifications();
     const projectId = ref("");
     const showPicker = ref(true);
     const statsRev = ref(0);
@@ -201,14 +197,12 @@ const App = defineComponent({
     });
     rowsController = rows;
     const {
-      rowGroupPageSize,
       fileRows,
       phrasePage,
       phraseSearchQ,
       rowGroupsPaged,
       rowGroupPages,
       rowContext,
-      loadFileRows,
       loadFilePreview,
       filePhrases,
       filePhraseGroups,
@@ -225,7 +219,7 @@ const App = defineComponent({
       replaceEntryInPreview: rows.replaceEntryInPreview,
       reconcilePending: selections.reconcilePending,
     });
-    const { savedEntry, localEntry, mergeEntries, applySavedEntry } = mutations;
+    const { savedEntry, localEntry, applySavedEntry } = mutations;
     void loadGeminiStatus();
     let jobController: ReturnType<typeof useJobs>;
     const startJob = (details: Job) => jobController.startJob(details);
@@ -258,16 +252,7 @@ const App = defineComponent({
       showToast,
     });
     jobController = jobs;
-    const {
-      job,
-      pendingPack,
-      jobLog,
-      jobMainOutput,
-      updateFailed,
-      onJobScroll,
-      jobActive,
-      cancelJob,
-    } = jobs;
+    const { job, pendingPack, updateFailed, jobActive, cancelJob } = jobs;
     const badge = computed(() => {
       const s = summary.value;
       if (!s || s.entries === undefined) return "—";
@@ -378,9 +363,6 @@ const App = defineComponent({
     function fileUn(f: FileStats): number {
       return (f.total || 0) - (f.translated || 0);
     }
-    function needsWork(e: Entry): boolean {
-      return entryNeedsWork(e);
-    }
     const projTotal = computed(() => summary.value?.entries ?? 0);
     const projDone = computed(() => summary.value?.translated ?? 0);
     const staleStatus = ENTRY_STATUS.STALE;
@@ -395,6 +377,69 @@ const App = defineComponent({
           (e) => (logText.value += "\n" + errorMessage(e)),
         );
     }
+    const tab = ref("translate");
+    const followFiles = ref(
+      (() => {
+        try {
+          return localStorage.getItem("hs-follow") !== "off";
+        } catch {
+          return true;
+        }
+      })(),
+    );
+    const followRow = ref(
+      (() => {
+        try {
+          return localStorage.getItem("hs-follow-row") === "on";
+        } catch {
+          return false;
+        }
+      })(),
+    );
+    const followRowId = ref("");
+    const navigation = useWorkspaceNavigation({
+      projectId,
+      fileTree,
+      fileSearchQ,
+      fileHideReady,
+      hideEmpty,
+      expandedDirs,
+      leftMode,
+      focusId,
+      focusFileFilter,
+      phrasePage,
+      phraseSearchQ,
+      tab,
+      followFiles,
+      followRow,
+      followRowId,
+      rows,
+      isExpanded: expanded,
+      toggleExpand,
+      entryById: (id) => entryById.value.get(id) || null,
+      log: (message) => (logText.value += message),
+      showToast,
+    });
+    const {
+      searchQ,
+      matches,
+      searchLoading,
+      revealFile,
+      openFile,
+      backToFiles,
+      focusPhrase,
+      toggleFollow,
+      toggleFollowRow,
+      onEditorEntry,
+      onEditorFile,
+      onRevealFile,
+      focusFile,
+      editorRowNext,
+      editorLoadRowPage,
+      onNavigate,
+      doSearch,
+      openSearchResult,
+    } = navigation;
     const contextMenu = useContextMenu({
       getItems: (element) =>
         buildContextMenuItems(
@@ -421,225 +466,6 @@ const App = defineComponent({
       showToast,
     });
     const { ctxMenu, runCtx } = contextMenu;
-    async function openFile(f: string): Promise<void> {
-      focusFileFilter.value = f;
-      leftMode.value = "phrases";
-      phrasePage.value = 0;
-      phraseSearchQ.value = "";
-      const page = await loadFileRows(f, 0, "");
-      let first: Entry | null = null;
-      try {
-        first = await api.rowsNext(projectId.value, {
-          file: f,
-          afterRow: -1,
-          afterCol: -1,
-        });
-        if (first) mergeEntries([first]);
-      } catch (e) {
-        logText.value += "\n" + errorMessage(e);
-      }
-      const fallback =
-        page && page.groups.length ? page.groups[0].cells[0] : null;
-      const target = first || fallback;
-      if (target) setFocusId(target.id);
-    }
-
-    function backToFiles(): void {
-      leftMode.value = "files";
-      focusFileFilter.value = "";
-      phraseSearchQ.value = "";
-      followRowId.value = "";
-    }
-
-    async function focusPhrase(id: string): Promise<void> {
-      try {
-        const e = await ensureEntry(id);
-        if (!e) return;
-        setFocusId(id);
-        const f = e.file || (entryById.value.get(id) || {}).file || "";
-        if (f && leftMode.value === "files") {
-          await revealInFiles(f, false, id);
-        } else if (
-          f &&
-          leftMode.value === "phrases" &&
-          (!fileRows.value.groups ||
-            !fileRows.value.groups.some((g) =>
-              (g.cells || []).some((c) => c.id === id),
-            ))
-        ) {
-          const pos = await api.rowsPosition(projectId.value, {
-            file: f,
-            rowIndex: e.rowIndex,
-            q: phraseSearchQ.value,
-          });
-          phrasePage.value = Math.floor(Number(pos || 0) / rowGroupPageSize);
-          await loadFileRows(f, phrasePage.value, phraseSearchQ.value);
-        }
-      } catch (err) {
-        logText.value +=
-          "\n" + (errorMessage(err) || "Не удалось открыть фразу");
-      }
-    }
-
-    const tab = ref("translate");
-    const followFiles = ref(
-      (() => {
-        try {
-          return localStorage.getItem("hs-follow") !== "off";
-        } catch (e) {
-          return true;
-        }
-      })(),
-    );
-    const followRow = ref(
-      (() => {
-        try {
-          return localStorage.getItem("hs-follow-row") === "on";
-        } catch (e) {
-          return false;
-        }
-      })(),
-    );
-    const followRowId = ref("");
-    const revealFile = ref("");
-    let lastReveal = "";
-    let revealTimer: Timer | null = null;
-    function toggleFollow() {
-      followFiles.value = !followFiles.value;
-      try {
-        localStorage.setItem("hs-follow", followFiles.value ? "on" : "off");
-      } catch (e) {}
-    }
-    function toggleFollowRow() {
-      followRow.value = !followRow.value;
-      try {
-        localStorage.setItem("hs-follow-row", followRow.value ? "on" : "off");
-      } catch (e) {}
-      if (!followRow.value) {
-        rowFollowRequest++;
-        followRowId.value = "";
-      } else if (leftMode.value === "phrases" && focusId.value) {
-        onEditorEntry(focusId.value, true);
-      }
-    }
-    function setFocusId(id: string): void {
-      focusId.value = id;
-      if (followRow.value && leftMode.value === "phrases")
-        followRowId.value = id;
-    }
-    let rowFollowRequest = 0;
-    async function onEditorEntry(id: string, force = false): Promise<void> {
-      const request = ++rowFollowRequest;
-      if (!id) return;
-      const previousId = focusId.value;
-      const previous = previousId ? localEntry(previousId) : null;
-      setFocusId(id);
-      if (
-        !followRow.value ||
-        leftMode.value !== "phrases" ||
-        (!force && id === previousId)
-      )
-        return;
-      const entry = await ensureEntry(id);
-      if (
-        !entry ||
-        request !== rowFollowRequest ||
-        !followRow.value ||
-        focusId.value !== id
-      )
-        return;
-      const sameRow =
-        previous &&
-        previous.file === entry.file &&
-        Number(previous.rowIndex) === Number(entry.rowIndex);
-      if (sameRow && !force) return;
-      if (
-        leftMode.value === "phrases" &&
-        focusFileFilter.value !== entry.file
-      ) {
-        focusFileFilter.value = entry.file || "";
-        phrasePage.value = 0;
-        phraseSearchQ.value = "";
-      }
-      await focusPhrase(id);
-      if (
-        request !== rowFollowRequest ||
-        !followRow.value ||
-        focusId.value !== id
-      )
-        return;
-      await nextTick();
-      try {
-        const el =
-          document.querySelector(".dock.left .ft-rowcard.active") ||
-          document.querySelector(".dock.left .ft-cell.active");
-        if (el && el.scrollIntoView) el.scrollIntoView({ block: "center" });
-      } catch (e) {}
-    }
-    async function revealInFiles(
-      file: string,
-      force: boolean,
-      phraseId = "",
-    ): Promise<void> {
-      if (!file || !projectId.value) return;
-      if (leftMode.value !== "files") {
-        if (!force) return;
-        leftMode.value = "files";
-        followRowId.value = "";
-      }
-      const known = (fileTree.value || []).find((f) => f.path === file);
-      if (!known) return;
-      if (fileSearchQ.value) fileSearchQ.value = "";
-      if (hideEmpty.value && (known.total || 0) === 0) hideEmpty.value = false;
-      if (fileHideReady.value && (known.total || 0) <= (known.translated || 0))
-        fileHideReady.value = false;
-      const parts = file.split("/");
-      for (let i = 1; i < parts.length; i++) {
-        expandedDirs.value[parts.slice(0, i).join("/")] = true;
-      }
-      if (!expanded(file)) toggleExpand(file);
-      lastReveal = file;
-      revealFile.value = file;
-      if (revealTimer) clearTimeout(revealTimer);
-      revealTimer = setTimeout(() => {
-        if (revealFile.value === file) revealFile.value = "";
-      }, 4000);
-      await nextTick();
-      try {
-        const q = phraseId
-          ? '.filetree .tree-phrases [data-id="' + CSS.escape(phraseId) + '"]'
-          : '.filetree [data-fp="' + CSS.escape(file) + '"]';
-        const el = document.querySelector(q);
-        if (el && el.scrollIntoView) {
-          el.scrollIntoView({ block: "center" });
-          if (phraseId) {
-            el.classList.add("flash");
-            setTimeout(() => {
-              try {
-                el.classList.remove("flash");
-              } catch (e2) {}
-            }, 2400);
-          }
-        } else if (phraseId) {
-          const fel = document.querySelector(
-            '.filetree [data-fp="' + CSS.escape(file) + '"]',
-          );
-          if (fel && fel.scrollIntoView)
-            fel.scrollIntoView({ block: "center" });
-        }
-      } catch (e) {}
-    }
-    function onEditorFile(file: string): void {
-      if (!followFiles.value || !file || file === lastReveal) return;
-      revealInFiles(file, false);
-    }
-    async function onRevealFile(file: string): Promise<void> {
-      if (!file) {
-        showToast("Нет активного файла");
-        return;
-      }
-      await revealInFiles(file, true);
-    }
     const tagFilter = ref("");
     const csvRequest = ref<{ file: string; n: number } | null>(null);
     const previewPinRequest = ref<{ file: string; n: number } | null>(null);
@@ -672,148 +498,10 @@ const App = defineComponent({
       paletteInput,
       paletteResults,
       openPalette,
+      closePalette,
       runPalette,
       onPaletteKey,
     } = palette;
-
-    async function focusFile(f: string): Promise<void> {
-      focusFileFilter.value = f || "";
-      tab.value = "translate";
-      if (f) {
-        leftMode.value = "phrases";
-        phrasePage.value = 0;
-        phraseSearchQ.value = "";
-        const page = await loadFileRows(f, 0, "");
-        let first: Entry | null = null;
-        try {
-          first = await api.rowsNext(projectId.value, {
-            file: f,
-            afterRow: -1,
-            afterCol: -1,
-          });
-          if (first) mergeEntries([first]);
-        } catch (e) {
-          logText.value += "\n" + errorMessage(e);
-        }
-        const fallback =
-          page && page.groups.length ? page.groups[0].cells[0] : null;
-        const target = first || fallback;
-        if (target) setFocusId(target.id);
-      }
-    }
-
-    async function editorRowNext(
-      file: string,
-      afterRow: number,
-      afterCol: number,
-      q: string,
-    ): Promise<Entry | null> {
-      const entry = await api.rowsNext(projectId.value, {
-        file,
-        afterRow,
-        afterCol,
-        q,
-      });
-      if (!entry || !entry.id) return entry;
-      mergeEntries([entry]);
-      const inPage =
-        fileRows.value.file === file &&
-        (fileRows.value.groups || []).some((g) =>
-          (g.cells || []).some((c) => c.id === entry.id),
-        );
-      if (!inPage) {
-        const pos = await api.rowsPosition(projectId.value, {
-          file,
-          rowIndex: entry.rowIndex,
-          q,
-        });
-        const page = Math.floor(Number(pos || 0) / rowGroupPageSize);
-        phrasePage.value = page;
-        await loadFileRows(file, page, q || "");
-      }
-      return entry;
-    }
-
-    async function editorLoadRowPage(file: string, page: number, q: string) {
-      return loadFileRows(file, page, q);
-    }
-
-    function onNavigate(f: string): void {
-      focusFile(f);
-    }
-
-    // search
-    const searchQ = ref("");
-    const matches = ref<SearchMatch[]>([]);
-    const searchLoading = ref(false);
-
-    async function doSearch() {
-      if (!searchQ.value.trim()) return;
-      searchLoading.value = true;
-      try {
-        const d = await api.entries(
-          projectId.value,
-          { q: searchQ.value.trim() },
-          { limit: 50 },
-        );
-        matches.value = (d.entries || []).map((e: Entry) => ({
-          id: e.id,
-          file: e.file || "",
-          rowKey: e.rowKey || "",
-          source: e.source || "",
-          translation: e.translation || "",
-        }));
-      } catch (e) {
-        logText.value += "\n" + errorMessage(e);
-      }
-      searchLoading.value = false;
-    }
-
-    async function openSearchResult(m: SearchMatch): Promise<void> {
-      if (!m || !m.id) {
-        logText.value += "\nФраза не найдена";
-        return;
-      }
-      try {
-        const loaded = await ensureEntry(m.id);
-        const found = loaded || entryById.value.get(m.id) || null;
-        const f = (found && found.file) || m.file || "";
-        let targetPage = 0;
-        if (f && found) {
-          const pos = await api.rowsPosition(projectId.value, {
-            file: f,
-            rowIndex: found.rowIndex,
-          });
-          targetPage = Math.floor(Number(pos || 0) / rowGroupPageSize);
-          await loadFileRows(f, targetPage, "");
-        }
-        tab.value = "translate";
-        focusFileFilter.value = f;
-        leftMode.value = "phrases";
-        phrasePage.value = targetPage;
-        phraseSearchQ.value = "";
-        setFocusId(m.id);
-        await nextTick();
-        try {
-          const el = document.querySelector(
-            '.dock.left [data-id="' + CSS.escape(m.id) + '"]',
-          );
-          if (el && el.scrollIntoView) {
-            el.scrollIntoView({ block: "center" });
-            el.classList.add("flash");
-            setTimeout(() => {
-              try {
-                el.classList.remove("flash");
-              } catch (e2) {}
-            }, 2400);
-          }
-        } catch {}
-        logText.value += "\nПереход по поиску: " + (f ? f + ", " : "") + m.id;
-      } catch (e) {
-        logText.value +=
-          "\n" + (errorMessage(e) || "Не удалось открыть результат поиска");
-      }
-    }
 
     async function openConflict(c: DeltaConflict): Promise<void> {
       if (!c || !c.cellId) return;
@@ -1020,21 +708,19 @@ const App = defineComponent({
       }
     }
 
-    const toast = ref("");
-
-    function showToast(m: string): void {
-      toast.value = m;
-      setTimeout(() => (toast.value = ""), 3000);
-    }
-
+    let updateStatusTimer: ReturnType<typeof setInterval> | null = null;
     onMounted(() => {
       document.addEventListener("click", closeMenusOnDocClick, true);
       loadSourceStatus();
       loadUpdateStatus();
-      setInterval(loadUpdateStatus, 3600000);
+      updateStatusTimer = setInterval(loadUpdateStatus, 3600000);
       if (projectId.value && !showPicker.value) {
         loadProject().then(scanSource);
       }
+    });
+    onUnmounted(() => {
+      document.removeEventListener("click", closeMenusOnDocClick, true);
+      if (updateStatusTimer) clearInterval(updateStatusTimer);
     });
 
     return {
@@ -1104,6 +790,7 @@ const App = defineComponent({
       paletteInput,
       paletteResults,
       openPalette,
+      closePalette,
       runPalette,
       onPaletteKey,
       job,
@@ -1182,9 +869,6 @@ const App = defineComponent({
       onRevealFile,
       ctxMenu,
       runCtx,
-      jobLog,
-      jobMainOutput,
-      onJobScroll,
       run,
       buildPack,
       buildAndDownloadPack,
@@ -1256,203 +940,25 @@ export default App;
       loadGeminiStatus();
     "
   />
-  <div class="topbar ide" v-else>
-    <div class="tb-group tb-left">
-      <div class="top-menu-wrap">
-        <button
-          class="ghost icon-btn"
-          @click="menuFor = menuFor === 'burger' ? null : 'burger'"
-          title="Меню"
-        >
-          <svg class="icon" viewBox="0 0 24 24">
-            <path d="M4 6h16M4 12h16M4 18h16" />
-          </svg>
-        </button>
-        <div v-if="menuFor === 'burger'" class="dz-menu top-menu left">
-          <div class="dz-menu-h">Проект</div>
-          <div
-            class="dz-menu-i"
-            @click="
-              showPicker = true;
-              menuFor = null;
-            "
-          >
-            Сменить проект…
-          </div>
-          <div
-            class="dz-menu-i"
-            @click="
-              gotoView('summary');
-              menuFor = null;
-            "
-          >
-            Сводка перевода
-          </div>
-          <div
-            class="dz-menu-i"
-            @click="
-              runExtract();
-              menuFor = null;
-            "
-          >
-            Обновить данные игры
-          </div>
-          <div
-            class="dz-menu-i"
-            @click="
-              openSettings();
-              menuFor = null;
-            "
-          >
-            Настройки…
-          </div>
-          <div
-            class="dz-menu-i dim"
-            @click="
-              runExtract(true);
-              menuFor = null;
-            "
-          >
-            Обновить всё принудительно
-          </div>
-          <div class="dz-menu-i dim" @click="resetLayout()">
-            Сбросить раскладку
-          </div>
-        </div>
-      </div>
-      <div class="brand">
-        <img class="logo" src="/img/yuki-icon.png" alt="Yuki" />
-        <span>Harmonia Suite</span>
-      </div>
-      <button class="proj-pill" @click="showPicker = true" :title="projectId">
-        <span class="proj-name">{{ projectName || projectId || "—" }}</span
-        ><svg class="icon" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6" /></svg>
-      </button>
-    </div>
-    <div class="toolbar tb-group tb-right">
-      <div class="top-menu-wrap">
-        <button
-          class="ghost icon-btn"
-          @click="menuFor = menuFor === 'view' ? null : 'view'"
-          title="Вид: панели и раскладка"
-        >
-          <svg class="icon" viewBox="0 0 24 24">
-            <rect x="3" y="4" width="18" height="16" rx="2" />
-            <path d="M9 4v16M15 4v16" />
-          </svg>
-        </button>
-        <div v-if="menuFor === 'view'" class="dz-menu top-menu">
-          <div class="dz-menu-h">Панели</div>
-          <div
-            class="dz-menu-i"
-            :class="{ off: !railVisible.left }"
-            @click="toggleLeft()"
-          >
-            Левая
-          </div>
-          <div
-            class="dz-menu-i"
-            :class="{ off: !railVisible.right }"
-            @click="toggleRight()"
-          >
-            Правая
-          </div>
-          <div
-            class="dz-menu-i"
-            :class="{ off: !railVisible.bottom }"
-            @click="toggleBottom()"
-          >
-            Нижняя
-          </div>
-          <div class="dz-menu-i dim" @click="resetLayout()">
-            Сбросить раскладку
-          </div>
-        </div>
-      </div>
-      <button
-        class="ghost icon-btn"
-        @click="openPalette"
-        title="Быстрый переход (Ctrl+K)"
-      >
-        <svg class="icon" viewBox="0 0 24 24">
-          <circle cx="11" cy="11" r="7" />
-          <path d="M21 21l-4.3-4.3" />
-        </svg>
-      </button>
-      <button
-        class="theme-btn icon-btn"
-        @click="toggleTheme"
-        :title="theme === 'dark' ? 'Светлая тема' : 'Тёмная тема'"
-      >
-        <svg class="icon" viewBox="0 0 24 24">
-          <circle cx="12" cy="12" r="4.5" />
-          <path
-            d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"
-          />
-        </svg>
-      </button>
-      <button
-        class="ghost icon-btn"
-        @click="showPicker = true"
-        title="Сменить проект"
-      >
-        <svg class="icon" viewBox="0 0 24 24">
-          <path
-            d="M3 7a2 2 0 0 1 2-2h3l2 2h9a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"
-          />
-        </svg>
-      </button>
-    </div>
-  </div>
-
-  <div v-if="job" class="jobbar" :class="job.status">
-    <div class="job-row">
-      <span class="job-spin" v-if="job.status === 'running'"></span
-      ><b>{{
-        {
-          extract: "Обновление данных",
-          gemini: "Перевод Gemini",
-          openrouter: "Перевод OpenRouter",
-          merge: "Сборка CSV",
-          "sync-sources": "Синхронизация источников",
-          update: "Обновление приложения",
-        }[job.action] || job.action
-      }}</b
-      ><span class="muted" style="margin-left: 8px">{{
-        job.status === "running"
-          ? "выполняется…"
-          : job.status === "queued"
-            ? "в очереди…"
-            : job.status === "completed"
-              ? "готово"
-              : job.status === "cancelled"
-                ? "отменено"
-                : "ошибка"
-      }}</span
-      ><button
-        v-if="job.status === 'running' || job.status === 'queued'"
-        class="ghost sm"
-        style="margin-left: auto"
-        @click="cancelJob"
-        title="Остановить"
-      >
-        Отмена</button
-      ><button
-        v-if="job.status !== 'running' && job.status !== 'queued'"
-        class="ghost icon-btn sm"
-        style="margin-left: auto"
-        @click="job = null"
-        title="Закрыть"
-      >
-        <svg class="icon" viewBox="0 0 24 24">
-          <path d="M6 6l12 12M18 6L6 18" />
-        </svg>
-      </button>
-    </div>
-    <pre ref="jobLog" class="job-log" @scroll="onJobScroll">{{
-      jobMainOutput
-    }}</pre>
-  </div>
+  <AppTopBar
+    :project-id="projectId"
+    :project-name="projectName"
+    :theme="theme"
+    :menu-for="menuFor"
+    :rail-visible="railVisible"
+    @update:menu-for="menuFor = $event"
+    @change-project="showPicker = true"
+    @goto-view="gotoView"
+    @run-extract="runExtract"
+    @open-settings="openSettings"
+    @reset-layout="resetLayout"
+    @toggle-left="toggleLeft"
+    @toggle-right="toggleRight"
+    @toggle-bottom="toggleBottom"
+    @open-palette="openPalette"
+    @toggle-theme="toggleTheme"
+  />
+  <JobBar :job="job" @cancel="cancelJob" @close="job = null" />
 
   <div class="layout" v-if="!showPicker" :style="layoutStyle">
     <div
@@ -2297,7 +1803,7 @@ export default App;
     >
   </footer>
 
-  <div v-if="paletteOpen" class="overlay" @click.self="paletteOpen = false">
+  <div v-if="paletteOpen" class="overlay" @click.self="closePalette">
     <div class="modal palette">
       <div class="search-box" style="border: none; padding: 0 0 8px">
         <svg class="icon ic-search" viewBox="0 0 24 24">
@@ -2480,5 +1986,5 @@ export default App;
       </div>
     </div>
   </div>
-  <div v-if="toast" class="toast">{{ toast }}</div>
+  <UiToast :message="toast" />
 </template>

@@ -1,4 +1,4 @@
-import { computed, nextTick, onUnmounted, ref, watch, type Ref } from "vue";
+import { computed, onUnmounted, ref, type Ref } from "vue";
 import { api } from "../api/client";
 import type { Job, Summary } from "../api/types";
 
@@ -21,10 +21,17 @@ interface JobOptions {
 export function useJobs(options: JobOptions) {
   const job = ref<Job | null>(null);
   const pendingPack = ref(false);
-  const jobLog = ref<HTMLElement | null>(null);
-  const jobStick = ref(true);
   let jobTimer: ReturnType<typeof setInterval> | null = null;
   let updWatch: ReturnType<typeof setInterval> | null = null;
+  const deferredTimers = new Set<ReturnType<typeof setTimeout>>();
+
+  function schedule(callback: () => void | Promise<void>, delay: number): void {
+    const timer = setTimeout(() => {
+      deferredTimers.delete(timer);
+      void callback();
+    }, delay);
+    deferredTimers.add(timer);
+  }
 
   function stopJobTimer(): void {
     const timer = jobTimer;
@@ -38,42 +45,12 @@ export function useJobs(options: JobOptions) {
     updWatch = null;
   }
 
-  const jobMainOutput = computed(() =>
-    ((job.value && job.value.output) || "")
-      .split("\n")
-      .filter((line) => !line.startsWith("[REASONING]"))
-      .join("\n"),
-  );
   const updateFailed = computed(
     () =>
       !!job.value &&
       job.value.action === "update" &&
       job.value.status === "failed",
   );
-
-  watch(
-    () => job.value && job.value.output,
-    () => {
-      if (!jobStick.value) return;
-      nextTick(() => {
-        const element = jobLog.value;
-        if (element) element.scrollTop = element.scrollHeight;
-      });
-    },
-  );
-  watch(
-    () => job.value && job.value.id,
-    () => {
-      jobStick.value = true;
-    },
-  );
-
-  function onJobScroll(): void {
-    const element = jobLog.value;
-    if (!element) return;
-    jobStick.value =
-      element.scrollHeight - element.scrollTop - element.clientHeight < 48;
-  }
 
   async function downloadPackZip(): Promise<void> {
     const blob = await api.downloadExportZip(options.projectId.value);
@@ -179,15 +156,15 @@ export function useJobs(options: JobOptions) {
 
     if (current.action === "update") {
       if (current.status === "failed") options.updModal.value = true;
-      setTimeout(options.loadUpdateStatus, 400);
+      schedule(options.loadUpdateStatus, 400);
     } else if (current.action === "sync-sources") {
-      setTimeout(async () => {
+      schedule(async () => {
         await options.loadSourceStatus();
         if (options.projectId.value) await options.loadProject();
         else await options.scanSource();
       }, 400);
     } else if (current.action === "merge") {
-      setTimeout(async () => {
+      schedule(async () => {
         await options.loadFileTree();
         try {
           const overview = await api.overview(options.projectId.value);
@@ -197,7 +174,7 @@ export function useJobs(options: JobOptions) {
         }
       }, 400);
     } else {
-      setTimeout(options.loadProject, 400);
+      schedule(options.loadProject, 400);
     }
   }
 
@@ -229,15 +206,14 @@ export function useJobs(options: JobOptions) {
   onUnmounted(() => {
     stopJobTimer();
     stopUpdateWatch();
+    for (const timer of deferredTimers) clearTimeout(timer);
+    deferredTimers.clear();
   });
 
   return {
     job,
     pendingPack,
-    jobLog,
-    jobMainOutput,
     updateFailed,
-    onJobScroll,
     jobActive,
     startJob,
     cancelJob,

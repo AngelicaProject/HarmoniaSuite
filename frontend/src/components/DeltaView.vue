@@ -51,6 +51,7 @@ interface DeltaData {
   author: string;
   authorBad: boolean;
   expTimer: ReturnType<typeof setTimeout> | null;
+  flashTimers: Set<ReturnType<typeof setTimeout>>;
   fileQ: string;
   fileList: ExportFile[];
   fileLoading: boolean;
@@ -82,6 +83,7 @@ export default defineComponent({
       author: "",
       authorBad: false,
       expTimer: null as ReturnType<typeof setTimeout> | null,
+      flashTimers: new Set(),
       fileQ: "",
       fileList: [],
       fileLoading: false,
@@ -181,6 +183,11 @@ export default defineComponent({
     this.author = this.loadAuthor();
     this.loadExportFiles();
   },
+  beforeUnmount() {
+    if (this.expTimer) clearTimeout(this.expTimer);
+    for (const timer of this.flashTimers) clearTimeout(timer);
+    this.flashTimers.clear();
+  },
   methods: {
     loadAuthor(): string {
       try {
@@ -196,7 +203,10 @@ export default defineComponent({
     },
     scheduleExpSearch(): void {
       if (this.expTimer) clearTimeout(this.expTimer);
-      this.expTimer = setTimeout(() => this.loadExportFiles(), 300);
+      this.expTimer = setTimeout(() => {
+        this.expTimer = null;
+        void this.loadExportFiles();
+      }, 300);
     },
     async loadExportFiles(): Promise<void> {
       if (!this.projectId) return;
@@ -356,11 +366,11 @@ export default defineComponent({
             if (el) {
               if (el.scrollIntoView) el.scrollIntoView({ block: "center" });
               el.classList.add("flash");
-              setTimeout(() => {
-                try {
-                  el.classList.remove("flash");
-                } catch (e2) {}
+              const timer = setTimeout(() => {
+                this.flashTimers.delete(timer);
+                el.classList.remove("flash");
               }, 2400);
+              this.flashTimers.add(timer);
               el.focus({ preventScroll: true });
             }
           } catch (e) {}

@@ -83,6 +83,9 @@ export default defineComponent({
     }
     this.loading = false;
   },
+  beforeUnmount() {
+    if (this.deleteTimer) clearInterval(this.deleteTimer);
+  },
   methods: {
     pick(p: string): void {
       this.pending = p;

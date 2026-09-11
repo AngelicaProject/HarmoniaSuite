@@ -110,6 +110,7 @@ export function useDockLayout(
 
   let mediaQuery: MediaQueryList | null = null;
   let mediaChange: ((event: MediaQueryListEvent) => void) | null = null;
+  let resizeCleanup: (() => void) | null = null;
   try {
     mediaQuery = window.matchMedia("(max-width:1000px)");
     narrow.value = mediaQuery.matches;
@@ -124,6 +125,7 @@ export function useDockLayout(
   }
 
   onUnmounted(() => {
+    resizeCleanup?.();
     if (!mediaQuery || !mediaChange) return;
     try {
       if (typeof mediaQuery.removeEventListener === "function")
@@ -400,6 +402,7 @@ export function useDockLayout(
   function startResize(pane: "left" | "right", event: MouseEvent): void {
     if (narrow.value) return;
     event.preventDefault();
+    resizeCleanup?.();
     const element = event.target instanceof HTMLElement ? event.target : null;
     element?.classList.add("on");
     const startX = event.clientX;
@@ -409,12 +412,17 @@ export function useDockLayout(
       if (pane === "left") sideW.value = startWidth + delta;
       else ctxW.value = startWidth - delta;
     };
-    const up = (): void => {
+    const cleanup = (): void => {
       window.removeEventListener("mousemove", move);
       window.removeEventListener("mouseup", up);
       element?.classList.remove("on");
+    };
+    const up = (): void => {
+      cleanup();
+      resizeCleanup = null;
       persistLayout();
     };
+    resizeCleanup = cleanup;
     window.addEventListener("mousemove", move);
     window.addEventListener("mouseup", up);
   }
@@ -422,16 +430,22 @@ export function useDockLayout(
   function startResizeY(event: MouseEvent): void {
     if (narrow.value) return;
     event.preventDefault();
+    resizeCleanup?.();
     const startY = event.clientY;
     const startHeight = bottomH.value;
     const move = (moveEvent: MouseEvent): void => {
       bottomH.value = startHeight + (startY - moveEvent.clientY);
     };
-    const up = (): void => {
+    const cleanup = (): void => {
       window.removeEventListener("mousemove", move);
       window.removeEventListener("mouseup", up);
+    };
+    const up = (): void => {
+      cleanup();
+      resizeCleanup = null;
       persistLayout();
     };
+    resizeCleanup = cleanup;
     window.addEventListener("mousemove", move);
     window.addEventListener("mouseup", up);
   }
