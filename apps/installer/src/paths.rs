@@ -1,9 +1,10 @@
+use serde::{Deserialize, Serialize};
 use std::env;
 use std::path::{Path, PathBuf};
 
 use thiserror::Error;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum Platform {
     Windows,
     Linux,
@@ -26,7 +27,7 @@ impl Platform {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum TargetArchitecture {
     X64,
     Other(String),
@@ -177,6 +178,10 @@ impl InstallationPaths {
         self.app_root.join("toolchain")
     }
 
+    pub fn toolchain_trash_dir(&self) -> PathBuf {
+        self.toolchain_dir().join(".trash")
+    }
+
     pub fn source_dir(&self) -> PathBuf {
         self.app_root.join("source")
     }
@@ -197,12 +202,24 @@ impl InstallationPaths {
         self.state_root.join("transaction.json")
     }
 
+    pub fn toolchain_state_path(&self) -> PathBuf {
+        self.state_root.join("toolchains.json")
+    }
+
     pub fn lock_path(&self) -> PathBuf {
         self.state_root.join("install.lock")
     }
 
     pub fn downloads_dir(&self) -> PathBuf {
         self.cache_root.join("downloads")
+    }
+
+    pub fn maven_cache_dir(&self) -> PathBuf {
+        self.cache_root.join("maven")
+    }
+
+    pub fn npm_cache_dir(&self) -> PathBuf {
+        self.cache_root.join("npm")
     }
 
     pub fn managed_paths(&self) -> [PathBuf; 7] {

@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Component, Path, PathBuf};
@@ -89,6 +89,10 @@ pub struct InstallationState {
     pub platform: String,
     pub arch: String,
     pub components: BTreeMap<String, String>,
+    #[serde(default)]
+    pub current_toolchains: BTreeMap<String, String>,
+    #[serde(default)]
+    pub previous_toolchains: BTreeMap<String, String>,
 }
 
 impl InstallationState {
@@ -102,6 +106,8 @@ impl InstallationState {
             platform: paths.platform.as_str().to_owned(),
             arch: paths.architecture.as_str().to_owned(),
             components: BTreeMap::new(),
+            current_toolchains: BTreeMap::new(),
+            previous_toolchains: BTreeMap::new(),
         }
     }
 }
@@ -120,6 +126,8 @@ pub struct TransactionRecord {
     pub owned_paths: Vec<PathBuf>,
     pub activation_started: bool,
     pub failure: Option<String>,
+    #[serde(default)]
+    pub toolchain_refs: BTreeMap<String, String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -201,6 +209,20 @@ impl StateStore {
         }
         let transaction: TransactionRecord = serde_json::from_value(document)?;
         Ok(Some(transaction))
+    }
+
+    pub fn protected_toolchain_ids(&self) -> Result<BTreeSet<String>, StateError> {
+        let installation = self.load_installation()?;
+        let mut protected = installation
+            .current_toolchains
+            .values()
+            .chain(installation.previous_toolchains.values())
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        if let Some(transaction) = self.load_transaction()? {
+            protected.extend(transaction.toolchain_refs.values().cloned());
+        }
+        Ok(protected)
     }
 
     pub fn recovery_action(&self) -> Result<RecoveryAction, StateError> {
@@ -331,6 +353,7 @@ impl Transaction {
                 .collect::<Result<Vec<_>, _>>()?,
             activation_started: false,
             failure: None,
+            toolchain_refs: BTreeMap::new(),
         };
         store.write_transaction(&record)?;
         Ok(Self { store, record })
@@ -338,6 +361,17 @@ impl Transaction {
 
     pub fn record(&self) -> &TransactionRecord {
         &self.record
+    }
+
+    pub fn pin_toolchain(
+        &mut self,
+        kind: impl Into<String>,
+        toolchain_id: impl Into<String>,
+    ) -> Result<(), StateError> {
+        self.record
+            .toolchain_refs
+            .insert(kind.into(), toolchain_id.into());
+        self.store.write_transaction(&self.record)
     }
 
     pub fn transition(&mut self, next: TransactionPhase) -> Result<(), StateError> {
@@ -497,7 +531,7 @@ fn is_reparse_point(path: &Path) -> io::Result<bool> {
     Ok(attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0)
 }
 
-fn atomic_write_json<T: Serialize>(path: &Path, value: &T) -> Result<(), StateError> {
+pub(crate) fn atomic_write_json<T: Serialize>(path: &Path, value: &T) -> Result<(), StateError> {
     let encoded = serde_json::to_vec_pretty(value)?;
     let parent = path
         .parent()

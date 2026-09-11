@@ -64,6 +64,20 @@ impl CommandSpec {
         self
     }
 
+    pub fn envs<I, K, V>(mut self, values: I) -> Self
+    where
+        I: IntoIterator<Item = (K, V)>,
+        K: Into<String>,
+        V: Into<String>,
+    {
+        self.environment.extend(
+            values
+                .into_iter()
+                .map(|(name, value)| (name.into(), value.into())),
+        );
+        self
+    }
+
     pub fn inherit_env(mut self, name: impl Into<String>) -> Self {
         self.environment_allowlist.push(name.into());
         self
