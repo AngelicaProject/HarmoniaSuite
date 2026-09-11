@@ -80,7 +80,10 @@ impl ProcessOutput {
 #[derive(Debug, Error)]
 pub enum ProcessError {
     #[error("failed to start process {program}: {source}")]
-    Spawn { program: String, source: std::io::Error },
+    Spawn {
+        program: String,
+        source: std::io::Error,
+    },
     #[error("process I/O failed: {0}")]
     Io(#[from] std::io::Error),
     #[error("process output reader failed")]
@@ -114,7 +117,11 @@ impl ProcessRunner for SystemProcessRunner {
         }
 
         let mut process = Command::new(&command.program);
-        process.args(&command.args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        process
+            .args(&command.args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
         if let Some(current_dir) = &command.current_dir {
             process.current_dir(current_dir);
         }
@@ -176,16 +183,29 @@ pub fn redacted_command(command: &CommandSpec) -> String {
     let mut redact_next = false;
     for argument in &command.args {
         let lower = argument.to_ascii_lowercase();
-        let key_value_secret = ["token=", "password=", "secret=", "authorization=", "api_key=", "apikey="]
-            .iter()
-            .any(|needle| lower.contains(needle));
+        let key_value_secret = [
+            "token=",
+            "password=",
+            "secret=",
+            "authorization=",
+            "api_key=",
+            "apikey=",
+        ]
+        .iter()
+        .any(|needle| lower.contains(needle));
         if redact_next || key_value_secret {
             values.push("<redacted>".to_owned());
             redact_next = false;
         } else {
             values.push(argument.clone());
-            redact_next = ["--token", "--password", "--secret", "--authorization", "--api-key"]
-                .contains(&lower.as_str());
+            redact_next = [
+                "--token",
+                "--password",
+                "--secret",
+                "--authorization",
+                "--api-key",
+            ]
+            .contains(&lower.as_str());
         }
     }
     values.join(" ")
@@ -202,7 +222,8 @@ mod tests {
 
     #[test]
     fn redacts_secret_arguments() {
-        let command = CommandSpec::new("tool").args(["--channel", "main", "--token", "secret-value", "url"]);
+        let command =
+            CommandSpec::new("tool").args(["--channel", "main", "--token", "secret-value", "url"]);
         let rendered = redacted_command(&command);
         assert_eq!(rendered, "tool --channel main --token <redacted> url");
         assert!(!rendered.contains("secret-value"));
@@ -222,9 +243,13 @@ mod tests {
     #[test]
     fn reports_timeout_and_terminates_child() {
         let command = if cfg!(windows) {
-            CommandSpec::new("cmd").args(["/C", "ping", "127.0.0.1", "-n", "4"]).timeout(Some(Duration::from_millis(50)))
+            CommandSpec::new("cmd")
+                .args(["/C", "ping", "127.0.0.1", "-n", "4"])
+                .timeout(Some(Duration::from_millis(50)))
         } else {
-            CommandSpec::new("sh").args(["-c", "sleep 2"]).timeout(Some(Duration::from_millis(50)))
+            CommandSpec::new("sh")
+                .args(["-c", "sleep 2"])
+                .timeout(Some(Duration::from_millis(50)))
         };
         let result = SystemProcessRunner::default().run(&command).unwrap();
         assert!(result.timed_out);

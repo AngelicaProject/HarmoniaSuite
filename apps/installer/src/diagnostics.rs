@@ -39,7 +39,10 @@ impl DiagnosticLogger {
             create_dir_all(parent)?;
         }
         let file = OpenOptions::new().create(true).append(true).open(&path)?;
-        Ok(Self { path, file: Arc::new(Mutex::new(file)) })
+        Ok(Self {
+            path,
+            file: Arc::new(Mutex::new(file)),
+        })
     }
 
     pub fn path(&self) -> &Path {
@@ -60,7 +63,10 @@ impl DiagnosticLogger {
         };
         let encoded = serde_json::to_vec(&record)?;
         let mut file = self.file.lock().map_err(|_| {
-            DiagnosticError::Io(io::Error::new(io::ErrorKind::Other, "diagnostic log mutex poisoned"))
+            DiagnosticError::Io(io::Error::new(
+                io::ErrorKind::Other,
+                "diagnostic log mutex poisoned",
+            ))
         })?;
         file.write_all(&encoded)?;
         file.write_all(b"\n")?;
@@ -73,13 +79,20 @@ impl DiagnosticLogger {
         self.log("info", event, std::iter::empty())
     }
 
-    pub fn warn(&self, event: &str, fields: impl IntoIterator<Item = (String, Value)>) -> Result<(), DiagnosticError> {
+    pub fn warn(
+        &self,
+        event: &str,
+        fields: impl IntoIterator<Item = (String, Value)>,
+    ) -> Result<(), DiagnosticError> {
         self.log("warn", event, fields)
     }
 }
 
 fn now_ms() -> u128 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis()
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
 }
 
 #[cfg(test)]
@@ -92,9 +105,14 @@ mod tests {
     #[test]
     fn writes_structured_json_lines_and_flushes() {
         let directory = tempdir().unwrap();
-        let logger = DiagnosticLogger::open(directory.path().join("diagnostics/install.jsonl")).unwrap();
+        let logger =
+            DiagnosticLogger::open(directory.path().join("diagnostics/install.jsonl")).unwrap();
         logger
-            .log("info", "transaction.transition", [("phase".to_owned(), json!("Staging"))])
+            .log(
+                "info",
+                "transaction.transition",
+                [("phase".to_owned(), json!("Staging"))],
+            )
             .unwrap();
         let line = fs::read_to_string(logger.path()).unwrap();
         let value: Value = serde_json::from_str(line.lines().next().unwrap()).unwrap();

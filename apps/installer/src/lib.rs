@@ -8,7 +8,7 @@ pub mod state;
 
 pub use diagnostics::DiagnosticLogger;
 pub use download::{
-    DownloadClient, DownloadRequest, DownloadReceipt, DownloadResponse, DownloadTransport,
+    DownloadClient, DownloadReceipt, DownloadRequest, DownloadResponse, DownloadTransport,
     HttpDownloader, ResumableDownloader,
 };
 pub use lock::{InstallationLock, LockError};

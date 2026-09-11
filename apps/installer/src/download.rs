@@ -97,12 +97,18 @@ pub struct ResumableDownloader<T> {
 
 impl<T> ResumableDownloader<T> {
     pub fn new(transport: T) -> Self {
-        Self { transport, retry_delay: Duration::from_millis(250) }
+        Self {
+            transport,
+            retry_delay: Duration::from_millis(250),
+        }
     }
 
     #[cfg(test)]
     fn with_retry_delay(transport: T, retry_delay: Duration) -> Self {
-        Self { transport, retry_delay }
+        Self {
+            transport,
+            retry_delay,
+        }
     }
 }
 
@@ -110,7 +116,9 @@ impl<T: DownloadTransport> DownloadClient for ResumableDownloader<T> {
     fn download(&self, request: &DownloadRequest) -> Result<DownloadReceipt, DownloadError> {
         validate_request(request)?;
         if let Some(expected) = &request.expected_sha256 {
-            if request.destination.is_file() && verify_sha256(&request.destination, expected).is_ok() {
+            if request.destination.is_file()
+                && verify_sha256(&request.destination, expected).is_ok()
+            {
                 return Ok(receipt_for(&request.destination, false)?);
             }
             if request.destination.is_file() {
@@ -201,13 +209,17 @@ pub struct HttpDownloader {
 
 impl Default for HttpDownloader {
     fn default() -> Self {
-        Self { user_agent: "harmonia-suite-installer/0.1".to_owned() }
+        Self {
+            user_agent: "harmonia-suite-installer/0.1".to_owned(),
+        }
     }
 }
 
 impl HttpDownloader {
     pub fn new(user_agent: impl Into<String>) -> Self {
-        Self { user_agent: user_agent.into() }
+        Self {
+            user_agent: user_agent.into(),
+        }
     }
 }
 
@@ -232,11 +244,16 @@ impl DownloadTransport for HttpDownloader {
         if let Some(start) = range_from {
             request = request.header(reqwest::header::RANGE, format!("bytes={start}-"));
         }
-        let response = request.send().map_err(|error| DownloadError::Transport(error.to_string()))?;
+        let response = request
+            .send()
+            .map_err(|error| DownloadError::Transport(error.to_string()))?;
         if response.url().scheme() != "https" {
             return Err(DownloadError::InvalidUrl);
         }
-        Ok(DownloadResponse { status: response.status().as_u16(), body: Box::new(response) })
+        Ok(DownloadResponse {
+            status: response.status().as_u16(),
+            body: Box::new(response),
+        })
     }
 }
 
@@ -251,12 +268,16 @@ fn validate_request(request: &DownloadRequest) -> Result<(), DownloadError> {
         return Err(DownloadError::InvalidRequest("URL is empty".to_owned()));
     }
     if request.destination.file_name().is_none() {
-        return Err(DownloadError::InvalidRequest("destination must name a file".to_owned()));
+        return Err(DownloadError::InvalidRequest(
+            "destination must name a file".to_owned(),
+        ));
     }
     if let Some(expected) = &request.expected_sha256 {
         let value = expected.trim();
         if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-            return Err(DownloadError::InvalidRequest("invalid expected SHA-256".to_owned()));
+            return Err(DownloadError::InvalidRequest(
+                "invalid expected SHA-256".to_owned(),
+            ));
         }
     }
     Ok(())
@@ -282,7 +303,12 @@ fn promote(partial: &Path, destination: &Path) -> Result<(), DownloadError> {
 }
 
 fn receipt_for(path: &Path, resumed: bool) -> Result<DownloadReceipt, DownloadError> {
-    Ok(DownloadReceipt { path: path.to_path_buf(), bytes: fs::metadata(path)?.len(), sha256: sha256_file(path)?, resumed })
+    Ok(DownloadReceipt {
+        path: path.to_path_buf(),
+        bytes: fs::metadata(path)?.len(),
+        sha256: sha256_file(path)?,
+        resumed,
+    })
 }
 
 #[cfg(test)]
@@ -300,18 +326,32 @@ mod tests {
 
     impl FakeTransport {
         fn new(responses: Vec<DownloadResponse>) -> Self {
-            Self { responses: Mutex::new(responses.into()) }
+            Self {
+                responses: Mutex::new(responses.into()),
+            }
         }
     }
 
     impl DownloadTransport for FakeTransport {
-        fn get(&self, _url: &str, _range_from: Option<u64>, _timeout: Duration) -> Result<DownloadResponse, DownloadError> {
-            self.responses.lock().unwrap().pop_front().ok_or_else(|| DownloadError::Transport("no fake response".to_owned()))
+        fn get(
+            &self,
+            _url: &str,
+            _range_from: Option<u64>,
+            _timeout: Duration,
+        ) -> Result<DownloadResponse, DownloadError> {
+            self.responses
+                .lock()
+                .unwrap()
+                .pop_front()
+                .ok_or_else(|| DownloadError::Transport("no fake response".to_owned()))
         }
     }
 
     fn response(status: u16, body: &[u8]) -> DownloadResponse {
-        DownloadResponse { status, body: Box::new(Cursor::new(body.to_vec())) }
+        DownloadResponse {
+            status,
+            body: Box::new(Cursor::new(body.to_vec())),
+        }
     }
 
     #[test]
@@ -320,7 +360,10 @@ mod tests {
         let destination = directory.path().join("tool.zip");
         let request = DownloadRequest::new("https://example.test/tool.zip", &destination)
             .expected_sha256("2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824");
-        let downloader = ResumableDownloader::with_retry_delay(FakeTransport::new(vec![response(200, b"hello")]), Duration::ZERO);
+        let downloader = ResumableDownloader::with_retry_delay(
+            FakeTransport::new(vec![response(200, b"hello")]),
+            Duration::ZERO,
+        );
         let receipt = downloader.download(&request).unwrap();
         assert_eq!(receipt.bytes, 5);
         assert!(destination.is_file());
@@ -336,8 +379,12 @@ mod tests {
         let expected_file = directory.path().join("expected");
         fs::write(&expected_file, b"hello world").unwrap();
         let expected = sha256_file(&expected_file).unwrap();
-        let request = DownloadRequest::new("https://example.test/tool.zip", &destination).expected_sha256(expected);
-        let downloader = ResumableDownloader::with_retry_delay(FakeTransport::new(vec![response(206, b"world")]), Duration::ZERO);
+        let request = DownloadRequest::new("https://example.test/tool.zip", &destination)
+            .expected_sha256(expected);
+        let downloader = ResumableDownloader::with_retry_delay(
+            FakeTransport::new(vec![response(206, b"world")]),
+            Duration::ZERO,
+        );
         let receipt = downloader.download(&request).unwrap();
         assert!(receipt.resumed);
         assert_eq!(fs::read(destination).unwrap(), b"hello world");
@@ -347,8 +394,14 @@ mod tests {
         fs::write(&bad_partial, b"stale").unwrap();
         let bad_request = DownloadRequest::new("https://example.test/bad.zip", &bad_destination)
             .expected_sha256("0000000000000000000000000000000000000000000000000000000000000000");
-        let bad_downloader = ResumableDownloader::with_retry_delay(FakeTransport::new(vec![response(200, b"bad")]), Duration::ZERO);
-        assert!(matches!(bad_downloader.download(&bad_request), Err(DownloadError::Checksum(_))));
+        let bad_downloader = ResumableDownloader::with_retry_delay(
+            FakeTransport::new(vec![response(200, b"bad")]),
+            Duration::ZERO,
+        );
+        assert!(matches!(
+            bad_downloader.download(&bad_request),
+            Err(DownloadError::Checksum(_))
+        ));
         assert!(!bad_partial.exists());
         assert!(!bad_destination.exists());
     }
@@ -357,7 +410,13 @@ mod tests {
     fn rejects_non_https_http_transport_urls() {
         let downloader = HttpDownloader::default();
         let directory = tempdir().unwrap();
-        let request = DownloadRequest::new("http://example.test/tool.zip", directory.path().join("tool.zip"));
-        assert!(matches!(downloader.download(&request), Err(DownloadError::InvalidUrl)));
+        let request = DownloadRequest::new(
+            "http://example.test/tool.zip",
+            directory.path().join("tool.zip"),
+        );
+        assert!(matches!(
+            downloader.download(&request),
+            Err(DownloadError::InvalidUrl)
+        ));
     }
 }

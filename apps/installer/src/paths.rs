@@ -61,7 +61,9 @@ pub struct PathEnvironment {
 impl PathEnvironment {
     pub fn from_process() -> Self {
         Self {
-            home: env::var_os("HOME").or_else(|| env::var_os("USERPROFILE")).map(PathBuf::from),
+            home: env::var_os("HOME")
+                .or_else(|| env::var_os("USERPROFILE"))
+                .map(PathBuf::from),
             local_app_data: env::var_os("LOCALAPPDATA").map(PathBuf::from),
             app_data: env::var_os("APPDATA").map(PathBuf::from),
             xdg_data_home: env::var_os("XDG_DATA_HOME").map(PathBuf::from),
@@ -93,7 +95,11 @@ pub enum PathError {
 
 impl InstallationPaths {
     pub fn current() -> Result<Self, PathError> {
-        Ok(Self::for_environment(Platform::current()?, TargetArchitecture::current(), &PathEnvironment::from_process()))
+        Ok(Self::for_environment(
+            Platform::current()?,
+            TargetArchitecture::current(),
+            &PathEnvironment::from_process(),
+        ))
     }
 
     pub fn for_environment(
@@ -104,27 +110,37 @@ impl InstallationPaths {
         let (app_root, user_data_root, state_root, cache_root) = match platform {
             Platform::Windows => {
                 let local = environment.local_app_data.clone().unwrap_or_else(|| {
-                    environment.home_or(|| PathBuf::from("C:\\Users\\Public")).join("AppData\\Local")
+                    environment
+                        .home_or(|| PathBuf::from("C:\\Users\\Public"))
+                        .join("AppData\\Local")
                 });
                 let roaming = environment.app_data.clone().unwrap_or_else(|| {
-                    environment.home_or(|| PathBuf::from("C:\\Users\\Public")).join("AppData\\Roaming")
+                    environment
+                        .home_or(|| PathBuf::from("C:\\Users\\Public"))
+                        .join("AppData\\Roaming")
                 });
                 let app = local.join("HarmoniaSuite");
-                (app.clone(), roaming.join("HarmoniaSuite"), app.join("state"), app.join("cache"))
+                (
+                    app.clone(),
+                    roaming.join("HarmoniaSuite"),
+                    app.join("state"),
+                    app.join("cache"),
+                )
             }
             Platform::Linux => {
-                let data = environment
-                    .xdg_data_home
-                    .clone()
-                    .unwrap_or_else(|| environment.home_or(|| PathBuf::from("/tmp")).join(".local/share"));
-                let state = environment
-                    .xdg_state_home
-                    .clone()
-                    .unwrap_or_else(|| environment.home_or(|| PathBuf::from("/tmp")).join(".local/state"));
-                let cache = environment
-                    .xdg_cache_home
-                    .clone()
-                    .unwrap_or_else(|| environment.home_or(|| PathBuf::from("/tmp")).join(".cache"));
+                let data = environment.xdg_data_home.clone().unwrap_or_else(|| {
+                    environment
+                        .home_or(|| PathBuf::from("/tmp"))
+                        .join(".local/share")
+                });
+                let state = environment.xdg_state_home.clone().unwrap_or_else(|| {
+                    environment
+                        .home_or(|| PathBuf::from("/tmp"))
+                        .join(".local/state")
+                });
+                let cache = environment.xdg_cache_home.clone().unwrap_or_else(|| {
+                    environment.home_or(|| PathBuf::from("/tmp")).join(".cache")
+                });
                 (
                     data.join("harmonia-suite"),
                     data.join("harmonia-suite-data"),
@@ -133,7 +149,14 @@ impl InstallationPaths {
                 )
             }
         };
-        Self { platform, architecture, app_root, user_data_root, state_root, cache_root }
+        Self {
+            platform,
+            architecture,
+            app_root,
+            user_data_root,
+            state_root,
+            cache_root,
+        }
     }
 
     pub fn bin_dir(&self) -> PathBuf {
@@ -189,7 +212,9 @@ impl InstallationPaths {
     }
 
     pub fn is_managed_path(&self, path: &Path) -> bool {
-        path.starts_with(&self.app_root) || path.starts_with(&self.state_root) || path.starts_with(&self.cache_root)
+        path.starts_with(&self.app_root)
+            || path.starts_with(&self.state_root)
+            || path.starts_with(&self.cache_root)
     }
 }
 
@@ -210,18 +235,44 @@ mod tests {
 
     #[test]
     fn windows_keeps_user_data_outside_application_root() {
-        let paths = InstallationPaths::for_environment(Platform::Windows, TargetArchitecture::X64, &environment());
-        assert_eq!(paths.app_root, PathBuf::from("C:/Users/tester/AppData/Local/HarmoniaSuite"));
-        assert_eq!(paths.user_data_root, PathBuf::from("C:/Users/tester/AppData/Roaming/HarmoniaSuite"));
+        let paths = InstallationPaths::for_environment(
+            Platform::Windows,
+            TargetArchitecture::X64,
+            &environment(),
+        );
+        assert_eq!(
+            paths.app_root,
+            PathBuf::from("C:/Users/tester/AppData/Local/HarmoniaSuite")
+        );
+        assert_eq!(
+            paths.user_data_root,
+            PathBuf::from("C:/Users/tester/AppData/Roaming/HarmoniaSuite")
+        );
         assert_eq!(paths.state_root, paths.app_root.join("state"));
     }
 
     #[test]
     fn linux_uses_consistent_lowercase_roots_and_xdg_fallbacks() {
-        let paths = InstallationPaths::for_environment(Platform::Linux, TargetArchitecture::X64, &environment());
-        assert_eq!(paths.app_root, PathBuf::from("/home/tester/.local/share/harmonia-suite"));
-        assert_eq!(paths.user_data_root, PathBuf::from("/home/tester/.local/share/harmonia-suite-data"));
-        assert_eq!(paths.state_root, PathBuf::from("/home/tester/.local/state/harmonia-suite"));
-        assert_eq!(paths.cache_root, PathBuf::from("/home/tester/.cache/harmonia-suite"));
+        let paths = InstallationPaths::for_environment(
+            Platform::Linux,
+            TargetArchitecture::X64,
+            &environment(),
+        );
+        assert_eq!(
+            paths.app_root,
+            PathBuf::from("/home/tester/.local/share/harmonia-suite")
+        );
+        assert_eq!(
+            paths.user_data_root,
+            PathBuf::from("/home/tester/.local/share/harmonia-suite-data")
+        );
+        assert_eq!(
+            paths.state_root,
+            PathBuf::from("/home/tester/.local/state/harmonia-suite")
+        );
+        assert_eq!(
+            paths.cache_root,
+            PathBuf::from("/home/tester/.cache/harmonia-suite")
+        );
     }
 }

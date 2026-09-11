@@ -24,7 +24,10 @@ pub enum StateError {
     #[error("unsupported installation state schema: {0}")]
     UnsupportedSchema(u32),
     #[error("invalid transaction transition from {from:?} to {to:?}")]
-    InvalidTransition { from: TransactionPhase, to: TransactionPhase },
+    InvalidTransition {
+        from: TransactionPhase,
+        to: TransactionPhase,
+    },
     #[error("recovery refused to remove unowned or unsafe path: {0}")]
     UnsafeRecoveryPath(PathBuf),
     #[error("transaction {0} is still running")]
@@ -117,8 +120,14 @@ pub struct TransactionRecord {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum RecoveryAction {
     None,
-    Resume { transaction_id: String, phase: TransactionPhase },
-    ReviewRequired { transaction_id: String, phase: TransactionPhase },
+    Resume {
+        transaction_id: String,
+        phase: TransactionPhase,
+    },
+    ReviewRequired {
+        transaction_id: String,
+        phase: TransactionPhase,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -129,7 +138,10 @@ pub struct StateStore {
 
 impl StateStore {
     pub fn new(paths: InstallationPaths) -> Self {
-        Self { paths, logger: None }
+        Self {
+            paths,
+            logger: None,
+        }
     }
 
     pub fn with_logger(mut self, logger: DiagnosticLogger) -> Self {
@@ -182,14 +194,19 @@ impl StateStore {
             return Ok(RecoveryAction::None);
         };
         if transaction.status != TransactionStatus::Running
-            || matches!(transaction.phase, TransactionPhase::Completed | TransactionPhase::Failed)
+            || matches!(
+                transaction.phase,
+                TransactionPhase::Completed | TransactionPhase::Failed
+            )
         {
             return Ok(RecoveryAction::None);
         }
         if transaction.activation_started
             || matches!(
                 transaction.phase,
-                TransactionPhase::Activating | TransactionPhase::HealthChecking | TransactionPhase::RollingBack
+                TransactionPhase::Activating
+                    | TransactionPhase::HealthChecking
+                    | TransactionPhase::RollingBack
             )
         {
             return Ok(RecoveryAction::ReviewRequired {
@@ -197,12 +214,23 @@ impl StateStore {
                 phase: transaction.phase,
             });
         }
-        Ok(RecoveryAction::Resume { transaction_id: transaction.id, phase: transaction.phase })
+        Ok(RecoveryAction::Resume {
+            transaction_id: transaction.id,
+            phase: transaction.phase,
+        })
     }
 
-    pub fn cleanup_owned_path(&self, transaction: &TransactionRecord, candidate: &Path) -> Result<(), StateError> {
+    pub fn cleanup_owned_path(
+        &self,
+        transaction: &TransactionRecord,
+        candidate: &Path,
+    ) -> Result<(), StateError> {
         let candidate = normalize(candidate);
-        let owned = transaction.owned_paths.iter().map(|path| normalize(path)).any(|path| path == candidate);
+        let owned = transaction
+            .owned_paths
+            .iter()
+            .map(|path| normalize(path))
+            .any(|path| path == candidate);
         if !owned
             || !self.paths.is_managed_path(&candidate)
             || candidate.starts_with(&self.paths.user_data_root)
@@ -226,10 +254,22 @@ impl StateStore {
                 "info",
                 "transaction.transition",
                 [
-                    ("transaction_id".to_owned(), serde_json::json!(transaction.id.clone())),
-                    ("operation".to_owned(), serde_json::json!(format!("{:?}", transaction.operation))),
-                    ("phase".to_owned(), serde_json::json!(format!("{:?}", transaction.phase))),
-                    ("status".to_owned(), serde_json::json!(format!("{:?}", transaction.status))),
+                    (
+                        "transaction_id".to_owned(),
+                        serde_json::json!(transaction.id.clone()),
+                    ),
+                    (
+                        "operation".to_owned(),
+                        serde_json::json!(format!("{:?}", transaction.operation)),
+                    ),
+                    (
+                        "phase".to_owned(),
+                        serde_json::json!(format!("{:?}", transaction.phase)),
+                    ),
+                    (
+                        "status".to_owned(),
+                        serde_json::json!(format!("{:?}", transaction.status)),
+                    ),
                 ],
             )?;
         }
@@ -265,7 +305,10 @@ impl Transaction {
             finished_at_ms: None,
             current_commit,
             target_commit,
-            owned_paths: owned_paths.into_iter().map(|path| normalize(&path)).collect(),
+            owned_paths: owned_paths
+                .into_iter()
+                .map(|path| normalize(&path))
+                .collect(),
             activation_started: false,
             failure: None,
         };
@@ -279,7 +322,10 @@ impl Transaction {
 
     pub fn transition(&mut self, next: TransactionPhase) -> Result<(), StateError> {
         if !allowed_transition(&self.record.phase, &next) {
-            return Err(StateError::InvalidTransition { from: self.record.phase.clone(), to: next });
+            return Err(StateError::InvalidTransition {
+                from: self.record.phase.clone(),
+                to: next,
+            });
         }
         self.record.phase = next;
         if self.record.phase == TransactionPhase::Activating {
@@ -323,10 +369,16 @@ fn allowed_transition(from: &TransactionPhase, to: &TransactionPhase) -> bool {
     use TransactionPhase::*;
     matches!(
         (from, to),
-        (Idle, ResolvingTarget | PreparingToolchain | Verifying | Staging)
-            | (ResolvingTarget, PreparingToolchain | FetchingSource | Verifying)
-            | (PreparingToolchain, FetchingSource | PreparingWorktree | BuildingFrontend | Verifying)
-            | (FetchingSource, PreparingWorktree | Verifying)
+        (
+            Idle,
+            ResolvingTarget | PreparingToolchain | Verifying | Staging
+        ) | (
+            ResolvingTarget,
+            PreparingToolchain | FetchingSource | Verifying
+        ) | (
+            PreparingToolchain,
+            FetchingSource | PreparingWorktree | BuildingFrontend | Verifying
+        ) | (FetchingSource, PreparingWorktree | Verifying)
             | (PreparingWorktree, BuildingFrontend | Verifying)
             | (BuildingFrontend, BuildingBackend | Verifying)
             | (BuildingBackend, BuildingDesktop | Verifying)
@@ -351,7 +403,9 @@ fn normalize(path: &Path) -> PathBuf {
     if path.is_absolute() {
         path.to_path_buf()
     } else {
-        std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")).join(path)
+        std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join(path)
     }
 }
 
@@ -361,11 +415,20 @@ fn is_symlink(path: &Path) -> io::Result<bool> {
 
 fn atomic_write_json<T: Serialize>(path: &Path, value: &T) -> Result<(), StateError> {
     let encoded = serde_json::to_vec_pretty(value)?;
-    let parent = path.parent().ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "state path has no parent"))?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "state path has no parent"))?;
     fs::create_dir_all(parent)?;
-    let temporary = parent.join(format!(".{}.{}.tmp", path.file_name().unwrap().to_string_lossy(), Uuid::new_v4()));
+    let temporary = parent.join(format!(
+        ".{}.{}.tmp",
+        path.file_name().unwrap().to_string_lossy(),
+        Uuid::new_v4()
+    ));
     {
-        let mut file = OpenOptions::new().create_new(true).write(true).open(&temporary)?;
+        let mut file = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&temporary)?;
         file.write_all(&encoded)?;
         file.write_all(b"\n")?;
         file.sync_all()?;
@@ -383,10 +446,26 @@ fn replace_file(temporary: &Path, destination: &Path) -> io::Result<()> {
 #[cfg(windows)]
 fn replace_file(temporary: &Path, destination: &Path) -> io::Result<()> {
     use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::Storage::FileSystem::{MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH};
-    let source: Vec<u16> = temporary.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
-    let target: Vec<u16> = destination.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
-    let result = unsafe { MoveFileExW(source.as_ptr(), target.as_ptr(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) };
+    use windows_sys::Win32::Storage::FileSystem::{
+        MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
+    };
+    let source: Vec<u16> = temporary
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let target: Vec<u16> = destination
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let result = unsafe {
+        MoveFileExW(
+            source.as_ptr(),
+            target.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    };
     if result == 0 {
         Err(io::Error::last_os_error())
     } else {
@@ -405,7 +484,10 @@ fn sync_parent(parent: &Path) {
 fn sync_parent(_parent: &Path) {}
 
 fn now_ms() -> u128 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis()
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
 }
 
 #[cfg(test)]
@@ -441,24 +523,53 @@ mod tests {
     #[test]
     fn validates_state_machine_and_persists_each_transition() {
         let store = store();
-        let mut transaction = Transaction::begin(store.clone(), OperationKind::Install, None, Some("target".to_owned()), vec![]).unwrap();
-        transaction.transition(TransactionPhase::ResolvingTarget).unwrap();
-        transaction.transition(TransactionPhase::PreparingToolchain).unwrap();
+        let mut transaction = Transaction::begin(
+            store.clone(),
+            OperationKind::Install,
+            None,
+            Some("target".to_owned()),
+            vec![],
+        )
+        .unwrap();
+        transaction
+            .transition(TransactionPhase::ResolvingTarget)
+            .unwrap();
+        transaction
+            .transition(TransactionPhase::PreparingToolchain)
+            .unwrap();
         assert!(matches!(
             transaction.transition(TransactionPhase::Completed),
             Err(StateError::InvalidTransition { .. })
         ));
-        assert!(matches!(store.load_transaction().unwrap().unwrap().phase, TransactionPhase::PreparingToolchain));
+        assert!(matches!(
+            store.load_transaction().unwrap().unwrap().phase,
+            TransactionPhase::PreparingToolchain
+        ));
     }
 
     #[test]
     fn recovery_resumes_before_activation_but_requires_review_after_marker() {
         let store = store();
-        let mut transaction = Transaction::begin(store.clone(), OperationKind::Update, Some("old".to_owned()), Some("new".to_owned()), vec![]).unwrap();
-        transaction.transition(TransactionPhase::ResolvingTarget).unwrap();
-        assert!(matches!(store.recovery_action().unwrap(), RecoveryAction::Resume { .. }));
+        let mut transaction = Transaction::begin(
+            store.clone(),
+            OperationKind::Update,
+            Some("old".to_owned()),
+            Some("new".to_owned()),
+            vec![],
+        )
+        .unwrap();
+        transaction
+            .transition(TransactionPhase::ResolvingTarget)
+            .unwrap();
+        assert!(matches!(
+            store.recovery_action().unwrap(),
+            RecoveryAction::Resume { .. }
+        ));
         transaction.mark_activation_started().unwrap();
-        assert!(matches!(store.recovery_action().unwrap(), RecoveryAction::ReviewRequired { .. }));
+        assert!(matches!(
+            store.recovery_action().unwrap(),
+            RecoveryAction::ReviewRequired { .. }
+        ));
     }
 
     #[test]
@@ -470,10 +581,21 @@ mod tests {
         let user_data = store.paths().user_data_root.join("database.db");
         fs::create_dir_all(user_data.parent().unwrap()).unwrap();
         fs::write(&user_data, b"keep").unwrap();
-        let transaction = Transaction::begin(store.clone(), OperationKind::Update, None, None, vec![owned.clone()]).unwrap();
-        store.cleanup_owned_path(transaction.record(), &owned).unwrap();
+        let transaction = Transaction::begin(
+            store.clone(),
+            OperationKind::Update,
+            None,
+            None,
+            vec![owned.clone()],
+        )
+        .unwrap();
+        store
+            .cleanup_owned_path(transaction.record(), &owned)
+            .unwrap();
         assert!(!owned.exists());
-        assert!(store.cleanup_owned_path(transaction.record(), &user_data).is_err());
+        assert!(store
+            .cleanup_owned_path(transaction.record(), &user_data)
+            .is_err());
         assert!(user_data.exists());
     }
 }

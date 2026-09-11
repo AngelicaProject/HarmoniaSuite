@@ -36,10 +36,17 @@ impl InstallationLock {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let mut file = OpenOptions::new().create(true).read(true).write(true).open(&path)?;
+        let mut file = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .open(&path)?;
         if let Err(error) = file.try_lock_exclusive() {
             if is_lock_contention(&error) {
-                return Err(LockError::Busy { path, owner: read_owner(&mut file) });
+                return Err(LockError::Busy {
+                    path,
+                    owner: read_owner(&mut file),
+                });
             }
             return Err(LockError::Io(error));
         }
@@ -85,11 +92,17 @@ fn read_owner(file: &mut File) -> String {
 
 fn is_lock_contention(error: &std::io::Error) -> bool {
     error.kind() == std::io::ErrorKind::WouldBlock
-        || matches!(error.raw_os_error(), Some(11 | 33 | 36 | 37 | 101 | 110 | 32))
+        || matches!(
+            error.raw_os_error(),
+            Some(11 | 33 | 36 | 37 | 101 | 110 | 32)
+        )
 }
 
 fn now_ms() -> u128 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis()
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
 }
 
 #[cfg(test)]

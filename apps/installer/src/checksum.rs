@@ -36,7 +36,10 @@ pub fn verify_sha256(path: impl AsRef<Path>, expected: &str) -> Result<String, C
     }
     let actual = sha256_file(path)?;
     if actual != normalized {
-        return Err(ChecksumError::Mismatch { expected: normalized, actual });
+        return Err(ChecksumError::Mismatch {
+            expected: normalized,
+            actual,
+        });
     }
     Ok(actual)
 }
@@ -64,7 +67,10 @@ mod tests {
         let actual = sha256_file(&file).unwrap();
         assert_eq!(actual.len(), 64);
         assert!(verify_sha256(&file, &actual).is_ok());
-        assert!(matches!(verify_sha256(&file, expected), Err(ChecksumError::Mismatch { .. })));
+        assert!(matches!(
+            verify_sha256(&file, expected),
+            Err(ChecksumError::Mismatch { .. })
+        ));
     }
 
     #[test]
@@ -72,6 +78,9 @@ mod tests {
         let directory = tempdir().unwrap();
         let file = directory.path().join("artifact.bin");
         fs::write(&file, b"data").unwrap();
-        assert!(matches!(verify_sha256(&file, "nope"), Err(ChecksumError::InvalidExpected)));
+        assert!(matches!(
+            verify_sha256(&file, "nope"),
+            Err(ChecksumError::InvalidExpected)
+        ));
     }
 }

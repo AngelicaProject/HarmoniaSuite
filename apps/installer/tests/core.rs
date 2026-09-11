@@ -2,8 +2,8 @@ use std::fs;
 use std::path::PathBuf;
 
 use harmonia_installer::{
-    InstallationLock, InstallationPaths, InstallationState, OperationKind, Platform, RecoveryAction,
-    StateStore, TargetArchitecture, Transaction, TransactionPhase,
+    InstallationLock, InstallationPaths, InstallationState, OperationKind, Platform,
+    RecoveryAction, StateStore, TargetArchitecture, Transaction, TransactionPhase,
 };
 use tempfile::tempdir;
 
@@ -37,10 +37,17 @@ fn install_transaction_has_recovery_record_and_does_not_create_user_data() {
         vec![owned.clone()],
     )
     .unwrap();
-    transaction.transition(TransactionPhase::ResolvingTarget).unwrap();
+    transaction
+        .transition(TransactionPhase::ResolvingTarget)
+        .unwrap();
     transaction.transition(TransactionPhase::Verifying).unwrap();
-    assert!(matches!(store.recovery_action().unwrap(), RecoveryAction::Resume { .. }));
-    store.cleanup_owned_path(transaction.record(), &owned).unwrap();
+    assert!(matches!(
+        store.recovery_action().unwrap(),
+        RecoveryAction::Resume { .. }
+    ));
+    store
+        .cleanup_owned_path(transaction.record(), &owned)
+        .unwrap();
     assert!(!owned.exists());
 }
 
@@ -54,15 +61,34 @@ fn complete_transaction_persists_installation_state_and_lock_is_exclusive() {
     let mut state: InstallationState = store.load_installation().unwrap();
     state.current_commit = Some("target-sha".to_owned());
     store.save_installation(&state).unwrap();
-    assert_eq!(store.load_installation().unwrap().current_commit.as_deref(), Some("target-sha"));
+    assert_eq!(
+        store.load_installation().unwrap().current_commit.as_deref(),
+        Some("target-sha")
+    );
 
-    let mut transaction = Transaction::begin(store, OperationKind::Install, None, Some("target-sha".to_owned()), Vec::<PathBuf>::new()).unwrap();
-    transaction.transition(TransactionPhase::ResolvingTarget).unwrap();
+    let mut transaction = Transaction::begin(
+        store,
+        OperationKind::Install,
+        None,
+        Some("target-sha".to_owned()),
+        Vec::<PathBuf>::new(),
+    )
+    .unwrap();
+    transaction
+        .transition(TransactionPhase::ResolvingTarget)
+        .unwrap();
     transaction.transition(TransactionPhase::Verifying).unwrap();
     transaction.transition(TransactionPhase::Staging).unwrap();
-    transaction.transition(TransactionPhase::Activating).unwrap();
-    transaction.transition(TransactionPhase::HealthChecking).unwrap();
+    transaction
+        .transition(TransactionPhase::Activating)
+        .unwrap();
+    transaction
+        .transition(TransactionPhase::HealthChecking)
+        .unwrap();
     transaction.complete().unwrap();
-    assert_eq!(transaction.record().status, harmonia_installer::TransactionStatus::Completed);
+    assert_eq!(
+        transaction.record().status,
+        harmonia_installer::TransactionStatus::Completed
+    );
     drop(lock);
 }
