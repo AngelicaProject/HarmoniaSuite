@@ -98,7 +98,7 @@ fn extract_tar_gz(archive_path: &Path, destination: &Path) -> Result<(), Extract
         if entry_type.is_symlink()
             || entry_type.is_hard_link()
             || entry_type.is_block_special()
-            || entry_type.is_char_special()
+            || entry_type.is_character_special()
             || entry_type.is_fifo()
         {
             return Err(ExtractionError::UnsafeEntry(raw_path));

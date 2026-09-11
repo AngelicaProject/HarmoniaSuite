@@ -771,7 +771,7 @@ mod tests {
     use crate::download::{DownloadResponse, DownloadTransport, ResumableDownloader};
     use flate2::write::GzEncoder;
     use flate2::Compression;
-    use std::io::{Cursor, Write};
+    use std::io::Cursor;
     use std::sync::{Arc, Mutex};
     use tar::{Builder, Header};
     use tempfile::tempdir;
