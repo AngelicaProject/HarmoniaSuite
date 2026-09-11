@@ -325,11 +325,10 @@ mod windows_job {
 
     use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
     use windows_sys::Win32::System::JobObjects::{
-        AssignProcessToJobObject, JobObjectExtendedLimitInformation, SetInformationJobObject,
-        TerminateJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+        SetInformationJobObject, TerminateJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
         JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
     };
-    use windows_sys::Win32::System::Threading::CreateJobObjectW;
 
     pub struct Job {
         handle: HANDLE,
