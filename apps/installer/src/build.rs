@@ -453,9 +453,11 @@ impl<D: DownloadClient, P: ProcessRunner> BuildPipeline<D, P> {
     ) -> Result<BuildResult, BuildError> {
         let frontend_path = checkout.path.join("frontend").join("dist");
         let backend_path = checkout.path.join("target").join("harmonia-suite.jar");
-        let desktop_relative = PathBuf::from("apps/desktop/artifacts")
-            .join(self.paths.platform.as_str())
-            .join(self.paths.architecture.as_str());
+        let desktop_relative = PathBuf::from("apps/desktop/artifacts").join(format!(
+            "{}-{}",
+            self.paths.platform.as_str(),
+            self.paths.architecture.as_str()
+        ));
         let desktop_path = checkout.path.join(&desktop_relative);
         let frontend = BuildArtifact {
             path: PathBuf::from("frontend/dist"),
