@@ -15,10 +15,14 @@ activation helper, health-check orchestration или OS installer registration. 
 ## Paths
 
 Windows application root — `%LOCALAPPDATA%\\HarmoniaSuite`, user data — `%APPDATA%\\HarmoniaSuite`.
-Linux application root — `$XDG_DATA_HOME/harmonia-suite` с fallback `~/.local/share/harmonia-suite`;
-user data — `$XDG_DATA_HOME/harmonia-suite-data` с fallback `~/.local/share/harmonia-suite-data`;
-state — `$XDG_STATE_HOME/harmonia-suite` с fallback `~/.local/state/harmonia-suite`; cache —
-`$XDG_CACHE_HOME/harmonia-suite` с fallback `~/.cache/harmonia-suite`.
+If those variables are absent, an absolute per-user `HOME`/`USERPROFILE` is used to derive the
+corresponding `AppData` roots; there is no public-profile fallback. Linux application root —
+`$XDG_DATA_HOME/harmonia-suite` с fallback `~/.local/share/harmonia-suite`; user data —
+`$XDG_DATA_HOME/harmonia-suite-data` с fallback `~/.local/share/harmonia-suite-data`; state —
+`$XDG_STATE_HOME/harmonia-suite` с fallback `~/.local/state/harmonia-suite`; cache —
+`$XDG_CACHE_HOME/harmonia-suite` с fallback `~/.cache/harmonia-suite`. Relative XDG values are
+ignored in favor of these absolute fallbacks. If no absolute per-user root can be determined, path
+resolution fails rather than using a shared or temporary directory.
 
 Managed application files are grouped below `app_root`: `bin`, `versions`, `toolchain`, `source`,
 `build`, `cache` and `state`. User data is never a child of a version or staging directory and is
@@ -35,7 +39,9 @@ owned temporary paths, activation marker and failure diagnostics.
 Recovery is conservative. A pre-activation interrupted transaction can be resumed or have only its
 explicitly owned temporary paths cleaned. A journal that reached activation/health-check is reported
 for explicit recovery/rollback handling; core does not guess that a partially switched installation
-is safe. Unknown paths and user-data paths are never deleted from a recovery scan.
+is safe. Unknown paths and user-data paths are never deleted from a recovery scan. Cleanup rejects
+parent-directory components, refuses to remove a managed root itself, and fails closed if any
+existing ancestor is a symlink or Windows reparse point.
 
 ## Locking and diagnostics
 
@@ -48,11 +54,14 @@ environment values, credentials and authorization headers are not logged.
 
 ## Downloads and process execution
 
-The download layer is a transport abstraction. The HTTP implementation supports timeout, bounded
-retry, HTTP range resume into `<name>.partial`, SHA-256 verification and promotion only after a
-successful digest check. Network failures may leave a resumable partial; checksum failures delete
-the corrupted partial. Process execution likewise accepts argv/cwd/environment without a shell,
-supports timeout/termination, captures bounded diagnostics and exposes a testable runner boundary.
+The download layer is a transport abstraction. The production request requires a valid SHA-256 at
+construction time. The HTTP implementation supports timeout, bounded retry, HTTP range resume into
+`<name>.partial`, validates the server's `Content-Range` start before appending, and promotes only
+after a successful digest check. Network failures may leave a resumable partial; checksum failures
+delete the corrupted partial. Process execution accepts argv/cwd plus explicit environment values
+and a fixed allowlist for selected inherited variables, without a shell. It runs children in a
+Linux process group or Windows Job Object, terminates the group/tree on timeout, and captures only
+a bounded tail of stdout/stderr.
 
 ## Phase 2 state machine
 

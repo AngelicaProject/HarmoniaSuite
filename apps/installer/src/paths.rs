@@ -72,9 +72,6 @@ impl PathEnvironment {
         }
     }
 
-    fn home_or(&self, fallback: impl FnOnce() -> PathBuf) -> PathBuf {
-        self.home.clone().unwrap_or_else(fallback)
-    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -91,34 +88,39 @@ pub struct InstallationPaths {
 pub enum PathError {
     #[error("unsupported platform: {0}")]
     UnsupportedPlatform(String),
+    #[error("cannot determine an absolute per-user root for {0:?}")]
+    MissingUserRoot(Platform),
 }
 
 impl InstallationPaths {
     pub fn current() -> Result<Self, PathError> {
-        Ok(Self::for_environment(
+        Self::for_environment(
             Platform::current()?,
             TargetArchitecture::current(),
             &PathEnvironment::from_process(),
-        ))
+        )
     }
 
     pub fn for_environment(
         platform: Platform,
         architecture: TargetArchitecture,
         environment: &PathEnvironment,
-    ) -> Self {
+    ) -> Result<Self, PathError> {
+        let home = absolute_root(platform, environment.home.as_deref());
         let (app_root, user_data_root, state_root, cache_root) = match platform {
             Platform::Windows => {
-                let local = environment.local_app_data.clone().unwrap_or_else(|| {
-                    environment
-                        .home_or(|| PathBuf::from("C:\\Users\\Public"))
-                        .join("AppData\\Local")
-                });
-                let roaming = environment.app_data.clone().unwrap_or_else(|| {
-                    environment
-                        .home_or(|| PathBuf::from("C:\\Users\\Public"))
-                        .join("AppData\\Roaming")
-                });
+                let local = configured_or_home(
+                    platform,
+                    environment.local_app_data.as_deref(),
+                    home.as_deref(),
+                    "AppData\\Local",
+                )?;
+                let roaming = configured_or_home(
+                    platform,
+                    environment.app_data.as_deref(),
+                    home.as_deref(),
+                    "AppData\\Roaming",
+                )?;
                 let app = local.join("HarmoniaSuite");
                 (
                     app.clone(),
@@ -128,19 +130,24 @@ impl InstallationPaths {
                 )
             }
             Platform::Linux => {
-                let data = environment.xdg_data_home.clone().unwrap_or_else(|| {
-                    environment
-                        .home_or(|| PathBuf::from("/tmp"))
-                        .join(".local/share")
-                });
-                let state = environment.xdg_state_home.clone().unwrap_or_else(|| {
-                    environment
-                        .home_or(|| PathBuf::from("/tmp"))
-                        .join(".local/state")
-                });
-                let cache = environment.xdg_cache_home.clone().unwrap_or_else(|| {
-                    environment.home_or(|| PathBuf::from("/tmp")).join(".cache")
-                });
+                let data = configured_or_home(
+                    platform,
+                    environment.xdg_data_home.as_deref(),
+                    home.as_deref(),
+                    ".local/share",
+                )?;
+                let state = configured_or_home(
+                    platform,
+                    environment.xdg_state_home.as_deref(),
+                    home.as_deref(),
+                    ".local/state",
+                )?;
+                let cache = configured_or_home(
+                    platform,
+                    environment.xdg_cache_home.as_deref(),
+                    home.as_deref(),
+                    ".cache",
+                )?;
                 (
                     data.join("harmonia-suite"),
                     data.join("harmonia-suite-data"),
@@ -149,14 +156,14 @@ impl InstallationPaths {
                 )
             }
         };
-        Self {
+        Ok(Self {
             platform,
             architecture,
             app_root,
             user_data_root,
             state_root,
             cache_root,
-        }
+        })
     }
 
     pub fn bin_dir(&self) -> PathBuf {
@@ -218,6 +225,35 @@ impl InstallationPaths {
     }
 }
 
+fn configured_or_home(
+    platform: Platform,
+    configured: Option<&Path>,
+    home: Option<&Path>,
+    suffix: &str,
+) -> Result<PathBuf, PathError> {
+    if let Some(path) = absolute_root(platform, configured) {
+        return Ok(path);
+    }
+    home.map(|path| path.join(suffix))
+        .ok_or(PathError::MissingUserRoot(platform))
+}
+
+fn absolute_root(platform: Platform, path: Option<&Path>) -> Option<PathBuf> {
+    path.filter(|path| is_absolute_for(platform, path))
+        .map(Path::to_path_buf)
+}
+
+fn is_absolute_for(platform: Platform, path: &Path) -> bool {
+    if platform == Platform::Linux {
+        return path.is_absolute();
+    }
+    let value = path.to_string_lossy();
+    value.starts_with("\\\\")
+        || (value.len() >= 3
+            && value.as_bytes()[1] == b':'
+            && matches!(value.as_bytes()[2], b'/' | b'\\'))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -239,7 +275,8 @@ mod tests {
             Platform::Windows,
             TargetArchitecture::X64,
             &environment(),
-        );
+        )
+        .unwrap();
         assert_eq!(
             paths.app_root,
             PathBuf::from("C:/Users/tester/AppData/Local/HarmoniaSuite")
@@ -257,7 +294,8 @@ mod tests {
             Platform::Linux,
             TargetArchitecture::X64,
             &environment(),
-        );
+        )
+        .unwrap();
         assert_eq!(
             paths.app_root,
             PathBuf::from("/home/tester/.local/share/harmonia-suite")
@@ -274,5 +312,58 @@ mod tests {
             paths.cache_root,
             PathBuf::from("/home/tester/.cache/harmonia-suite")
         );
+    }
+
+    #[test]
+    fn rejects_missing_linux_user_root_without_tmp_fallback() {
+        let environment = PathEnvironment {
+            xdg_data_home: None,
+            xdg_state_home: None,
+            xdg_cache_home: None,
+            home: None,
+            ..PathEnvironment::default()
+        };
+        assert!(matches!(
+            InstallationPaths::for_environment(
+                Platform::Linux,
+                TargetArchitecture::X64,
+                &environment,
+            ),
+            Err(PathError::MissingUserRoot(Platform::Linux))
+        ));
+    }
+
+    #[test]
+    fn ignores_relative_xdg_roots_and_uses_absolute_home_fallback() {
+        let environment = PathEnvironment {
+            home: Some(PathBuf::from("/home/tester")),
+            xdg_data_home: Some(PathBuf::from("relative/data")),
+            xdg_state_home: Some(PathBuf::from("relative/state")),
+            xdg_cache_home: Some(PathBuf::from("relative/cache")),
+            ..PathEnvironment::default()
+        };
+        let paths = InstallationPaths::for_environment(
+            Platform::Linux,
+            TargetArchitecture::X64,
+            &environment,
+        )
+        .unwrap();
+        assert_eq!(
+            paths.app_root,
+            PathBuf::from("/home/tester/.local/share/harmonia-suite")
+        );
+    }
+
+    #[test]
+    fn rejects_missing_windows_user_roots_without_public_fallback() {
+        let environment = PathEnvironment::default();
+        assert!(matches!(
+            InstallationPaths::for_environment(
+                Platform::Windows,
+                TargetArchitecture::X64,
+                &environment,
+            ),
+            Err(PathError::MissingUserRoot(Platform::Windows))
+        ));
     }
 }

@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -25,7 +25,9 @@ pub enum StateError {
     #[error("installation diagnostics failed: {0}")]
     Diagnostics(#[from] DiagnosticError),
     #[error("unsupported installation state schema: {0}")]
-    UnsupportedSchema(u32),
+    UnsupportedSchema(u64),
+    #[error("transaction schema_version is missing or invalid")]
+    InvalidTransactionSchema,
     #[error("invalid transaction transition from {from:?} to {to:?}")]
     InvalidTransition {
         from: TransactionPhase,
@@ -171,14 +173,14 @@ impl StateStore {
         }
         let state: InstallationState = serde_json::from_slice(&fs::read(path)?)?;
         if state.schema_version != STATE_SCHEMA_VERSION {
-            return Err(StateError::UnsupportedSchema(state.schema_version));
+            return Err(StateError::UnsupportedSchema(state.schema_version as u64));
         }
         Ok(state)
     }
 
     pub fn save_installation(&self, state: &InstallationState) -> Result<(), StateError> {
         if state.schema_version != STATE_SCHEMA_VERSION {
-            return Err(StateError::UnsupportedSchema(state.schema_version));
+            return Err(StateError::UnsupportedSchema(state.schema_version as u64));
         }
         self.initialize()?;
         atomic_write_json(&self.paths.install_state_path(), state)
@@ -189,7 +191,16 @@ impl StateStore {
         if !path.is_file() {
             return Ok(None);
         }
-        Ok(Some(serde_json::from_slice(&fs::read(path)?)?))
+        let document: serde_json::Value = serde_json::from_slice(&fs::read(path)?)?;
+        let schema_version = document
+            .get("schema_version")
+            .and_then(serde_json::Value::as_u64)
+            .ok_or(StateError::InvalidTransactionSchema)?;
+        if schema_version != STATE_SCHEMA_VERSION as u64 {
+            return Err(StateError::UnsupportedSchema(schema_version));
+        }
+        let transaction: TransactionRecord = serde_json::from_value(document)?;
+        Ok(Some(transaction))
     }
 
     pub fn recovery_action(&self) -> Result<RecoveryAction, StateError> {
@@ -228,17 +239,23 @@ impl StateStore {
         transaction: &TransactionRecord,
         candidate: &Path,
     ) -> Result<(), StateError> {
-        let candidate = normalize(candidate);
+        let candidate = normalize(candidate)?;
         let owned = transaction
             .owned_paths
             .iter()
-            .map(|path| normalize(path))
+            .filter_map(|path| normalize(path).ok())
             .any(|path| path == candidate);
+        let Some(managed_root) = managed_root(&self.paths, &candidate) else {
+            return Err(StateError::UnsafeRecoveryPath(candidate));
+        };
         if !owned
-            || !self.paths.is_managed_path(&candidate)
+            || candidate == managed_root
             || candidate.starts_with(&self.paths.user_data_root)
-            || is_symlink(&candidate)?
+            || has_unsafe_ancestor(&managed_root, &candidate)?
         {
+            return Err(StateError::UnsafeRecoveryPath(candidate));
+        }
+        if !candidate.exists() {
             return Err(StateError::UnsafeRecoveryPath(candidate));
         }
         if candidate.is_dir() {
@@ -311,7 +328,7 @@ impl Transaction {
             owned_paths: owned_paths
                 .into_iter()
                 .map(|path| normalize(&path))
-                .collect(),
+                .collect::<Result<Vec<_>, _>>()?,
             activation_started: false,
             failure: None,
         };
@@ -402,18 +419,79 @@ fn allowed_transition(from: &TransactionPhase, to: &TransactionPhase) -> bool {
     )
 }
 
-fn normalize(path: &Path) -> PathBuf {
-    if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        std::env::current_dir()
-            .unwrap_or_else(|_| PathBuf::from("."))
-            .join(path)
+fn normalize(path: &Path) -> Result<PathBuf, StateError> {
+    if path.components().any(|component| component == Component::ParentDir) {
+        return Err(StateError::UnsafeRecoveryPath(path.to_path_buf()));
     }
+    if path.is_absolute() {
+        return Ok(path.to_path_buf());
+    }
+    Ok(std::env::current_dir()?.join(path))
 }
 
-fn is_symlink(path: &Path) -> io::Result<bool> {
-    Ok(path.exists() && fs::symlink_metadata(path)?.file_type().is_symlink())
+fn managed_root(paths: &InstallationPaths, candidate: &Path) -> Option<PathBuf> {
+    [
+        paths.app_root.clone(),
+        paths.state_root.clone(),
+        paths.cache_root.clone(),
+    ]
+    .into_iter()
+    .filter(|root| candidate.starts_with(root))
+    .max_by_key(|root| root.components().count())
+}
+
+fn has_unsafe_ancestor(root: &Path, candidate: &Path) -> io::Result<bool> {
+    let Ok(relative) = candidate.strip_prefix(root) else {
+        return Ok(true);
+    };
+    let mut current = root.to_path_buf();
+    if is_link_or_reparse(&current)? {
+        return Ok(true);
+    }
+    for component in relative.components() {
+        if !matches!(component, Component::Normal(_)) {
+            return Ok(true);
+        }
+        current.push(component.as_os_str());
+        match fs::symlink_metadata(&current) {
+            Ok(_) if is_link_or_reparse(&current)? => return Ok(true),
+            Ok(_) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => break,
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(false)
+}
+
+fn is_link_or_reparse(path: &Path) -> io::Result<bool> {
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink() {
+        return Ok(true);
+    }
+    is_reparse_point(path)
+}
+
+#[cfg(not(windows))]
+fn is_reparse_point(_path: &Path) -> io::Result<bool> {
+    Ok(false)
+}
+
+#[cfg(windows)]
+fn is_reparse_point(path: &Path) -> io::Result<bool> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        GetFileAttributesW, FILE_ATTRIBUTE_REPARSE_POINT, INVALID_FILE_ATTRIBUTES,
+    };
+    let wide: Vec<u16> = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let attributes = unsafe { GetFileAttributesW(wide.as_ptr()) };
+    if attributes == INVALID_FILE_ATTRIBUTES {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0)
 }
 
 fn atomic_write_json<T: Serialize>(path: &Path, value: &T) -> Result<(), StateError> {
@@ -600,5 +678,85 @@ mod tests {
             .cleanup_owned_path(transaction.record(), &user_data)
             .is_err());
         assert!(user_data.exists());
+    }
+
+    #[test]
+    fn cleanup_rejects_parent_directory_escape() {
+        let store = store();
+        let outside = store.paths().app_root.parent().unwrap().join("outside");
+        fs::write(&outside, b"keep").unwrap();
+        let transaction = Transaction::begin(
+            store.clone(),
+            OperationKind::Update,
+            None,
+            None,
+            vec![store.paths().build_dir().join("partial")],
+        )
+        .unwrap();
+        let escaped = store.paths().build_dir().join("..").join("outside");
+        assert!(matches!(
+            store.cleanup_owned_path(transaction.record(), &escaped),
+            Err(StateError::UnsafeRecoveryPath(_))
+        ));
+        assert!(outside.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cleanup_rejects_symlink_ancestor_escape() {
+        use std::os::unix::fs::symlink;
+
+        let store = store();
+        let outside = store.paths().app_root.parent().unwrap().join("outside");
+        fs::create_dir_all(&outside).unwrap();
+        let external_file = outside.join("partial");
+        fs::write(&external_file, b"keep").unwrap();
+        let link = store.paths().build_dir().join("external");
+        symlink(&outside, &link).unwrap();
+        let candidate = link.join("partial");
+        let transaction = Transaction::begin(
+            store.clone(),
+            OperationKind::Update,
+            None,
+            None,
+            vec![candidate.clone()],
+        )
+        .unwrap();
+
+        assert!(matches!(
+            store.cleanup_owned_path(transaction.record(), &candidate),
+            Err(StateError::UnsafeRecoveryPath(_))
+        ));
+        assert!(external_file.exists());
+    }
+
+    #[test]
+    fn rejects_unknown_transaction_schema_before_recovery() {
+        let store = store();
+        let transaction = Transaction::begin(
+            store.clone(),
+            OperationKind::Update,
+            None,
+            None,
+            Vec::new(),
+        )
+        .unwrap();
+        let mut record: serde_json::Value =
+            serde_json::to_value(transaction.record()).unwrap();
+        record["schema_version"] = serde_json::json!(999);
+        fs::write(
+            store.paths().transaction_path(),
+            serde_json::to_vec(&record).unwrap(),
+        )
+        .unwrap();
+
+        assert!(matches!(
+            store.load_transaction(),
+            Err(StateError::UnsupportedSchema(999))
+        ));
+        assert!(matches!(
+            store.recovery_action(),
+            Err(StateError::UnsupportedSchema(999))
+        ));
     }
 }
