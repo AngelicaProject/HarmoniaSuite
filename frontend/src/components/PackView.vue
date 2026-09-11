@@ -40,7 +40,10 @@ export default defineComponent({
     "toast",
   ],
   data() {
-    return { touched: {} as Record<string, boolean> };
+    return {
+      touched: {} as Record<string, boolean>,
+      flashTimers: new Set<ReturnType<typeof setTimeout>>(),
+    };
   },
   computed: {
     manifestText() {
@@ -69,6 +72,10 @@ export default defineComponent({
     errors() {
       this.touched = {};
     },
+  },
+  beforeUnmount() {
+    for (const timer of this.flashTimers) clearTimeout(timer);
+    this.flashTimers.clear();
   },
   methods: {
     packValue(key: keyof PackViewMeta): string {
@@ -125,11 +132,11 @@ export default defineComponent({
         (bad.length ? bad : [inps[0] as HTMLElement].filter(Boolean)).forEach(
           (i) => {
             i.classList.add("flash");
-            setTimeout(() => {
-              try {
-                i.classList.remove("flash");
-              } catch (e2) {}
+            const timer = setTimeout(() => {
+              this.flashTimers.delete(timer);
+              i.classList.remove("flash");
             }, 2400);
+            this.flashTimers.add(timer);
           },
         );
         const inp = el.querySelector("input,textarea");

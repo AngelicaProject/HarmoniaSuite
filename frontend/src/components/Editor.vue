@@ -80,6 +80,7 @@ interface EditorData {
   previewH: number;
   tabMenu: TabMenuState | null;
   statusOpen: boolean;
+  pinResizeCleanup: (() => void) | null;
 }
 
 function errorMessage(error: unknown): string {
@@ -166,6 +167,7 @@ export default defineComponent({
       previewH,
       tabMenu: null,
       statusOpen: false,
+      pinResizeCleanup: null,
     };
   },
   computed: {
@@ -384,6 +386,8 @@ export default defineComponent({
   beforeUnmount() {
     document.removeEventListener("click", this.closeTabMenuOutside, true);
     document.removeEventListener("click", this.closeStatusOutside, true);
+    this.pinResizeCleanup?.();
+    this.pinResizeCleanup = null;
   },
   methods: {
     esc(s: string): string {
@@ -589,6 +593,7 @@ export default defineComponent({
     },
     startPinResize(e: MouseEvent): void {
       e.preventDefault();
+      this.pinResizeCleanup?.();
       const y0 = e.clientY,
         h0 = this.previewH;
       const move = (ev: MouseEvent): void => {
@@ -597,13 +602,18 @@ export default defineComponent({
           Math.max(80, Math.round(h0 + (y0 - ev.clientY))),
         );
       };
-      const up = () => {
+      const cleanup = (): void => {
         window.removeEventListener("mousemove", move);
         window.removeEventListener("mouseup", up);
+      };
+      const up = () => {
+        cleanup();
+        this.pinResizeCleanup = null;
         try {
           localStorage.setItem("hs-ed-preview-h", String(this.previewH));
         } catch (err) {}
       };
+      this.pinResizeCleanup = cleanup;
       window.addEventListener("mousemove", move);
       window.addEventListener("mouseup", up);
     },

@@ -67,6 +67,7 @@ export default defineComponent({
       orModels: [] as AiModel[],
       orComboOpen: false,
       orComboQ: "",
+      comboFocusTimer: null as ReturnType<typeof setTimeout> | null,
       openDirs: {} as Record<string, boolean>,
       sort: "need",
     };
@@ -268,7 +269,10 @@ export default defineComponent({
       }
       this.orComboOpen = true;
       this.orComboQ = "";
-      setTimeout(() => {
+      if (this.comboFocusTimer) clearTimeout(this.comboFocusTimer);
+      this.comboFocusTimer = setTimeout(() => {
+        this.comboFocusTimer = null;
+        if (!this.orComboOpen) return;
         document.addEventListener("click", this.closeOrCombo, true);
         const input = this.$refs.orComboQ as HTMLInputElement | undefined;
         if (input) input.focus();
@@ -277,6 +281,8 @@ export default defineComponent({
     closeOrCombo(e?: Event) {
       const target = e?.target as Element | null;
       if (target?.closest && target.closest(".or-combo,.or-combo-btn")) return;
+      if (this.comboFocusTimer) clearTimeout(this.comboFocusTimer);
+      this.comboFocusTimer = null;
       this.orComboOpen = false;
       document.removeEventListener("click", this.closeOrCombo, true);
     },
@@ -307,7 +313,8 @@ export default defineComponent({
       this.orModels = await api.aiModels();
     } catch (e) {}
   },
-  unmounted() {
+  beforeUnmount() {
+    if (this.comboFocusTimer) clearTimeout(this.comboFocusTimer);
     document.removeEventListener("click", this.closeOrCombo, true);
   },
 });

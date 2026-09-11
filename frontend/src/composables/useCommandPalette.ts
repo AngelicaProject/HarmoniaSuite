@@ -61,6 +61,7 @@ export function useCommandPalette(
   const paletteInput = ref<HTMLInputElement | null>(null);
   const paletteFiles = ref<string[]>([]);
   let paletteTimer: ReturnType<typeof setTimeout> | null = null;
+  let paletteFocusTimer: ReturnType<typeof setTimeout> | null = null;
 
   const paletteResults = computed<PaletteItem[]>(() => {
     const query = paletteQ.value.trim();
@@ -164,11 +165,21 @@ export function useCommandPalette(
     paletteOpen.value = true;
     paletteQ.value = "";
     paletteIdx.value = 0;
-    setTimeout(() => paletteInput.value?.focus(), 0);
+    if (paletteFocusTimer) clearTimeout(paletteFocusTimer);
+    paletteFocusTimer = setTimeout(() => {
+      paletteFocusTimer = null;
+      if (paletteOpen.value) paletteInput.value?.focus();
+    }, 0);
+  }
+
+  function closePalette(): void {
+    paletteOpen.value = false;
+    if (paletteFocusTimer) clearTimeout(paletteFocusTimer);
+    paletteFocusTimer = null;
   }
 
   function runPalette(item: PaletteItem | undefined): void {
-    paletteOpen.value = false;
+    closePalette();
     void item?.run();
   }
 
@@ -194,7 +205,7 @@ export function useCommandPalette(
         openPalette();
       }
     } else if (event.key === "Escape" && paletteOpen.value) {
-      paletteOpen.value = false;
+      closePalette();
     }
   };
 
@@ -202,6 +213,7 @@ export function useCommandPalette(
   onUnmounted(() => {
     window.removeEventListener("keydown", onWindowKey);
     if (paletteTimer) clearTimeout(paletteTimer);
+    if (paletteFocusTimer) clearTimeout(paletteFocusTimer);
   });
 
   return {
@@ -211,6 +223,7 @@ export function useCommandPalette(
     paletteInput,
     paletteResults,
     openPalette,
+    closePalette,
     runPalette,
     onPaletteKey,
   };
