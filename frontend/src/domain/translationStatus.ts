@@ -66,19 +66,26 @@ export const ENTRY_STATUS_TONES = Object.freeze({
   [ENTRY_STATUS.APPROVED]: "success",
 });
 
-export function isNoTranslationRequired(status) {
+export function isNoTranslationRequired(status: string): boolean {
   return status === ENTRY_STATUS.NO_TRANSLATION_REQUIRED;
 }
 
-export function isStale(status) {
+export function isStale(status: string): boolean {
   return status === ENTRY_STATUS.STALE;
 }
 
-export function statusTone(status) {
-  return ENTRY_STATUS_TONES[status] || "muted";
+export function statusTone(status: string): string {
+  return (ENTRY_STATUS_TONES as Record<string, string>)[status] || "muted";
 }
 
-export function isTranslated(entry) {
+interface TranslationEntry {
+  status: string;
+  translation?: string;
+}
+
+export function isTranslated(
+  entry: TranslationEntry | null | undefined,
+): boolean {
   return (
     !!entry &&
     (isNoTranslationRequired(entry.status) ||
@@ -86,7 +93,7 @@ export function isTranslated(entry) {
   );
 }
 
-export function needsWork(entry) {
+export function needsWork(entry: TranslationEntry | null | undefined): boolean {
   return (
     !!entry &&
     !isNoTranslationRequired(entry.status) &&

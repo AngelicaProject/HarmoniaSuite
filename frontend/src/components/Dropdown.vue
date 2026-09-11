@@ -1,9 +1,10 @@
 <script lang="ts">
 import { defineComponent } from "vue";
+type DropdownOption = { value: unknown; label: string };
 export default defineComponent({
   props: {
     modelValue: { default: "" },
-    options: { type: Array, default: () => [] },
+    options: { type: Array as () => DropdownOption[], default: () => [] },
     title: { type: String, default: "" },
     width: { type: String, default: "" },
     menuAlign: { type: String, default: "left" },
@@ -14,7 +15,7 @@ export default defineComponent({
   },
   computed: {
     norm() {
-      return (this.options || []).map((o) =>
+      return (this.options || []).map((o): DropdownOption =>
         o && typeof o === "object" ? o : { value: o, label: String(o) },
       );
     },
@@ -33,15 +34,16 @@ export default defineComponent({
     },
     show() {
       this.open = true;
-      const i = this.cur
-        ? this.norm.findIndex((o) => String(o.value) === String(this.cur.value))
+      const current = this.cur;
+      const i = current
+        ? this.norm.findIndex((o) => String(o.value) === String(current.value))
         : 0;
       this.hl = i >= 0 ? i : 0;
       document.addEventListener("click", this.outside, true);
       document.addEventListener("keydown", this.onDocKey, true);
       this.$nextTick(() => {
         try {
-          const r = this.$el.getBoundingClientRect();
+          const r = (this.$el as HTMLElement).getBoundingClientRect();
           this.up = window.innerHeight - r.bottom < 200 && r.top > 220;
         } catch (e) {
           this.up = false;
@@ -53,10 +55,10 @@ export default defineComponent({
       document.removeEventListener("click", this.outside, true);
       document.removeEventListener("keydown", this.onDocKey, true);
     },
-    outside(e) {
-      if (this.$el && !this.$el.contains(e.target)) this.close();
+    outside(e: MouseEvent): void {
+      if (this.$el && !this.$el.contains(e.target as Node)) this.close();
     },
-    onDocKey(e) {
+    onDocKey(e: KeyboardEvent): void {
       if (!this.open) return;
       if (e.key === "Escape") this.close();
       else if (e.key === "ArrowDown") {
@@ -70,7 +72,7 @@ export default defineComponent({
         this.pick(this.norm[this.hl]);
       }
     },
-    pick(o) {
+    pick(o: DropdownOption): void {
       this.$emit("update:modelValue", o.value);
       this.$emit("change", o.value);
       this.close();

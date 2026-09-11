@@ -1,11 +1,48 @@
 <script lang="ts">
-import { defineComponent } from "vue";
+import { defineComponent, type PropType } from "vue";
 import { api } from "../api/client";
+import type { Entry, FileStats, Job } from "../api/types";
 import { isTranslated as isEntryTranslated } from "../domain/translationStatus";
+
+interface ExportCandidate {
+  path: string;
+  translated: number;
+  total: number;
+}
+
+interface EntryUpdate {
+  entry: Entry;
+  previous: Entry | null;
+  fileStats: FileStats | null;
+}
+
+interface ExportData {
+  candidates: ExportCandidate[];
+  built: Record<string, number>;
+  manifestBuilt: boolean;
+  loading: boolean;
+  error: string;
+  page: number;
+  pageSize: number;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 export default defineComponent({
-  props: ["projectId", "job", "scope", "dataRev", "entryUpdate"],
+  props: {
+    projectId: { type: String, default: "" },
+    job: { type: Object as PropType<Job | null>, default: null },
+    scope: { type: Object as PropType<Set<string>>, default: () => new Set() },
+    dataRev: { type: Number, default: 0 },
+    entryUpdate: {
+      type: Object as PropType<EntryUpdate | null>,
+      default: null,
+    },
+  },
   emits: ["build", "build-download", "toast", "toggle-scope", "clear-scope"],
-  data() {
+  data(): ExportData {
     return {
       candidates: [],
       built: {},
@@ -60,10 +97,10 @@ export default defineComponent({
     this.load();
   },
   methods: {
-    isTranslated(entry) {
+    isTranslated(entry: Entry | null | undefined): boolean {
       return isEntryTranslated(entry);
     },
-    applyEntryUpdate(update) {
+    applyEntryUpdate(update: EntryUpdate): void {
       const entry = update && update.entry;
       if (!entry || !entry.file) return;
       const stats = update.fileStats;
@@ -96,16 +133,16 @@ export default defineComponent({
       }
       delete this.built[entry.file];
     },
-    async load() {
+    async load(): Promise<void> {
       this.page = 0;
       await Promise.all([this.loadCandidates(), this.loadBuilt()]);
     },
-    async loadCandidates() {
+    async loadCandidates(): Promise<void> {
       if (!this.projectId) return;
       this.loading = true;
       this.error = "";
       try {
-        const all = [];
+        const all: ExportCandidate[] = [];
         let offset = 0;
         const limit = 500;
         for (;;) {
@@ -127,29 +164,29 @@ export default defineComponent({
         all.sort((a, b) => b.translated - a.translated);
         this.candidates = all;
       } catch (e) {
-        this.error = e.message;
+        this.error = errorMessage(e);
       }
       this.loading = false;
     },
-    async loadBuilt() {
+    async loadBuilt(): Promise<void> {
       if (!this.projectId) return;
       try {
         const d = await api.exportList(this.projectId);
-        const m = {};
+        const m: Record<string, number> = {};
         for (const f of d.files || []) m[f.name] = f.size;
         this.built = m;
         this.manifestBuilt = !!d.manifest;
       } catch (e) {
-        this.$emit("toast", e.message);
+        this.$emit("toast", errorMessage(e));
       }
     },
-    isBuilt(f) {
+    isBuilt(f: string): boolean {
       return Object.prototype.hasOwnProperty.call(this.built, f);
     },
-    inScope(f) {
+    inScope(f: string): boolean {
       return (this.scope || new Set()).has(f);
     },
-    async tryDownload(f) {
+    async tryDownload(f: string): Promise<void> {
       if (!this.isBuilt(f)) {
         this.$emit("toast", "Файл не собран — нажмите «Собрать пак и скачать»");
         return;
@@ -162,11 +199,11 @@ export default defineComponent({
         const u = URL.createObjectURL(b);
         const a = document.createElement("a");
         a.href = u;
-        a.download = f.split("/").pop();
+        a.download = f.split("/").pop() || f;
         a.click();
         URL.revokeObjectURL(u);
       } catch (e) {
-        this.$emit("toast", e.message);
+        this.$emit("toast", errorMessage(e));
       }
     },
   },

@@ -20,15 +20,21 @@ import ExportView from "./components/ExportView.vue";
 import DeltaView from "./components/DeltaView.vue";
 import LogView from "./components/LogView.vue";
 import Dropdown from "./components/Dropdown.vue";
+import { useFileTree } from "./composables/useFileTree";
+import { useUpdater } from "./composables/useUpdater";
+import { useCommandPalette } from "./composables/useCommandPalette";
+import { useDockLayout } from "./composables/useDockLayout";
+import { useJobs } from "./composables/useJobs";
 import type {
   AiStatus,
   Entry,
   FileStats,
   Job,
   PackMeta,
+  PackResponse,
   Summary,
   SourceSettings,
-  UpdateStatus,
+  DeltaConflict,
 } from "./api/types";
 
 interface ProjectDocument {
@@ -44,6 +50,7 @@ interface DisplayRowGroup {
   section?: number;
   cells: Entry[];
   un: number;
+  pos?: number;
 }
 
 interface FileRowState {
@@ -71,6 +78,49 @@ interface SearchMatch {
   translation: string;
 }
 
+interface ContextItem {
+  t: string;
+  sel?: boolean;
+  run: () => void | Promise<void>;
+}
+
+interface ContextMenuState {
+  x: number;
+  y: number;
+  items: ContextItem[];
+}
+
+interface SavedEntry {
+  previous: Entry | null;
+  entry: Entry;
+  fileStats: FileStats | null;
+}
+
+interface EditorHandle {
+  current?: Entry | null;
+  insertTag?: (text: string) => void;
+  openConflictTab?: (conflict: DeltaConflict) => void;
+  closeConflictTab?: (id: string) => void;
+  noteChanged?: () => void;
+}
+
+interface DeltaHandle {
+  doPreview?: () => void;
+}
+
+interface ConflictResolution {
+  id: string;
+  mode: string;
+  translation?: string;
+  status: string;
+}
+
+type Timer = ReturnType<typeof setTimeout>;
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 const App = defineComponent({
   components: {
     Picker,
@@ -96,42 +146,29 @@ const App = defineComponent({
     const cacheRev = ref(0);
     const statsRev = ref(0);
     const exportRev = ref(0);
-    const savedEntry = shallowRef(null);
-    const fileTree = ref<FileStats[]>([]);
-    const fileTreeLoading = ref(false);
-    const fileSearchQ = ref("");
-    const fileHideReady = ref(false);
-    const hideEmpty = ref(
-      (() => {
-        try {
-          return localStorage.getItem("hs-hide-empty") !== "off";
-        } catch (e) {
-          return true;
-        }
-      })(),
-    );
-    function toggleHideEmpty() {
-      hideEmpty.value = !hideEmpty.value;
-      try {
-        localStorage.setItem("hs-hide-empty", hideEmpty.value ? "on" : "off");
-      } catch (e) {}
-    }
-    const fileSort = ref(
-      (() => {
-        try {
-          return localStorage.getItem("hs-sort") || "name";
-        } catch (e) {
-          return "name";
-        }
-      })(),
-    );
-    function setSort(v) {
-      fileSort.value = v;
-      try {
-        localStorage.setItem("hs-sort", v);
-      } catch (e) {}
-    }
-    const expandedDirs = ref<Record<string, boolean>>({});
+    const savedEntry = shallowRef<SavedEntry | null>(null);
+    const fileTreeState = useFileTree(projectId, () => {
+      cacheRev.value++;
+      statsRev.value++;
+    });
+    const {
+      fileTree,
+      fileTreeLoading,
+      fileSearchQ,
+      fileHideReady,
+      hideEmpty,
+      fileSort,
+      expandedDirs,
+      treeRows,
+      treeFileCount,
+      treeReadyCount,
+      treeEmptyCount,
+      loadFileTree,
+      toggleDir,
+      toggleHideReady,
+      toggleHideEmpty,
+      setSort,
+    } = fileTreeState;
     const rowGroupPageSize = 60;
     const fileRows = ref<FileRowState>({
       file: "",
@@ -146,141 +183,8 @@ const App = defineComponent({
       { rows: Entry[]; total: number }
     >();
     let rowRequest = 0;
-    let phraseSearchTimer = null;
-    let trPendingTimer = null;
-    async function loadFileTree() {
-      if (!projectId.value) return;
-      fileTreeLoading.value = true;
-      try {
-        const d = await api.fileTree(projectId.value);
-        fileTree.value = d.files || [];
-        cacheRev.value++;
-        statsRev.value++;
-      } catch (e) {}
-      fileTreeLoading.value = false;
-    }
-    function toggleDir(d) {
-      expandedDirs.value[d] = !expandedDirs.value[d];
-    }
-    function toggleHideReady() {
-      fileHideReady.value = !fileHideReady.value;
-    }
-    const treeFileCount = computed(() => (fileTree.value || []).length);
-    const treeReadyCount = computed(() => {
-      const q = fileSearchQ.value.trim().toLowerCase();
-      let n = 0;
-      for (const f of fileTree.value || []) {
-        if (q && !(f.path || "").toLowerCase().includes(q)) continue;
-        if ((f.total || 0) > 0 && (f.total || 0) === (f.translated || 0)) n++;
-      }
-      return n;
-    });
-    const treeEmptyCount = computed(() => {
-      const q = fileSearchQ.value.trim().toLowerCase();
-      let n = 0;
-      for (const f of fileTree.value || []) {
-        if (q && !(f.path || "").toLowerCase().includes(q)) continue;
-        if ((f.total || 0) === 0) n++;
-      }
-      return n;
-    });
-    const treeRows = computed(() => {
-      const q = fileSearchQ.value.trim().toLowerCase();
-      const items = fileTree.value || [];
-      const vis = (f) => {
-        if (q && !(f.path || "").toLowerCase().includes(q)) return false;
-        if (hideEmpty.value && (f.total || 0) === 0) return false;
-        if (fileHideReady.value && (f.total || 0) <= (f.translated || 0))
-          return false;
-        return true;
-      };
-      const needOf = (f) => (f.total || 0) - (f.translated || 0);
-      const kidName = (k) => (k.type === "dir" ? k.dir.name : k.file.path);
-      const kidPct = (k) => {
-        const t = k.type === "dir" ? k.dir.total || 0 : k.file.total || 0;
-        const d = k.type === "dir" ? k.dir.done || 0 : k.file.translated || 0;
-        return t ? d / t : 0;
-      };
-      function sortKids(kids) {
-        if (fileSort.value === "name")
-          kids.sort((a, b) => (kidName(a) < kidName(b) ? -1 : 1));
-        else if (fileSort.value === "progress")
-          kids.sort(
-            (a, b) =>
-              kidPct(b) - kidPct(a) || (kidName(a) < kidName(b) ? -1 : 1),
-          );
-        else
-          kids.sort(
-            (a, b) => b.need - a.need || (kidName(a) < kidName(b) ? -1 : 1),
-          );
-      }
-      const root = { dirs: new Map(), files: [] };
-      for (const f of items) {
-        if (!vis(f)) continue;
-        const parts = (f.path || "").split("/");
-        let node = root;
-        for (let i = 0; i < parts.length - 1; i++) {
-          let d = node.dirs.get(parts[i]);
-          if (!d) {
-            d = {
-              name: parts[i],
-              path: parts.slice(0, i + 1).join("/"),
-              dirs: new Map(),
-              files: [],
-            };
-            node.dirs.set(parts[i], d);
-          }
-          node = d;
-        }
-        node.files.push(f);
-      }
-      const rows = [];
-      function fold(d) {
-        let t = 0,
-          dn = 0;
-        for (const f of d.files) {
-          t += f.total || 0;
-          dn += f.translated || 0;
-        }
-        for (const c of d.dirs.values()) {
-          const s = fold(c);
-          t += s.total;
-          dn += s.done;
-        }
-        d.total = t;
-        d.done = dn;
-        return d;
-      }
-      function emit(node, depth) {
-        const kids = [];
-        for (const d of node.dirs.values()) {
-          fold(d);
-          kids.push({
-            type: "dir",
-            depth,
-            key: "d:" + d.path,
-            dir: d,
-            open: !!q || !!expandedDirs.value[d.path],
-            need: (d.total || 0) - (d.done || 0),
-          });
-        }
-        for (const f of node.files)
-          kids.push({
-            type: "file",
-            depth,
-            key: "f:" + f.path,
-            file: f,
-            need: needOf(f),
-          });
-        sortKids(kids);
-        for (const k of kids) {
-          rows.push(k);
-          if (k.type === "dir" && k.open) emit(k.dir, depth + 1);
-        }
-      }
-      emit(root, 0);
-      return rows;
-    });
+    let phraseSearchTimer: Timer | null = null;
+    let trPendingTimer: Timer | null = null;
     const summary = ref<Summary | null>(null);
     const projectLoading = ref(false);
     const sourceFiles = ref<string[]>([]);
@@ -299,12 +203,12 @@ const App = defineComponent({
         const d = await api.pendingByFile(projectId.value);
         trPendingMap.value = (d && d.files) || {};
         trPendingReady.value = true;
-      } catch (e) {
+      } catch {
         /* карта некритична — список покажем целиком */
       }
     }
     watch(statsRev, () => {
-      clearTimeout(trPendingTimer);
+      if (trPendingTimer) clearTimeout(trPendingTimer);
       trPendingTimer = setTimeout(fetchTrPending, 300);
     });
     const trEstimate = computed(() => {
@@ -361,75 +265,47 @@ const App = defineComponent({
       } catch (e) {}
     }
     loadGeminiStatus();
-    const upd = ref<UpdateStatus>({
-      supported: false,
-      mode: "",
-      version: "dev",
-      needsToolchain: false,
-      currentSha: "",
-      latestSha: "",
-      behindBy: 0,
-      subjects: [],
-      updateAvailable: false,
-      state: "unavailable",
-      reason: "",
+    let jobController: ReturnType<typeof useJobs>;
+    const startJob = (details: Job) => jobController.startJob(details);
+    const updater = useUpdater(startJob, showToast);
+    const {
+      upd,
+      updModal,
+      updRestarting,
+      updRestartDead,
+      updLogBusy,
+      updLabel,
+      updTitle,
+      loadUpdateStatus,
+      runUpdate,
+      copyUpdateLog,
+    } = updater;
+    const jobs = useJobs({
+      projectId,
+      projectName,
+      summary,
+      logText,
+      updModal,
+      updRestarting,
+      updRestartDead,
+      loadFileTree,
+      loadProject,
+      loadSourceStatus,
+      scanSource,
+      loadUpdateStatus,
+      showToast,
     });
-    const updModal = ref(false);
-    const updRestarting = ref(false);
-    const updRestartDead = ref(false);
-    const updLogBusy = ref(false);
-    async function loadUpdateStatus() {
-      try {
-        upd.value = await api.updateStatus();
-      } catch (e) {}
-    }
-    const updLabel = computed(() => {
-      const u = upd.value;
-      const sha = (u.currentSha || "").slice(0, 7);
-      if (u.state === "toolchain_required") return "Компоненты обновления";
-      if (u.updateAvailable)
-        return "v" + (u.version || "dev") + " (+" + u.behindBy + ") " + sha;
-      return "v" + (u.version || "dev") + " · " + sha;
-    });
-    const updTitle = computed(() => {
-      const u = upd.value;
-      if (u.state === "toolchain_required")
-        return "Для обновления потребуется один раз установить JDK, Git и Node.js";
-      if (u.state === "local_ahead")
-        return "Локальная версия новее origin/main\n" + (u.currentSha || "");
-      if (u.state === "diverged")
-        return (
-          "История исходников расходится с origin/main\n" + (u.currentSha || "")
-        );
-      if (!u.supported)
-        return "Обновления недоступны" + (u.reason ? "\n" + u.reason : "");
-      if (!u.updateAvailable) return "Актуально\n" + (u.currentSha || "");
-      return (
-        "Текущий: " + (u.currentSha || "") + "\nНа main: " + (u.latestSha || "")
-      );
-    });
-    async function runUpdate() {
-      updModal.value = false;
-      try {
-        startJob(await api.runUpdate());
-      } catch (e) {
-        showToast(e.message);
-      }
-    }
-    async function copyUpdateLog() {
-      updLogBusy.value = true;
-      try {
-        const text = await api.logTail();
-        if (!navigator.clipboard || !navigator.clipboard.writeText) {
-          throw Error("Буфер обмена недоступен");
-        }
-        await navigator.clipboard.writeText(text);
-        showToast("Журнал скопирован");
-      } catch (e) {
-        showToast(e.message);
-      }
-      updLogBusy.value = false;
-    }
+    jobController = jobs;
+    const {
+      job,
+      pendingPack,
+      jobLog,
+      jobMainOutput,
+      updateFailed,
+      onJobScroll,
+      jobActive,
+      cancelJob,
+    } = jobs;
     const aiTitle = computed(() => {
       const g = geminiStatus.value;
       const gl = g.configured
@@ -461,7 +337,7 @@ const App = defineComponent({
         if (s.activeRoot) root.value = s.activeRoot;
         if (!s.configured) openSettings("sources");
       } catch (e) {
-        logText.value += "\nИсточники: " + e.message;
+        logText.value += "\nИсточники: " + errorMessage(e);
       }
     }
     const sourceLabel = computed(() => {
@@ -479,8 +355,8 @@ const App = defineComponent({
       document.documentElement.getAttribute("data-theme") || "dark",
     );
 
-    // ---- IDE docking: views move between left/right/bottom zones ----
-    const VIEWS = {
+    // ---- IDE docking: state and interactions live in a dedicated composable ----
+    const VIEWS: Record<string, { title: string; icon: string }> = {
       project: {
         title: "Проект",
         icon: '<svg class="icon" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h3l2 2h9a2 2 0 0 1 2 2v8a2 2 0 0 1 2 2H5a2 2 0 0 1-2-2V7z"/></svg>',
@@ -529,437 +405,73 @@ const App = defineComponent({
       "delta",
       "log",
     ];
-    const defaultZones = () => ({
-      layout: {
-        left: ["project", "delta"],
-        right: ["translate", "search", "tags", "summary", "pack", "export"],
-        bottom: ["log"],
+    const dock = useDockLayout(VIEWS, VIEW_IDS, {
+      onActivateView: (view) => {
+        if (view === "pack" && !pack.value) loadPack();
       },
-      active: { left: "project", right: "translate", bottom: "log" },
+      onToast: showToast,
     });
-    const savedLayout = (() => {
-      try {
-        return JSON.parse(localStorage.getItem("hs-layout") || "null");
-      } catch (e) {
-        return null;
-      }
-    })();
-    const layout = ref(defaultZones().layout);
-    const active = ref(defaultZones().active);
-    const zoneVisible = ref({ left: true, right: true, bottom: true });
-    const railVisible = ref({ left: true, right: true, bottom: true });
-    const sideW = ref(300),
-      ctxW = ref(360),
-      bottomH = ref(190);
-    if (savedLayout) {
-      if (savedLayout.v === 2 && savedLayout.layout) {
-        for (const z of ["left", "right", "bottom"]) {
-          const arr = (savedLayout.layout[z] || []).filter((v) =>
-            VIEW_IDS.includes(v),
-          );
-          layout.value[z] = arr;
-        }
-        for (const z of ["left", "right", "bottom"]) {
-          if (
-            savedLayout.active &&
-            layout.value[z].includes(savedLayout.active[z])
-          )
-            active.value[z] = savedLayout.active[z];
-          else active.value[z] = layout.value[z][0] || null;
-        }
-        if (savedLayout.zoneVisible)
-          zoneVisible.value = {
-            left: savedLayout.zoneVisible.left !== false,
-            right: savedLayout.zoneVisible.right !== false,
-            bottom: savedLayout.zoneVisible.bottom !== false,
-          };
-        if (savedLayout.railVisible)
-          railVisible.value = {
-            left: savedLayout.railVisible.left !== false,
-            right: savedLayout.railVisible.right !== false,
-            bottom: savedLayout.railVisible.bottom !== false,
-          };
-        sideW.value = savedLayout.sideW || 300;
-        ctxW.value = savedLayout.ctxW || 360;
-        bottomH.value = savedLayout.bottomH || 190;
-      } else {
-        sideW.value = savedLayout.sideW || 300;
-        ctxW.value = savedLayout.ctxW || 360;
-        zoneVisible.value = {
-          left: savedLayout.leftVisible !== false,
-          right: (savedLayout.rightMode || "dock") !== "hidden",
-          bottom: true,
-        };
-      }
-    }
-    // every view lives in exactly one zone
-    for (const v of VIEW_IDS) {
-      if (
-        !layout.value.left.includes(v) &&
-        !layout.value.right.includes(v) &&
-        !layout.value.bottom.includes(v)
-      ) {
-        layout.value.right.push(v);
-      }
-    }
+    const {
+      layout,
+      active,
+      zoneVisible,
+      railVisible,
+      narrow,
+      hiddenViews,
+      layoutStyle,
+      zoneStyle,
+      zoneShown,
+      activateView,
+      toggleView,
+      openZoneMenu,
+      ctxZone,
+      hideWidget,
+      activeTitle,
+      gotoView,
+      addView,
+      closeTab,
+      resetLayout,
+      menuFor,
+      addMenu,
+      openAddMenu,
+      dropPos,
+      onTabDragStart,
+      onTabDragOver,
+      onDrop,
+      onDropOnTab,
+      onDragEnd,
+      dropClass,
+      setHost,
+      hostEl,
+      startResize,
+      startResizeY,
+      toggleLeft,
+      toggleRight,
+      toggleBottom,
+      hideZone,
+      hidePanel,
+    } = dock;
 
-    const narrow = ref(window.matchMedia("(max-width:1000px)").matches);
-    try {
-      window
-        .matchMedia("(max-width:1000px)")
-        .addEventListener("change", (e) => (narrow.value = e.matches));
-    } catch (e) {}
-
-    function persistLayout() {
-      try {
-        localStorage.setItem(
-          "hs-layout",
-          JSON.stringify({
-            v: 2,
-            layout: layout.value,
-            active: active.value,
-            zoneVisible: zoneVisible.value,
-            railVisible: railVisible.value,
-            sideW: sideW.value,
-            ctxW: ctxW.value,
-            bottomH: bottomH.value,
-          }),
-        );
-      } catch (e) {}
-    }
-
-    const hiddenViews = computed(() =>
-      VIEW_IDS.filter(
-        (v) =>
-          !layout.value.left.includes(v) &&
-          !layout.value.right.includes(v) &&
-          !layout.value.bottom.includes(v),
-      ),
-    );
-
-    const layoutStyle = computed(() => {
-      if (narrow.value) return {};
-      const leftOpen =
-        railVisible.value.left &&
-        zoneVisible.value.left &&
-        layout.value.left.length > 0;
-      const rightOpen =
-        railVisible.value.right &&
-        zoneVisible.value.right &&
-        layout.value.right.length > 0;
-      const left = !railVisible.value.left
-        ? "0px"
-        : leftOpen
-          ? Math.max(180, Math.min(560, sideW.value)) + "px"
-          : "50px";
-      const right = !railVisible.value.right
-        ? "0px"
-        : rightOpen
-          ? Math.max(240, Math.min(640, ctxW.value)) + "px"
-          : "50px";
-      const showBottom =
-        railVisible.value.bottom &&
-        zoneVisible.value.bottom !== false &&
-        layout.value.bottom.length > 0;
-      const bottomRail = railVisible.value.bottom;
-      const rows = showBottom
-        ? "1fr " + Math.max(110, Math.min(480, bottomH.value)) + "px"
-        : bottomRail
-          ? "1fr auto"
-          : "1fr";
-      return {
-        gridTemplateColumns: left + " 1fr " + right,
-        gridTemplateRows: rows,
-      };
-    });
-
-    function zoneShown(z) {
-      if (z === "bottom")
-        return (
-          zoneVisible.value.bottom !== false && layout.value.bottom.length > 0
-        );
-      return zoneVisible.value[z] && layout.value[z].length > 0;
-    }
-
-    function zoneStyle(z) {
-      if (z === "bottom")
-        return { height: Math.max(110, Math.min(480, bottomH.value)) + "px" };
-      return {};
-    }
-
-    function activateView(zone, view) {
-      active.value[zone] = view;
-      if (view === "pack" && !pack.value) loadPack();
-      persistLayout();
-    }
-
-    function toggleView(zone, view) {
-      if (active.value[zone] === view && zoneShown(zone)) hideZone(zone);
-      else {
-        if (zone === "bottom") zoneVisible.value.bottom = true;
-        else zoneVisible.value[zone] = true;
-        activateView(zone, view);
-      }
-    }
-
-    const ctxZone = ref(null);
-    function openZoneMenu(zone, e, view = null) {
-      ctxZone.value = {
-        zone,
-        view: view || null,
-        x: Math.min(e.clientX, window.innerWidth - 190),
-        y: Math.min(e.clientY, window.innerHeight - 60),
-      };
-    }
-    function hideWidget() {
-      if (!ctxZone.value || !ctxZone.value.view) return;
-      closeTab(ctxZone.value.zone, ctxZone.value.view);
-      ctxZone.value = null;
-    }
-
-    function activeTitle(zone) {
-      const v = active.value[zone];
-      return v && VIEWS[v] ? VIEWS[v].title : "";
-    }
-
-    function gotoView(view) {
-      for (const z of ["left", "right", "bottom"]) {
-        if (layout.value[z].includes(view)) {
-          railVisible.value[z] = true;
-          zoneVisible.value[z] = true;
-          activateView(z, view);
-          return;
-        }
-      }
-      railVisible.value.right = true;
-      zoneVisible.value.right = true;
-      addView("right", view);
-    }
-
-    function addView(zone, view) {
-      if (!layout.value[zone].includes(view)) {
-        for (const z of ["left", "right", "bottom"]) {
-          const i = layout.value[z].indexOf(view);
-          if (i >= 0) layout.value[z].splice(i, 1);
-        }
-        layout.value[zone].push(view);
-      }
-      menuFor.value = null;
-      addMenu.value = null;
-      activateView(zone, view);
-    }
-
-    function closeTab(zone, view) {
-      const arr = layout.value[zone];
-      const i = arr.indexOf(view);
-      if (i >= 0) arr.splice(i, 1);
-      if (active.value[zone] === view)
-        active.value[zone] = arr[Math.min(i, arr.length - 1)] || null;
-      layoutRev.value++;
-      persistLayout();
-    }
-
-    function resetLayout(_event?: Event) {
-      const d = defaultZones();
-      layout.value = d.layout;
-      active.value = d.active;
-      zoneVisible.value = { left: true, right: true, bottom: true };
-      railVisible.value = { left: true, right: true, bottom: true };
-      menuFor.value = null;
-      addMenu.value = null;
-      ctxZone.value = null;
-      layoutRev.value++;
-      persistLayout();
-      showToast("Раскладка сброшена");
-    }
-
-    // drag-and-drop tabs between zones
-    const dragView = ref(null);
-    const dropPos = ref(null);
-    const menuFor = ref(null);
-    const addMenu = ref(null);
-    function openAddMenu(zone, e) {
-      if (addMenu.value && addMenu.value.zone === zone) {
-        addMenu.value = null;
-        return;
-      }
-      menuFor.value = null;
-      addMenu.value = {
-        zone,
-        x: Math.min(e.clientX, window.innerWidth - 220),
-        y: Math.min(e.clientY, window.innerHeight - 320),
-      };
-    }
-    function onTabDragStart(zone, view, e) {
-      dragView.value = { view, from: zone };
-      e.dataTransfer.effectAllowed = "move";
-      try {
-        e.dataTransfer.setData("text/plain", view);
-      } catch (err) {}
-    }
-    function onTabDragOver(zone, index, e) {
-      e.preventDefault();
-      e.dataTransfer.dropEffect = "move";
-      dropPos.value = { zone, index };
-    }
-    function onDrop(zone, e) {
-      e.preventDefault();
-      e.stopPropagation();
-      const d = dragView.value;
-      dragView.value = null;
-      dropPos.value = null;
-      if (!d) return;
-      moveView(d.view, d.from, zone, null);
-    }
-    function onDropOnTab(zone, index, e) {
-      e.preventDefault();
-      e.stopPropagation();
-      const d = dragView.value;
-      dragView.value = null;
-      dropPos.value = null;
-      if (!d) return;
-      moveView(d.view, d.from, zone, index);
-    }
-    function onDragEnd() {
-      dragView.value = null;
-      dropPos.value = null;
-    }
-    function moveView(view, from, zone, index) {
-      const src = layout.value[from];
-      const si = src.indexOf(view);
-      if (si >= 0) src.splice(si, 1);
-      const dst = layout.value[zone];
-      let idx =
-        index == null ? dst.length : Math.max(0, Math.min(index, dst.length));
-      if (from === zone && si >= 0 && si < idx) idx--;
-      dst.splice(idx, 0, view);
-      active.value[zone] = view;
-      if (!dst.includes(active.value[from]) && from !== zone)
-        active.value[from] = layout.value[from][0] || null;
-      else if (from === zone && !dst.includes(active.value[zone]))
-        active.value[zone] = dst[0] || null;
-      if (view === "pack" && !pack.value) loadPack();
-      layoutRev.value++;
-      persistLayout();
-    }
-    function dropClass(zone, i) {
-      if (!dropPos.value || dropPos.value.zone !== zone) return "";
-      return dropPos.value.index === i ? "drop-before" : "";
-    }
-
-    // teleport hosts: view content follows its host element
-    const hosts = {};
-    const layoutRev = ref(0);
-    function setHost(view, el) {
-      if (el) {
-        if (hosts[view] !== el) {
-          hosts[view] = el;
-          layoutRev.value++;
-        }
-      } else {
-        const cur = hosts[view];
-        if (!cur) return;
-        if (!cur.isConnected) {
-          delete hosts[view];
-          layoutRev.value++;
-        } else
-          nextTick(() => {
-            const c = hosts[view];
-            if (c && !c.isConnected) {
-              delete hosts[view];
-              layoutRev.value++;
-            }
-          });
-      }
-    }
-    function hostEl(view) {
-      layoutRev.value;
-      const el = hosts[view];
-      return el && el.isConnected ? el : null;
-    }
-
-    function startResize(pane, e) {
-      if (narrow.value) return;
-      e.preventDefault();
-      const el = e.target.closest ? e.target : null;
-      if (el && el.classList) el.classList.add("on");
-      const x0 = e.clientX,
-        w0 = pane === "left" ? sideW.value : ctxW.value;
-      const move = (ev) => {
-        const dx = ev.clientX - x0;
-        if (pane === "left") sideW.value = w0 + dx;
-        else ctxW.value = w0 - dx;
-      };
-      const up = () => {
-        window.removeEventListener("mousemove", move);
-        window.removeEventListener("mouseup", up);
-        if (el && el.classList) el.classList.remove("on");
-        persistLayout();
-      };
-      window.addEventListener("mousemove", move);
-      window.addEventListener("mouseup", up);
-    }
-
-    function startResizeY(e) {
-      if (narrow.value) return;
-      e.preventDefault();
-      const y0 = e.clientY,
-        h0 = bottomH.value;
-      const move = (ev) => {
-        bottomH.value = h0 + (y0 - ev.clientY);
-      };
-      const up = () => {
-        window.removeEventListener("mousemove", move);
-        window.removeEventListener("mouseup", up);
-        persistLayout();
-      };
-      window.addEventListener("mousemove", move);
-      window.addEventListener("mouseup", up);
-    }
-
-    function toggleLeft() {
-      railVisible.value.left = !railVisible.value.left;
-      persistLayout();
-    }
-    function toggleRight() {
-      railVisible.value.right = !railVisible.value.right;
-      persistLayout();
-    }
-    function toggleBottom() {
-      railVisible.value.bottom = !railVisible.value.bottom;
-      persistLayout();
-    }
-    function hideZone(zone) {
-      zoneVisible.value[zone] = false;
-      menuFor.value = null;
-      persistLayout();
-    }
-    function hidePanel(zone) {
-      railVisible.value[zone] = false;
-      ctxZone.value = null;
-      persistLayout();
-    }
-
-    function closeMenusOnDocClick(e) {
+    function closeMenusOnDocClick(e: MouseEvent): void {
+      const target = e.target instanceof Element ? e.target : null;
       const inside =
-        e.target.closest &&
-        (e.target.closest(".dz-menu") ||
-          e.target.closest(".top-menu-wrap") ||
-          e.target.closest(".dz-gearbtn") ||
-          e.target.closest(".dz-xbtn") ||
-          e.target.closest(".dz-ribtn"));
+        target?.closest(".dz-menu") ||
+        target?.closest(".top-menu-wrap") ||
+        target?.closest(".dz-gearbtn") ||
+        target?.closest(".dz-xbtn") ||
+        target?.closest(".dz-ribtn");
       if (inside) return;
       if (menuFor.value) menuFor.value = null;
       if (addMenu.value) addMenu.value = null;
       if (ctxMenu.value) ctxMenu.value = null;
     }
 
-    const ctxMenu = ref(null);
-    async function copyText(t) {
+    const ctxMenu = ref<ContextMenuState | null>(null);
+    async function copyText(t: unknown): Promise<void> {
       const s = String(t ?? "");
       try {
         await navigator.clipboard.writeText(s);
-      } catch (e) {
+      } catch {
         try {
           const ta = document.createElement("textarea");
           ta.value = s;
@@ -969,14 +481,14 @@ const App = defineComponent({
           ta.select();
           document.execCommand("copy");
           ta.remove();
-        } catch (e2) {
+        } catch {
           showToast("Не скопировалось");
           return;
         }
       }
       showToast("Скопировано");
     }
-    function ctxItems(el) {
+    function ctxItems(el: HTMLElement): ContextItem[] | null {
       const kind = el.dataset.ctx;
       if (kind === "file") {
         const p = el.dataset.path || "";
@@ -1002,7 +514,7 @@ const App = defineComponent({
       if (kind === "phrase") {
         const id = el.dataset.id || "";
         const e = entryById.value.get(id) || null;
-        const items = [
+        const items: ContextItem[] = [
           { t: "Открыть в редакторе", run: () => focusPhrase(id) },
         ];
         if (e) {
@@ -1022,16 +534,12 @@ const App = defineComponent({
         return [{ t: "Копировать журнал", run: () => copyText(logText.value) }];
       return null;
     }
-    function onGlobalCtx(e) {
-      if (!e || e.defaultPrevented) return;
-      const t = e.target;
-      if (
-        t &&
-        t.closest &&
-        t.closest('input,textarea,select,[contenteditable="true"]')
-      )
+    function onGlobalCtx(e: MouseEvent): void {
+      if (e.defaultPrevented) return;
+      const target = e.target instanceof Element ? e.target : null;
+      if (target?.closest('input,textarea,select,[contenteditable="true"]'))
         return;
-      const el = t && t.closest ? t.closest("[data-ctx]") : null;
+      const el = target?.closest("[data-ctx]") as HTMLElement | null;
       e.preventDefault();
       if (menuFor.value) menuFor.value = null;
       if (addMenu.value) addMenu.value = null;
@@ -1050,7 +558,7 @@ const App = defineComponent({
         items,
       };
     }
-    function runCtx(it) {
+    function runCtx(it: ContextItem): void {
       ctxMenu.value = null;
       if (it && it.run) it.run();
     }
@@ -1061,192 +569,7 @@ const App = defineComponent({
       document.documentElement.setAttribute("data-theme", theme.value);
     }
 
-    // live job progress
-    const job = ref<Job | null>(null);
-    let jobTimer: ReturnType<typeof setInterval> | null = null;
-    const pendingPack = ref(false);
-    const jobLog = ref<HTMLElement | null>(null);
-    const jobStick = ref(true);
-    const jobMainOutput = computed(() =>
-      ((job.value && job.value.output) || "")
-        .split("\n")
-        .filter((l) => !l.startsWith("[REASONING]"))
-        .join("\n"),
-    );
-    const updateFailed = computed(
-      () =>
-        !!job.value &&
-        job.value.action === "update" &&
-        job.value.status === "failed",
-    );
-    function onJobScroll() {
-      const el = jobLog.value;
-      if (!el) return;
-      jobStick.value = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
-    }
-    watch(
-      () => job.value && job.value.output,
-      () => {
-        if (!jobStick.value) return;
-        nextTick(() => {
-          const el = jobLog.value;
-          if (el) el.scrollTop = el.scrollHeight;
-        });
-      },
-    );
-    watch(
-      () => job.value && job.value.id,
-      () => {
-        jobStick.value = true;
-      },
-    );
-
-    async function downloadPackZip() {
-      const b = await api.downloadExportZip(projectId.value);
-      const u = URL.createObjectURL(b);
-      const a = document.createElement("a");
-      a.href = u;
-      a.download = (projectName.value || projectId.value || "export") + ".zip";
-      a.click();
-      URL.revokeObjectURL(u);
-    }
-
-    function jobActive() {
-      return !!(
-        job.value &&
-        (job.value.status === "running" || job.value.status === "queued")
-      );
-    }
-
-    function pollJob(id) {
-      if (jobTimer) clearInterval(jobTimer);
-      let fails = 0;
-      let lastLive = 0;
-      jobTimer = setInterval(async () => {
-        try {
-          const d = await api.jobGet(id);
-          fails = 0;
-          job.value = d;
-          if (
-            (d.status === "running" || d.status === "queued") &&
-            Date.now() - lastLive > 15000
-          ) {
-            lastLive = Date.now();
-            loadFileTree();
-            try {
-              const ov = await api.overview(projectId.value);
-              if (ov.summary) summary.value = ov.summary;
-            } catch (e) {}
-          }
-          if (d.status !== "running" && d.status !== "queued") {
-            clearInterval(jobTimer);
-            jobTimer = null;
-            if (pendingPack.value && d.action === "merge") {
-              pendingPack.value = false;
-              if (
-                d.status === "completed" ||
-                d.status === "completed_with_errors"
-              ) {
-                try {
-                  await downloadPackZip();
-                  logText.value += "\nПак Harmonia собран и скачан (.zip)";
-                } catch (e) {
-                  showToast(e.message);
-                  logText.value += "\n" + e.message;
-                }
-              } else {
-                logText.value +=
-                  "\nСборка не завершена (" + d.status + ") — архив не скачан";
-              }
-            }
-            if (d.action === "update") {
-              if (d.status === "failed") updModal.value = true;
-              setTimeout(loadUpdateStatus, 400);
-            } else if (d.action === "sync-sources") {
-              setTimeout(async () => {
-                await loadSourceStatus();
-                if (projectId.value) loadProject();
-                else scanSource();
-              }, 400);
-            } else if (d.action === "merge") {
-              setTimeout(async () => {
-                await loadFileTree();
-                try {
-                  const ov = await api.overview(projectId.value);
-                  if (ov.summary) summary.value = ov.summary;
-                } catch (e) {}
-              }, 400);
-            } else {
-              setTimeout(loadProject, 400);
-            }
-          }
-        } catch (e) {
-          if (job.value && job.value.action === "update") onUpdateGone();
-          if (++fails >= 10) {
-            clearInterval(jobTimer);
-            jobTimer = null;
-            if (job.value) {
-              job.value = {
-                ...job.value,
-                status: "error",
-                output:
-                  (job.value.output || "") +
-                  "\nНет ответа сервера (перезапуск?) — задача потеряна, запустите заново",
-              };
-            }
-          }
-        }
-      }, 700);
-    }
-
-    let updWatch = null;
-    function onUpdateGone() {
-      updRestarting.value = true;
-      if (updWatch) return;
-      let updWatchFails = 0;
-      updWatch = setInterval(async () => {
-        try {
-          await api.version();
-          clearInterval(updWatch);
-          updWatch = null;
-          location.reload();
-        } catch (e) {
-          if (++updWatchFails >= 40) {
-            clearInterval(updWatch);
-            updWatch = null;
-            updRestartDead.value = true;
-          }
-        }
-      }, 3000);
-    }
-    function startJob(d) {
-      updRestarting.value = false;
-      updRestartDead.value = false;
-      if (updWatch) {
-        clearInterval(updWatch);
-        updWatch = null;
-      }
-      job.value = {
-        id: d.id,
-        status: d.status || "running",
-        action: d.action,
-        output: "",
-      };
-      pollJob(d.id);
-    }
-
-    async function cancelJob() {
-      pendingPack.value = false;
-      if (!job.value) return;
-      try {
-        const d = await api.jobCancel(job.value.id);
-        job.value = d;
-      } catch (e) {
-        logText.value += "\n" + e.message;
-      }
-    }
-
-    function mergeEntries(items) {
+    function mergeEntries(items: Entry[]): void {
       if (!items || !items.length) return;
       const entries = new Map((doc.value?.entries || []).map((e) => [e.id, e]));
       for (const entry of items)
@@ -1259,11 +582,11 @@ const App = defineComponent({
       cacheRev.value++;
     }
 
-    function isCountedAsTranslated(entry) {
+    function isCountedAsTranslated(entry: Entry): boolean {
       return isEntryTranslated(entry);
     }
 
-    function isPendingForTranslation(entry) {
+    function isPendingForTranslation(entry: Entry): boolean {
       return (
         !!entry &&
         String(entry.translation || "").trim() === "" &&
@@ -1271,7 +594,7 @@ const App = defineComponent({
       );
     }
 
-    function localEntry(id) {
+    function localEntry(id: string): Entry | null {
       const known = (doc.value?.entries || []).find((entry) => entry.id === id);
       if (known) return known;
       for (const group of fileRows.value.groups || []) {
@@ -1285,7 +608,7 @@ const App = defineComponent({
       return null;
     }
 
-    function replaceEntryInRows(entry) {
+    function replaceEntryInRows(entry: Entry): void {
       const state = fileRows.value;
       if (!entry || state.file !== entry.file) return;
       let changed = false;
@@ -1305,7 +628,7 @@ const App = defineComponent({
       if (changed) fileRows.value = { ...state, groups };
     }
 
-    function replaceEntryInPreview(entry) {
+    function replaceEntryInPreview(entry: Entry): void {
       if (!entry) return;
       const preview = filePreviewCache.get(entry.file);
       if (!preview) return;
@@ -1320,7 +643,7 @@ const App = defineComponent({
       }
     }
 
-    function updateLocalStats(previous, entry) {
+    function updateLocalStats(previous: Entry | null, entry: Entry): void {
       if (!entry || !previous || previous.file !== entry.file) return;
       const delta =
         Number(isCountedAsTranslated(entry)) -
@@ -1333,7 +656,7 @@ const App = defineComponent({
       );
     }
 
-    function updateLocalPending(previous, entry) {
+    function updateLocalPending(previous: Entry | null, entry: Entry): void {
       if (
         !entry ||
         !previous ||
@@ -1352,7 +675,7 @@ const App = defineComponent({
       trPendingMap.value = map;
     }
 
-    function syncSavedEntry(previous, entry) {
+    function syncSavedEntry(previous: Entry | null, entry: Entry): void {
       if (!entry || !entry.id) return;
       updateLocalStats(previous, entry);
       updateLocalPending(previous, entry);
@@ -1361,14 +684,21 @@ const App = defineComponent({
       replaceEntryInPreview(entry);
     }
 
-    function decorateRowGroups(groups, page) {
+    function decorateRowGroups(
+      groups: DisplayRowGroup[],
+      page: number,
+    ): DisplayRowGroup[] {
       return (groups || []).map((group, i) => {
         const pos = page * rowGroupPageSize + i;
         return { ...group, pos, section: Math.floor(pos / 100) };
       });
     }
 
-    async function loadFileRows(file, page = 0, q = "") {
+    async function loadFileRows(
+      file: string,
+      page = 0,
+      q = "",
+    ): Promise<FileRowState | null> {
       if (!file || !projectId.value) return null;
       const cleanPage = Math.max(0, page | 0);
       const cleanQ = String(q || "").trim();
@@ -1390,7 +720,7 @@ const App = defineComponent({
         if (request !== rowRequest) return null;
         const groups = decorateRowGroups(d.groups || [], cleanPage);
         const pageEntries = groups.flatMap((g) => g.cells || []);
-        const entries = new Map();
+        const entries = new Map<string, Entry>();
         for (const entry of doc.value?.entries || []) {
           if (
             entry &&
@@ -1424,7 +754,7 @@ const App = defineComponent({
       }
     }
 
-    async function loadFilePreview(file) {
+    async function loadFilePreview(file: string): Promise<void> {
       if (!file || !projectId.value || filePreviewCache.has(file)) return;
       const d = await api.entries(projectId.value, { file }, { limit: 100 });
       filePreviewCache.set(file, {
@@ -1434,7 +764,7 @@ const App = defineComponent({
       cacheRev.value++;
     }
 
-    async function ensureEntry(id) {
+    async function ensureEntry(id: string): Promise<Entry | null> {
       if (!id || !projectId.value) return null;
       const e = (doc.value?.entries || []).find((x) => x.id === id);
       if (e) return e;
@@ -1482,7 +812,7 @@ const App = defineComponent({
           await loadFileRows(focusFileFilter.value, 0, phraseSearchQ.value);
         }
       } catch (e) {
-        logText.value += "\nОшибка: " + e.message;
+        logText.value += "\nОшибка: " + errorMessage(e);
       }
       projectLoading.value = false;
     }
@@ -1503,33 +833,35 @@ const App = defineComponent({
           " мс)";
         rg.value = "активен";
       } catch (e) {
-        sourceError.value = e.message || "не удалось загрузить файлы";
-        logText.value += "\n" + e.message;
+        sourceError.value = errorMessage(e) || "не удалось загрузить файлы";
+        logText.value += "\n" + errorMessage(e);
       }
       sourceLoading.value = false;
     }
 
-    const entryById = computed(() => {
-      const m = new Map();
+    const entryById = computed<Map<string, Entry>>(() => {
+      const m = new Map<string, Entry>();
       for (const e of doc.value?.entries || []) m.set(e.id, e);
       return m;
     });
-    function scopeFile() {
+    function scopeFile(): string {
       return focusFileFilter.value || "";
     }
     const leftMode = ref("files");
-    function progPct(f) {
+    function progPct(f: FileStats | null | undefined): number {
       if (!f || !f.total) return 0;
       return Math.round((f.translated / f.total) * 100);
     }
-    function dirPct(d) {
+    function dirPct(
+      d: { total?: number; done?: number } | null | undefined,
+    ): number {
       if (!d || !d.total) return 0;
-      return Math.round((d.done / d.total) * 100);
+      return Math.round(((d.done ?? 0) / d.total) * 100);
     }
-    function fmtNum(n) {
+    function fmtNum(n: number): string {
       return Number(n || 0).toLocaleString("ru-RU");
     }
-    function pct1(done, total) {
+    function pct1(done: number, total: number): string {
       if (!total) return "0%";
       const p = (done / total) * 100;
       return (
@@ -1537,31 +869,33 @@ const App = defineComponent({
         "%"
       );
     }
-    function baseName(p) {
+    function baseName(p: string): string {
       const s = String(p || "");
       const i = s.lastIndexOf("/");
       return i < 0 ? s : s.slice(i + 1);
     }
-    function fileUn(f) {
+    function fileUn(f: FileStats): number {
       return (f.total || 0) - (f.translated || 0);
     }
-    function needsWork(e) {
+    function needsWork(e: Entry): boolean {
       return entryNeedsWork(e);
     }
     const projTotal = computed(() => summary.value?.entries ?? 0);
     const projDone = computed(() => summary.value?.translated ?? 0);
     const staleStatus = ENTRY_STATUS.STALE;
-    const expandedFiles = ref({});
-    function expanded(f) {
+    const expandedFiles = ref<Record<string, boolean>>({});
+    function expanded(f: string): boolean {
       return !!expandedFiles.value[f];
     }
-    function toggleExpand(f) {
+    function toggleExpand(f: string): void {
       expandedFiles.value[f] = !expandedFiles.value[f];
       if (expandedFiles.value[f])
-        loadFilePreview(f).catch((e) => (logText.value += "\n" + e.message));
+        loadFilePreview(f).catch(
+          (e) => (logText.value += "\n" + errorMessage(e)),
+        );
     }
-    function filePhraseGroups(f) {
-      const groups = new Map();
+    function filePhraseGroups(f: string): DisplayRowGroup[] {
+      const groups = new Map<number, DisplayRowGroup>();
       for (const e of filePhrases(f).rows || []) {
         let g = groups.get(e.rowIndex);
         if (!g) {
@@ -1575,12 +909,12 @@ const App = defineComponent({
       out.forEach((g) => g.cells.sort((a, b) => a.columnIndex - b.columnIndex));
       return out;
     }
-    function filePhrases(f) {
+    function filePhrases(f: string): { rows: Entry[]; total: number } {
       cacheRev.value;
       const preview = filePreviewCache.get(f);
       if (!preview) return { rows: [], total: 0 };
-      const un = [],
-        done = [];
+      const un: Entry[] = [],
+        done: Entry[] = [];
       for (const e of preview.rows || []) (needsWork(e) ? un : done).push(e);
       return { rows: un.concat(done).slice(0, 100), total: preview.total || 0 };
     }
@@ -1602,37 +936,37 @@ const App = defineComponent({
       groups: fileRows.value.groups,
     }));
 
-    async function setRowGroupPage(page) {
+    async function setRowGroupPage(page: number): Promise<void> {
       const f = scopeFile();
       if (!f) return;
       phrasePage.value = Math.max(0, Math.min(rowGroupPages.value - 1, page));
       try {
         await loadFileRows(f, phrasePage.value, phraseSearchQ.value);
       } catch (e) {
-        logText.value += "\n" + e.message;
+        logText.value += "\n" + errorMessage(e);
       }
     }
 
-    function setPhraseSearch(value) {
+    function setPhraseSearch(value: string): void {
       phraseSearchQ.value = value || "";
       phrasePage.value = 0;
-      clearTimeout(phraseSearchTimer);
+      if (phraseSearchTimer) clearTimeout(phraseSearchTimer);
       phraseSearchTimer = setTimeout(() => {
         const f = scopeFile();
         if (!f) return;
         loadFileRows(f, 0, phraseSearchQ.value).catch(
-          (e) => (logText.value += "\n" + e.message),
+          (e) => (logText.value += "\n" + errorMessage(e)),
         );
       }, 250);
     }
 
-    async function openFile(f) {
+    async function openFile(f: string): Promise<void> {
       focusFileFilter.value = f;
       leftMode.value = "phrases";
       phrasePage.value = 0;
       phraseSearchQ.value = "";
       const page = await loadFileRows(f, 0, "");
-      let first = null;
+      let first: Entry | null = null;
       try {
         first = await api.rowsNext(projectId.value, {
           file: f,
@@ -1641,21 +975,22 @@ const App = defineComponent({
         });
         if (first) mergeEntries([first]);
       } catch (e) {
-        logText.value += "\n" + e.message;
+        logText.value += "\n" + errorMessage(e);
       }
       const fallback =
         page && page.groups.length ? page.groups[0].cells[0] : null;
-      if (first || fallback) setFocusId((first || fallback).id);
+      const target = first || fallback;
+      if (target) setFocusId(target.id);
     }
 
-    function backToFiles() {
+    function backToFiles(): void {
       leftMode.value = "files";
       focusFileFilter.value = "";
       phraseSearchQ.value = "";
       followRowId.value = "";
     }
 
-    async function focusPhrase(id) {
+    async function focusPhrase(id: string): Promise<void> {
       try {
         const e = await ensureEntry(id);
         if (!e) return;
@@ -1680,15 +1015,16 @@ const App = defineComponent({
           await loadFileRows(f, phrasePage.value, phraseSearchQ.value);
         }
       } catch (err) {
-        logText.value += "\n" + (err.message || "Не удалось открыть фразу");
+        logText.value +=
+          "\n" + (errorMessage(err) || "Не удалось открыть фразу");
       }
     }
 
     const tab = ref("translate");
     const focusId = ref("");
     const focusFileFilter = ref("");
-    const editorRef = ref(null);
-    const deltaRef = ref(null);
+    const editorRef = ref<EditorHandle | null>(null);
+    const deltaRef = ref<DeltaHandle | null>(null);
     const followFiles = ref(
       (() => {
         try {
@@ -1710,7 +1046,7 @@ const App = defineComponent({
     const followRowId = ref("");
     const revealFile = ref("");
     let lastReveal = "";
-    let revealTimer = null;
+    let revealTimer: Timer | null = null;
     function toggleFollow() {
       followFiles.value = !followFiles.value;
       try {
@@ -1729,13 +1065,13 @@ const App = defineComponent({
         onEditorEntry(focusId.value, true);
       }
     }
-    function setFocusId(id) {
+    function setFocusId(id: string): void {
       focusId.value = id;
       if (followRow.value && leftMode.value === "phrases")
         followRowId.value = id;
     }
     let rowFollowRequest = 0;
-    async function onEditorEntry(id, force = false) {
+    async function onEditorEntry(id: string, force = false): Promise<void> {
       const request = ++rowFollowRequest;
       if (!id) return;
       const previousId = focusId.value;
@@ -1783,7 +1119,11 @@ const App = defineComponent({
         if (el && el.scrollIntoView) el.scrollIntoView({ block: "center" });
       } catch (e) {}
     }
-    async function revealInFiles(file, force, phraseId = "") {
+    async function revealInFiles(
+      file: string,
+      force: boolean,
+      phraseId = "",
+    ): Promise<void> {
       if (!file || !projectId.value) return;
       if (leftMode.value !== "files") {
         if (!force) return;
@@ -1803,7 +1143,7 @@ const App = defineComponent({
       if (!expanded(file)) toggleExpand(file);
       lastReveal = file;
       revealFile.value = file;
-      clearTimeout(revealTimer);
+      if (revealTimer) clearTimeout(revealTimer);
       revealTimer = setTimeout(() => {
         if (revealFile.value === file) revealFile.value = "";
       }, 4000);
@@ -1832,11 +1172,11 @@ const App = defineComponent({
         }
       } catch (e) {}
     }
-    function onEditorFile(file) {
+    function onEditorFile(file: string): void {
       if (!followFiles.value || !file || file === lastReveal) return;
       revealInFiles(file, false);
     }
-    async function onRevealFile(file) {
+    async function onRevealFile(file: string): Promise<void> {
       if (!file) {
         showToast("Нет активного файла");
         return;
@@ -1846,169 +1186,40 @@ const App = defineComponent({
     const tagFilter = ref("");
     const csvRequest = ref<{ file: string; n: number } | null>(null);
     const previewPinRequest = ref<{ file: string; n: number } | null>(null);
-    function openPreview(f) {
+    function openPreview(f: string): void {
       if (!f) return;
       previewPinRequest.value = { file: f, n: Date.now() };
     }
-    function insertTagToEditor(text) {
+    function insertTagToEditor(text: string): void {
       const ed = editorRef.value;
       if (!ed || !ed.current) {
         showToast("Сначала выберите фразу в редакторе");
         return;
       }
-      ed.insertTag(text);
+      ed.insertTag?.(text);
     }
 
-    // command palette (Ctrl+K): files, phrases, commands
-    const paletteOpen = ref(false);
-    const paletteQ = ref("");
-    const paletteIdx = ref(0);
-    const paletteInput = ref<HTMLInputElement | null>(null);
-
-    function fuzzyScore(q, s) {
-      const a = String(s || "").toLowerCase(),
-        b = String(q || "")
-          .toLowerCase()
-          .trim();
-      if (!b) return 0;
-      if (a.startsWith(b)) return 0;
-      const at = a.indexOf(b);
-      if (at >= 0) return 1 + at / 1000;
-      let qi = 0,
-        gaps = 0,
-        last = -1;
-      for (let k = 0; k < a.length && qi < b.length; k++) {
-        if (a[k] === b[qi]) {
-          if (last >= 0) gaps += k - last - 1;
-          last = k;
-          qi++;
-        }
-      }
-      return qi >= b.length ? 2 + gaps / 100 : Infinity;
-    }
-
-    const paletteResults = computed(() => {
-      const q = paletteQ.value.trim();
-      const cmds = [
-        {
-          t: "Gemini: перевести всё",
-          hint: "команда",
-          run: () => run("gemini"),
-        },
-        { t: "Собрать CSV", hint: "команда", run: () => run("merge") },
-        {
-          t: "Левая панель: скрыть/показать",
-          hint: "команда",
-          run: toggleLeft,
-        },
-        {
-          t: "Правая панель: скрыть/показать",
-          hint: "команда",
-          run: toggleRight,
-        },
-        {
-          t: "Нижняя панель: скрыть/показать",
-          hint: "команда",
-          run: toggleBottom,
-        },
-        { t: "Сбросить раскладку", hint: "команда", run: resetLayout },
-        ...VIEW_IDS.map((v) => ({
-          t: "Панель: " + VIEWS[v].title,
-          hint: "панель",
-          run: () => gotoView(v),
-        })),
-      ];
-      if (!q) return cmds.map((c, i) => ({ ...c, key: "c" + i }));
-      const out = [];
-      cmds.forEach((c, i) => {
-        const s = fuzzyScore(q, c.t);
-        if (s !== Infinity) out.push({ ...c, key: "c" + i, score: s });
-      });
-      (fileTree.value || []).forEach((f) => {
-        const s = fuzzyScore(q, f.path);
-        if (s !== Infinity)
-          out.push({
-            t: f.path,
-            hint: "файл",
-            key: "f" + f.path,
-            score: s + 0.01,
-            run: () => openFile(f.path),
-          });
-      });
-      palFiles.value.forEach((path) => {
-        out.push({
-          t: path,
-          hint: "файл",
-          key: "f" + path,
-          score: 0.02,
-          run: () => openFile(path),
-        });
-      });
-      return out.sort((a, b) => a.score - b.score).slice(0, 25);
+    const palette = useCommandPalette(projectId, fileTree, VIEWS, VIEW_IDS, {
+      run,
+      toggleLeft,
+      toggleRight,
+      toggleBottom,
+      resetLayout,
+      gotoView,
+      openFile,
     });
-    const palFiles = ref([]);
-    let palTimer = null;
-    watch(paletteQ, () => {
-      clearTimeout(palTimer);
-      const q = paletteQ.value.trim();
-      palFiles.value = [];
-      if (!q || !projectId.value) return;
-      palTimer = setTimeout(async () => {
-        try {
-          const d = await api.files(projectId.value, { q }, { limit: 25 });
-          palFiles.value = (d.files || []).map((f) => f.path);
-        } catch (e) {
-          palFiles.value = [];
-        }
-      }, 300);
-    });
+    const {
+      paletteOpen,
+      paletteQ,
+      paletteIdx,
+      paletteInput,
+      paletteResults,
+      openPalette,
+      runPalette,
+      onPaletteKey,
+    } = palette;
 
-    function openPalette() {
-      paletteOpen.value = true;
-      paletteQ.value = "";
-      paletteIdx.value = 0;
-      setTimeout(() => {
-        if (paletteInput.value) paletteInput.value.focus();
-      }, 0);
-    }
-
-    function runPalette(it) {
-      paletteOpen.value = false;
-      if (it && it.run) it.run();
-    }
-
-    function onPaletteKey(e) {
-      if (e.key === "ArrowDown") {
-        e.preventDefault();
-        paletteIdx.value = Math.min(
-          paletteIdx.value + 1,
-          paletteResults.value.length - 1,
-        );
-      } else if (e.key === "ArrowUp") {
-        e.preventDefault();
-        paletteIdx.value = Math.max(0, paletteIdx.value - 1);
-      } else if (e.key === "Enter") {
-        const it = paletteResults.value[paletteIdx.value];
-        if (it) runPalette(it);
-      }
-    }
-
-    onMounted(() => {
-      window.addEventListener("keydown", (e) => {
-        if (
-          (e.ctrlKey || e.metaKey) &&
-          !e.shiftKey &&
-          !e.altKey &&
-          e.code === "KeyK"
-        ) {
-          e.preventDefault();
-          openPalette();
-        } else if (e.key === "Escape" && paletteOpen.value)
-          paletteOpen.value = false;
-      });
-    });
-
-    async function focusFile(f) {
+    async function focusFile(f: string): Promise<void> {
       focusFileFilter.value = f || "";
       tab.value = "translate";
       if (f) {
@@ -2016,7 +1227,7 @@ const App = defineComponent({
         phrasePage.value = 0;
         phraseSearchQ.value = "";
         const page = await loadFileRows(f, 0, "");
-        let first = null;
+        let first: Entry | null = null;
         try {
           first = await api.rowsNext(projectId.value, {
             file: f,
@@ -2025,15 +1236,21 @@ const App = defineComponent({
           });
           if (first) mergeEntries([first]);
         } catch (e) {
-          logText.value += "\n" + e.message;
+          logText.value += "\n" + errorMessage(e);
         }
         const fallback =
           page && page.groups.length ? page.groups[0].cells[0] : null;
-        if (first || fallback) setFocusId((first || fallback).id);
+        const target = first || fallback;
+        if (target) setFocusId(target.id);
       }
     }
 
-    async function editorRowNext(file, afterRow, afterCol, q) {
+    async function editorRowNext(
+      file: string,
+      afterRow: number,
+      afterCol: number,
+      q: string,
+    ): Promise<Entry | null> {
       const entry = await api.rowsNext(projectId.value, {
         file,
         afterRow,
@@ -2060,11 +1277,15 @@ const App = defineComponent({
       return entry;
     }
 
-    async function editorLoadRowPage(file, page, q) {
+    async function editorLoadRowPage(
+      file: string,
+      page: number,
+      q: string,
+    ): Promise<FileRowState | null> {
       return loadFileRows(file, page, q);
     }
 
-    function onNavigate(f) {
+    function onNavigate(f: string): void {
       focusFile(f);
     }
 
@@ -2082,7 +1303,7 @@ const App = defineComponent({
           { q: searchQ.value.trim() },
           { limit: 50 },
         );
-        matches.value = (d.entries || []).map((e) => ({
+        matches.value = (d.entries || []).map((e: Entry) => ({
           id: e.id,
           file: e.file || "",
           rowKey: e.rowKey || "",
@@ -2090,12 +1311,12 @@ const App = defineComponent({
           translation: e.translation || "",
         }));
       } catch (e) {
-        logText.value += "\n" + e.message;
+        logText.value += "\n" + errorMessage(e);
       }
       searchLoading.value = false;
     }
 
-    async function openSearchResult(m) {
+    async function openSearchResult(m: SearchMatch): Promise<void> {
       if (!m || !m.id) {
         logText.value += "\nФраза не найдена";
         return;
@@ -2133,15 +1354,15 @@ const App = defineComponent({
               } catch (e2) {}
             }, 2400);
           }
-        } catch (e) {}
+        } catch {}
         logText.value += "\nПереход по поиску: " + (f ? f + ", " : "") + m.id;
       } catch (e) {
         logText.value +=
-          "\n" + (e.message || "Не удалось открыть результат поиска");
+          "\n" + (errorMessage(e) || "Не удалось открыть результат поиска");
       }
     }
 
-    async function openConflict(c) {
+    async function openConflict(c: DeltaConflict): Promise<void> {
       if (!c || !c.cellId) return;
       await ensureEntry(c.cellId);
       const ed = editorRef.value;
@@ -2153,7 +1374,12 @@ const App = defineComponent({
       logText.value += "\nКонфликт дельты: " + c.cellId;
     }
 
-    async function onResolveConflict({ id, mode, translation, status }) {
+    async function onResolveConflict({
+      id,
+      mode,
+      translation,
+      status,
+    }: ConflictResolution): Promise<void> {
       try {
         if (mode === "ours") {
           if (editorRef.value && editorRef.value.closeConflictTab)
@@ -2165,19 +1391,19 @@ const App = defineComponent({
         const uuid =
           (found && found.uuid) ||
           (await api.entryByCell(projectId.value, id)).uuid;
-        await onSave({ id, uuid, translation, status });
+        await onSave({ id, uuid, translation: translation ?? "", status });
         if (editorRef.value && editorRef.value.closeConflictTab)
           editorRef.value.closeConflictTab(id);
         showToast("Взято из дельты — применено");
         if (deltaRef.value && deltaRef.value.doPreview)
           deltaRef.value.doPreview();
       } catch (e) {
-        showToast(e.message);
+        showToast(errorMessage(e));
       }
     }
 
     // extract (right panel)
-    async function runExtract(force = false) {
+    async function runExtract(force = false): Promise<void> {
       try {
         const d = await api.startJob({
           action: "extract",
@@ -2191,12 +1417,12 @@ const App = defineComponent({
           (force ? " (все таблицы)" : " (только изменённые файлы)");
         startJob(d);
       } catch (e) {
-        logText.value += "\n" + e.message;
+        logText.value += "\n" + errorMessage(e);
       }
     }
 
     async function run(
-      action,
+      action: string,
       extra: { model?: string; reasoning?: string } = {},
     ) {
       if (action === "gemini" && !geminiStatus.value.configured) {
@@ -2239,7 +1465,7 @@ const App = defineComponent({
         startJob(d);
       } catch (e) {
         pendingPack.value = false;
-        logText.value += "\n" + e.message;
+        logText.value += "\n" + errorMessage(e);
       }
     }
 
@@ -2260,14 +1486,14 @@ const App = defineComponent({
       await run("merge");
     }
 
-    function toggleTranslate(f, v) {
+    function toggleTranslate(f: string, v: boolean): void {
       const s = new Set(selTranslate.value);
       v ? s.add(f) : s.delete(f);
       selTranslate.value = [...s];
       saveSelection();
     }
 
-    function selTranslateVisible(v, list) {
+    function selTranslateVisible(v: boolean, list?: string[]): void {
       const s = new Set(selTranslate.value);
       (list || sourceFiles.value).forEach((f) => (v ? s.add(f) : s.delete(f)));
       selTranslate.value = [...s];
@@ -2278,7 +1504,7 @@ const App = defineComponent({
       saveSelection();
     }
 
-    function toggleExport(f, v) {
+    function toggleExport(f: string, v: boolean): void {
       const s = new Set(selExport.value);
       v ? s.add(f) : s.delete(f);
       selExport.value = [...s];
@@ -2290,7 +1516,11 @@ const App = defineComponent({
       saveSelection();
     }
 
-    async function runTranslate(provider, model, reasoning) {
+    async function runTranslate(
+      provider: string,
+      model?: string,
+      reasoning?: string,
+    ): Promise<void> {
       if (jobActive()) {
         showToast("Дождитесь завершения текущей задачи");
         return;
@@ -2313,7 +1543,17 @@ const App = defineComponent({
       });
     }
 
-    async function onSave({ id, uuid, translation, status }) {
+    async function onSave({
+      id,
+      uuid,
+      translation,
+      status,
+    }: {
+      id: string;
+      uuid: string;
+      translation: string;
+      status: string;
+    }): Promise<void> {
       try {
         const previous = localEntry(id);
         const d = await api.patchEntry(
@@ -2337,12 +1577,12 @@ const App = defineComponent({
           editorRef.value.noteChanged();
         (d.warnings || []).forEach((w) => (logText.value += "\n[Тег] " + w));
       } catch (e) {
-        showToast(e.message);
-        logText.value += "\n" + e.message;
+        showToast(errorMessage(e));
+        logText.value += "\n" + errorMessage(e);
       }
     }
 
-    async function onConfirm(p) {
+    async function onConfirm(p: string): Promise<void> {
       projectId.value = p;
       showPicker.value = false;
       pack.value = null;
@@ -2356,7 +1596,7 @@ const App = defineComponent({
 
     const toast = ref("");
 
-    function showToast(m) {
+    function showToast(m: string): void {
       toast.value = m;
       setTimeout(() => (toast.value = ""), 3000);
     }
@@ -2369,7 +1609,7 @@ const App = defineComponent({
     const packCompat = ref("");
     const packLangs = ref("");
 
-    function blankPack() {
+    function blankPack(): PackMeta {
       return {
         packId: "",
         translationVersion: "",
@@ -2390,13 +1630,15 @@ const App = defineComponent({
       };
     }
 
-    function applyPack(d) {
+    function applyPack(d: PackResponse): void {
       pack.value = Object.assign(blankPack(), d.pack || {});
-      if (!pack.value.gameVersion && sourceStatus.value.gameVersion)
-        pack.value.gameVersion = sourceStatus.value.gameVersion;
-      if (!Array.isArray(pack.value.authors)) pack.value.authors = [];
-      packCompat.value = (pack.value.compatibleGameVersions || []).join(", ");
-      packLangs.value = (pack.value.languages || []).join(", ");
+      const currentPack = pack.value;
+      if (!currentPack) return;
+      if (!currentPack.gameVersion && sourceStatus.value.gameVersion)
+        currentPack.gameVersion = sourceStatus.value.gameVersion;
+      if (!Array.isArray(currentPack.authors)) currentPack.authors = [];
+      packCompat.value = (currentPack.compatibleGameVersions || []).join(", ");
+      packLangs.value = (currentPack.languages || []).join(", ");
       packErrors.value = d.errors || [];
       packManifest.value = d.manifest || null;
     }
@@ -2405,18 +1647,19 @@ const App = defineComponent({
       try {
         applyPack(await api.getPack(projectId.value));
       } catch (e) {
-        packMsg.value = e.message;
+        packMsg.value = errorMessage(e);
       }
     }
 
     function packAddAuthor() {
       if (!pack.value) return;
-      pack.value.authors.push({ name: "", role: "" });
+      const authors = pack.value.authors || (pack.value.authors = []);
+      authors.push({ name: "", role: "" });
     }
 
-    function packDelAuthor(i) {
+    function packDelAuthor(i: number): void {
       if (!pack.value) return;
-      pack.value.authors.splice(i, 1);
+      pack.value.authors?.splice(i, 1);
     }
 
     async function savePack() {
@@ -2425,11 +1668,11 @@ const App = defineComponent({
       const p = Object.assign({}, pack.value, {
         compatibleGameVersions: packCompat.value
           .split(",")
-          .map((s) => s.trim())
+          .map((s: string) => s.trim())
           .filter(Boolean),
         languages: packLangs.value
           .split(",")
-          .map((s) => s.trim())
+          .map((s: string) => s.trim())
           .filter(Boolean),
         authors: (pack.value.authors || [])
           .filter((a) => a && (a.name || "").trim())
@@ -2447,14 +1690,20 @@ const App = defineComponent({
             : "Сохранено";
         logText.value += "\nНастройки пака сохранены";
       } catch (e) {
-        packMsg.value = e.message;
+        packMsg.value = errorMessage(e);
       }
     }
 
-    function esc(s) {
+    function esc(s: unknown): string {
       return String(s).replace(
         /[&<>]/g,
-        (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c],
+        (c) =>
+          (
+            ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }) as Record<
+              string,
+              string
+            >
+          )[c],
       );
     }
 
@@ -3286,12 +2535,13 @@ export default App;
               <template v-for="(g, gi) in rowGroupsPaged" :key="g.row">
                 <div
                   v-if="
-                    gi === 0 || g.section !== rowGroupsPaged[gi - 1].section
+                    gi === 0 ||
+                    (g.section ?? 0) !== (rowGroupsPaged[gi - 1].section ?? 0)
                   "
                   class="ft-section"
                 >
-                  Строки {{ g.section * 100 + 1 }}–{{
-                    Math.min((g.section + 1) * 100, fileRows.totalGroups)
+                  Строки {{ (g.section ?? 0) * 100 + 1 }}–{{
+                    Math.min(((g.section ?? 0) + 1) * 100, fileRows.totalGroups)
                   }}
                 </div>
                 <div

@@ -1,5 +1,5 @@
 <script lang="ts">
-import { defineComponent } from "vue";
+import { defineComponent, type PropType } from "vue";
 import {
   highlightTags,
   renderGamePreview,
@@ -12,6 +12,7 @@ import {
   tagKindOf as kindOfTag,
   tagKindLabel as kindLabel,
 } from "../domain/tags";
+import type { TagKind } from "../domain/tags";
 import {
   ENTRY_STATUS,
   ENTRY_STATUS_DOTS,
@@ -21,21 +22,115 @@ import {
   statusTone as entryStatusTone,
 } from "../domain/translationStatus";
 import { api } from "../api/client";
+import type {
+  DeltaConflict,
+  Entry,
+  RowGroup,
+  RowGroupsPage,
+  SourcePreview,
+} from "../api/types";
 import CsvPreview from "./CsvPreview.vue";
+
+interface EditorTab {
+  kind: "file" | "csv" | "conflict";
+  id?: string;
+  file: string;
+  phraseId?: string | null;
+  data?: SourcePreview | null;
+  loading?: boolean;
+  error?: string;
+  theirs?: { translation: string; status: string };
+}
+
+interface EditorDraft {
+  translation: string;
+  status: string;
+  baseUpdatedAt: string;
+}
+
+interface EditorRowContext {
+  file: string;
+  q: string;
+  page: number;
+  pageSize: number;
+  totalGroups: number;
+  groups: Array<RowGroup & { pos?: number }>;
+}
+
+interface TabMenuState {
+  t: EditorTab;
+  x: number;
+  y: number;
+}
+
+interface EditorData {
+  tabs: EditorTab[];
+  activeTab: EditorTab | null;
+  drafts: Record<string, EditorDraft>;
+  translation: string;
+  status: string;
+  preview: boolean;
+  jumpError: string;
+  rev: number;
+  pendingOpen: string | null;
+  pinned: string | null;
+  pinData: SourcePreview | null;
+  pinLoading: boolean;
+  pinError: string;
+  previewH: number;
+  tabMenu: TabMenuState | null;
+  statusOpen: boolean;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 export default defineComponent({
   components: { CsvPreview },
-  props: [
-    "entries",
-    "focusId",
-    "storeKey",
-    "csvOpen",
-    "csvRoot",
-    "pinRequest",
-    "rowContext",
-    "rowNext",
-    "loadRowPage",
-    "followRow",
-  ],
+  props: {
+    entries: { type: Array as PropType<Entry[]>, default: () => [] },
+    focusId: { type: String, default: "" },
+    storeKey: { type: String, default: "default" },
+    csvOpen: {
+      type: Object as PropType<{ file: string } | null>,
+      default: null,
+    },
+    csvRoot: { type: String, default: "" },
+    pinRequest: {
+      type: Object as PropType<{ file: string } | null>,
+      default: null,
+    },
+    rowContext: {
+      type: Object as PropType<EditorRowContext>,
+      default: () => ({
+        file: "",
+        q: "",
+        page: 0,
+        pageSize: 1,
+        totalGroups: 0,
+        groups: [],
+      }),
+    },
+    rowNext: {
+      type: Function as PropType<
+        (
+          file: string,
+          afterRow: number,
+          afterCol: number,
+          q: string,
+        ) => Promise<Entry | null>
+      >,
+      default: null,
+    },
+    loadRowPage: {
+      type: Function as PropType<
+        (file: string, page: number, q: string) => Promise<RowGroupsPage>
+      >,
+      default: null,
+    },
+    followRow: { type: Boolean, default: false },
+  },
   emits: [
     "save",
     "navigate",
@@ -46,7 +141,7 @@ export default defineComponent({
     "entry",
     "toggle-follow-row",
   ],
-  data() {
+  data(): EditorData {
     let previewH = 240;
     try {
       previewH = Math.min(
@@ -74,9 +169,9 @@ export default defineComponent({
     };
   },
   computed: {
-    byId() {
+    byId(): Record<string, Entry> {
       void this.rev;
-      const m = {};
+      const m: Record<string, Entry> = {};
       (this.entries || []).forEach((e) => {
         m[e.id] = e;
       });
@@ -101,12 +196,12 @@ export default defineComponent({
         ""
       );
     },
-    fileEntries() {
+    fileEntries(): Entry[] {
       void this.rev;
       const f = this.activeFile;
       if (!f) return [];
       const byId = this.byId;
-      const cells = [];
+      const cells: Entry[] = [];
       for (const group of (this.rowContext && this.rowContext.groups) || []) {
         for (const cell of group.cells || []) cells.push(byId[cell.id] || cell);
       }
@@ -118,17 +213,19 @@ export default defineComponent({
     },
     filePos() {
       if (!this.current) return null;
-      const group = ((this.rowContext && this.rowContext.groups) || []).find(
-        (g) => (g.cells || []).some((e) => e.id === this.current.id),
+      const currentId = this.current.id;
+      const group = this.rowContext.groups.find((g) =>
+        (g.cells || []).some((e) => e.id === currentId),
       );
       if (!group || typeof group.pos !== "number") return null;
       return { i: group.pos + 1, n: this.rowContext.totalGroups || 0 };
     },
     neighbors() {
       if (!this.current) return { prev: null, next: null };
-      const i = this.fileEntries.findIndex((e) => e.id === this.current.id);
+      const currentId = this.current.id;
+      const i = this.fileEntries.findIndex((e) => e.id === currentId);
       if (i < 0) return { prev: null, next: null };
-      const txt = (e) =>
+      const txt = (e: Entry | undefined) =>
         e
           ? {
               id: e.id,
@@ -146,7 +243,7 @@ export default defineComponent({
       return !!(
         this.activeFile &&
         this.rowContext &&
-        this.loadRowPage &&
+        typeof this.loadRowPage === "function" &&
         Number(this.rowContext.page) > 0
       );
     },
@@ -201,7 +298,9 @@ export default defineComponent({
     },
     conflictEntry() {
       return this.activeTab && this.activeTab.kind === "conflict"
-        ? this.byId[this.activeTab.id] || null
+        ? this.activeTab.id
+          ? this.byId[this.activeTab.id] || null
+          : null
         : null;
     },
     highlightedConflictSource() {
@@ -287,58 +386,64 @@ export default defineComponent({
     document.removeEventListener("click", this.closeStatusOutside, true);
   },
   methods: {
-    esc(s) {
+    esc(s: string): string {
       return String(s).replace(
         /[&<>]/g,
-        (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c],
+        (c: string) =>
+          (
+            ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }) as Record<
+              string,
+              string
+            >
+          )[c],
       );
     },
-    statusLabel(v) {
+    statusLabel(v: string): string {
       const o = this.statusOptions.find((o) => o.value === v);
       return o ? o.label : v;
     },
-    statusDot(v) {
-      return ENTRY_STATUS_DOTS[v] || "mut";
+    statusDot(v: string): string {
+      return (ENTRY_STATUS_DOTS as Record<string, string>)[v] || "mut";
     },
-    statusTone(v) {
+    statusTone(v: string): string {
       return entryStatusTone(v);
     },
-    closeStatusOutside(e) {
+    closeStatusOutside(e: MouseEvent): void {
       if (
         this.statusOpen &&
         e.target &&
-        e.target.closest &&
+        e.target instanceof Element &&
         !e.target.closest(".st-wrap")
       )
         this.statusOpen = false;
     },
-    tagKindOf(t) {
+    tagKindOf(t: string): ReturnType<typeof kindOfTag> {
       return kindOfTag(t);
     },
-    tagKindLabel(k) {
+    tagKindLabel(k: TagKind): string {
       return kindLabel(k);
     },
-    normTag(t) {
+    normTag(t: string): string {
       return normTag(t);
     },
-    tabLabel(t) {
+    tabLabel(t: EditorTab): string {
       if (t.kind === "csv") return t.file;
       if (t.kind === "file")
         return (t.file || "").split("/").pop() || t.file || "файл";
       if (t.kind === "conflict")
         return "≠ " + ((t.file || "").split("/").pop() || t.id);
-      const e = this.byId[t.id] || {};
+      const e: Partial<Entry> = t.id ? this.byId[t.id] || {} : {};
       const s = String(e.source || "").slice(0, 26);
       const where = e.file
         ? e.file.split("/").pop() + ":" + (e.rowKey || "")
         : "";
       return (where ? where + " · " : "") + (s || t.id);
     },
-    tabTitle(t) {
+    tabTitle(t: EditorTab): string {
       if (t.kind === "csv") return "Таблица: " + t.file;
       if (t.kind === "file") return "Файл: " + (t.file || "");
       if (t.kind === "conflict") return "Конфликт дельты: " + (t.file || t.id);
-      const e = this.byId[t.id] || {};
+      const e: Partial<Entry> = t.id ? this.byId[t.id] || {} : {};
       return (
         (e.file || "") +
         " · " +
@@ -349,7 +454,7 @@ export default defineComponent({
         String(e.source || t.id)
       );
     },
-    dirty(t) {
+    dirty(t: EditorTab): boolean {
       if (!t || t.kind !== "file") return false;
       for (const id of Object.keys(this.drafts)) {
         const d = this.drafts[id],
@@ -372,7 +477,7 @@ export default defineComponent({
         baseUpdatedAt: c.updatedAt || "",
       };
     },
-    trimTabs(keep) {
+    trimTabs(keep: EditorTab): void {
       while (this.tabs.length > 30) {
         const i = this.tabs.findIndex(
           (t) => t !== this.activeTab && t !== keep,
@@ -447,7 +552,7 @@ export default defineComponent({
       } catch (e) {}
       if (this.tabs.length) this.activateTab(this.tabs[0]);
     },
-    openTab(id) {
+    openTab(id: string): void {
       if (!this.byId[id]) {
         this.pendingOpen = id;
         this.jumpError = "Загрузка фразы…";
@@ -469,7 +574,7 @@ export default defineComponent({
       }
       this.activateTab(t);
     },
-    async pinFile(file) {
+    async pinFile(file: string): Promise<void> {
       if (!file) return;
       this.pinned = file;
       this.pinData = null;
@@ -478,15 +583,15 @@ export default defineComponent({
       try {
         this.pinData = await api.previewFull(this.csvRoot || "", file);
       } catch (e) {
-        this.pinError = e.message;
+        this.pinError = errorMessage(e);
       }
       this.pinLoading = false;
     },
-    startPinResize(e) {
+    startPinResize(e: MouseEvent): void {
       e.preventDefault();
       const y0 = e.clientY,
         h0 = this.previewH;
-      const move = (ev) => {
+      const move = (ev: MouseEvent): void => {
         this.previewH = Math.min(
           640,
           Math.max(80, Math.round(h0 + (y0 - ev.clientY))),
@@ -502,7 +607,7 @@ export default defineComponent({
       window.addEventListener("mousemove", move);
       window.addEventListener("mouseup", up);
     },
-    async openCsv(file) {
+    async openCsv(file: string): Promise<void> {
       let t = this.tabs.find((t) => t.kind === "csv" && t.file === file);
       if (!t) {
         t = { kind: "csv", file, data: null, loading: true, error: "" };
@@ -512,13 +617,13 @@ export default defineComponent({
         try {
           t.data = await api.previewFull(this.csvRoot || "", file);
         } catch (e) {
-          t.error = e.message;
+          t.error = errorMessage(e);
         }
         t.loading = false;
       }
       this.activateTab(t);
     },
-    async activateTab(t) {
+    async activateTab(t: EditorTab): Promise<void> {
       if (this.activeTab !== t) this.stashDraft();
       this.activeTab = t;
       this.jumpError = "";
@@ -532,7 +637,8 @@ export default defineComponent({
               t.phraseId = found && found.id ? found.id : null;
               await this.$nextTick();
             } catch (e) {
-              this.jumpError = e.message || "Не удалось найти первую фразу";
+              this.jumpError =
+                errorMessage(e) || "Не удалось найти первую фразу";
             }
           }
         }
@@ -541,36 +647,42 @@ export default defineComponent({
         this.$emit("file", t.file);
       }
     },
-    pickPhrase(file) {
+    pickPhrase(file: string): string | null {
       const list = this.fileEntries.filter(
         (e) => (e.file || "") === (file || ""),
       );
       const un = list.find((e) => needsWork(e));
       return (un || list[0] || {}).id || null;
     },
-    loadPhrase(id) {
-      const e = id ? this.byId[id] : null;
+    loadPhrase(id: string | null | undefined): void {
+      if (!id) {
+        this.translation = "";
+        this.status = ENTRY_STATUS.UNTRANSLATED;
+        return;
+      }
+      const e = this.byId[id];
       if (!e) {
         this.translation = "";
         this.status = ENTRY_STATUS.UNTRANSLATED;
         return;
       }
-      let d = this.drafts[id];
-      if (d && !("baseUpdatedAt" in d)) d.baseUpdatedAt = e.updatedAt || "";
+      let d: EditorDraft | undefined = this.drafts[id];
+      if (d && typeof d.baseUpdatedAt !== "string")
+        d.baseUpdatedAt = e.updatedAt || "";
       if (d && d.baseUpdatedAt !== (e.updatedAt || "")) {
         delete this.drafts[id];
-        d = null;
+        d = undefined;
       }
       this.translation = d ? d.translation : e.translation || "";
       this.status = d ? d.status : e.status || ENTRY_STATUS.UNTRANSLATED;
     },
-    tabMouse(t, e) {
+    tabMouse(t: EditorTab, e: MouseEvent): void {
       if (e && e.button === 1) {
         e.preventDefault();
         this.closeTab(t);
       }
     },
-    closeTab(t, ev) {
+    closeTab(t: EditorTab, ev?: Event): void {
       if (ev) ev.stopPropagation();
       const i = this.tabs.indexOf(t);
       if (i < 0) return;
@@ -589,10 +701,10 @@ export default defineComponent({
     noteChanged() {
       this.rev++;
     },
-    jumpToPos(pos) {
+    jumpToPos(pos: number): void {
       this.preview = false;
       this.$nextTick(() => {
-        const ta = this.$refs.ta;
+        const ta = this.$refs.ta as HTMLTextAreaElement | undefined;
         if (!ta) return;
         ta.focus();
         try {
@@ -600,21 +712,23 @@ export default defineComponent({
         } catch (e) {}
       });
     },
-    onPreviewClick(e) {
-      const el = e.target.closest ? e.target.closest("[data-err]") : null;
-      if (el && el.dataset && el.dataset.err !== undefined)
-        this.jumpToPos(Number(el.dataset.err));
+    onPreviewClick(e: MouseEvent): void {
+      const el =
+        e.target instanceof Element ? e.target.closest("[data-err]") : null;
+      const element = el as HTMLElement | null;
+      if (element?.dataset.err !== undefined)
+        this.jumpToPos(Number(element.dataset.err));
     },
-    needsWork(e) {
+    needsWork(e: Entry): boolean {
       return needsWork(e);
     },
-    select(e) {
+    select(e: Entry): void {
       this.openTab(e.id);
     },
-    focusEntry(id) {
+    focusEntry(id: string): void {
       this.openTab(id);
     },
-    openConflictTab(c) {
+    openConflictTab(c: DeltaConflict): void {
       if (!c || !c.cellId) return;
       let t = this.tabs.find((t) => t.kind === "conflict" && t.id === c.cellId);
       if (!t) {
@@ -632,22 +746,26 @@ export default defineComponent({
       }
       this.activateTab(t);
     },
-    closeConflictTab(id) {
+    closeConflictTab(id: string): void {
       const t = this.tabs.find((t) => t.kind === "conflict" && t.id === id);
       if (t) this.closeTab(t);
     },
-    openTabMenu(t, e) {
+    openTabMenu(t: EditorTab, e: MouseEvent): void {
       this.tabMenu = {
         t,
         x: Math.min(e.clientX, window.innerWidth - 200),
         y: Math.min(e.clientY, window.innerHeight - 150),
       };
     },
-    closeTabMenuOutside(e) {
-      if (this.tabMenu && e.target && !e.target.closest(".dz-menu"))
+    closeTabMenuOutside(e: MouseEvent): void {
+      if (
+        this.tabMenu &&
+        e.target instanceof Element &&
+        !e.target.closest(".dz-menu")
+      )
         this.tabMenu = null;
     },
-    runTabMenu(act) {
+    runTabMenu(act: "one" | "others" | "all"): void {
       const t = this.tabMenu && this.tabMenu.t;
       this.tabMenu = null;
       if (!t) return;
@@ -658,7 +776,7 @@ export default defineComponent({
         });
       else if (act === "all") [...this.tabs].forEach((x) => this.closeTab(x));
     },
-    navList() {
+    navList(): Entry[] {
       return this.activeFile ? this.fileEntries : this.entries || [];
     },
     async nextUntranslated() {
@@ -678,19 +796,21 @@ export default defineComponent({
             this.jumpError = "Непереведённых фраз больше нет";
           }
         } catch (e) {
-          this.jumpError = e.message || "Не удалось найти следующую фразу";
+          this.jumpError =
+            errorMessage(e) || "Не удалось найти следующую фразу";
         }
         return;
       }
       const list = this.navList();
-      const i = list.findIndex((x) => x.id === this.current.id);
+      const currentId = this.current.id;
+      const i = list.findIndex((x) => x.id === currentId);
       const found =
         list.slice(i + 1).find((x) => this.needsWork(x)) ||
         list.slice(0, Math.max(i, 0)).find((x) => this.needsWork(x));
       if (found) this.select(found);
       else this.jumpError = "Непереведённых фраз больше нет";
     },
-    save(next = false) {
+    save(next = false): void {
       if (!this.current) return;
       if (this.tagIssues.length) return;
       if (
@@ -719,11 +839,11 @@ export default defineComponent({
       delete this.drafts[this.current.id];
       if (next) this.$nextTick(() => this.nextUntranslated());
     },
-    insertTag(t) {
+    insertTag(t: string | { open: string; close?: string }): void {
       if (!this.current) return;
       const open = typeof t === "string" ? t : t.open;
       const close = typeof t === "string" ? "" : t.close || "";
-      const ta = this.$refs.ta;
+      const ta = this.$refs.ta as HTMLTextAreaElement | undefined;
       if (!ta) {
         this.translation += open + close;
         return;
@@ -742,10 +862,11 @@ export default defineComponent({
         ta.setSelectionRange(p, p);
       });
     },
-    async openNeighbor(delta) {
+    async openNeighbor(delta: number): Promise<void> {
       if (!this.current) return;
       const list = this.navList();
-      const i = list.findIndex((x) => x.id === this.current.id);
+      const currentId = this.current.id;
+      const i = list.findIndex((x) => x.id === currentId);
       if (i >= 0 && i + delta >= 0 && i + delta < list.length) {
         this.select(list[i + delta]);
         return;
@@ -778,10 +899,11 @@ export default defineComponent({
           this.select(candidate);
         }
       } catch (e) {
-        this.jumpError = e.message || "Не удалось загрузить соседнюю страницу";
+        this.jumpError =
+          errorMessage(e) || "Не удалось загрузить соседнюю страницу";
       }
     },
-    moveByCell(delta) {
+    moveByCell(delta: number): Promise<void> {
       return this.openNeighbor(delta);
     },
     next() {
@@ -888,7 +1010,7 @@ export default defineComponent({
           </div>
           <div>
             <div class="ed-col-label">
-              <span>Их ({{ activeTab.theirs.status || "—" }})</span>
+              <span>Их ({{ activeTab.theirs?.status || "—" }})</span>
             </div>
             <div class="ed-text" v-html="conflictTheirsPreview"></div>
           </div>
@@ -901,8 +1023,8 @@ export default defineComponent({
             $emit('resolve', {
               id: activeTab.id,
               mode: 'theirs',
-              translation: activeTab.theirs.translation,
-              status: activeTab.theirs.status,
+              translation: activeTab.theirs?.translation || '',
+              status: activeTab.theirs?.status || '',
             })
           "
         >

@@ -4,7 +4,7 @@ export default defineComponent({
   props: ["q", "matches", "loading"],
   emits: ["update:q", "search", "open"],
   methods: {
-    hl(text) {
+    hl(text: string): string {
       const q = (this.q || "").trim();
       if (!q) return this.esc(text);
       const re = new RegExp(
@@ -13,10 +13,16 @@ export default defineComponent({
       );
       return this.esc(text).replace(re, "<mark>$1</mark>");
     },
-    esc(s) {
+    esc(s: string): string {
       return String(s).replace(
         /[&<>]/g,
-        (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c],
+        (c) =>
+          (
+            ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }) as Record<
+              string,
+              string
+            >
+          )[c],
       );
     },
   },

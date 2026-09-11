@@ -2,9 +2,18 @@
 import { defineComponent } from "vue";
 import { TAG_CATALOG } from "../domain/tagCatalog";
 import { tagKindLabel } from "../domain/tags";
+import type { TagKind } from "../domain/tags";
 import { UI_COLORS } from "../domain/uiColors";
 
-const KINDS = ["break", "color", "fmt", "logic", "value", "media", "misc"];
+const KINDS: readonly Exclude<TagKind, "anon">[] = [
+  "break",
+  "color",
+  "fmt",
+  "logic",
+  "value",
+  "media",
+  "misc",
+] as const;
 const UI_TAG_NAMES = ["colortype", "edgecolortype"];
 const RGB_TAG_NAMES = ["color", "edgecolor", "shadowcolor"];
 const RGB_PRESETS = [
@@ -42,16 +51,25 @@ const RGB_PRESETS = [
   "#c03000",
 ];
 
-function hexToArgbDec(hex) {
+type TagItem = (typeof TAG_CATALOG)[number];
+
+interface TagsData {
+  cat: "all" | Exclude<TagKind, "anon">;
+  uiId: Record<string, string>;
+  rgb: Record<string, string>;
+  paletteFor: string | null;
+}
+
+function hexToArgbDec(hex: string): string | null {
   const m = /^#([0-9a-fA-F]{6})$/.exec(hex || "");
   if (!m) return null;
   return ((255 * 16777216 + parseInt(m[1], 16)) >>> 0).toString();
 }
 
 export default defineComponent({
-  props: ["filter"],
+  props: { filter: { type: String, default: "" } },
   emits: ["update:filter", "insert"],
-  data() {
+  data(): TagsData {
     return {
       cat: "all",
       uiId: { colortype: "506", edgecolortype: "507" },
@@ -60,7 +78,7 @@ export default defineComponent({
     };
   },
   computed: {
-    cats() {
+    cats(): Array<{ kind: TagsData["cat"]; label: string }> {
       return KINDS.map((k) => ({ kind: k, label: tagKindLabel(k) }));
     },
     uiEntries() {
@@ -89,17 +107,17 @@ export default defineComponent({
     },
   },
   methods: {
-    isUiTag(t) {
+    isUiTag(t: TagItem | string): boolean {
       return UI_TAG_NAMES.includes(typeof t === "string" ? t : t.n);
     },
-    isRgbTag(t) {
+    isRgbTag(t: TagItem | string): boolean {
       return RGB_TAG_NAMES.includes(typeof t === "string" ? t : t.n);
     },
-    uiColor(name) {
+    uiColor(name: string): string | null {
       const id = (this.uiId[name] || "").trim();
-      return UI_COLORS[id] || null;
+      return (UI_COLORS as Record<string, string>)[id] || null;
     },
-    previewStyle(name) {
+    previewStyle(name: string): string {
       if (this.isUiTag(name)) {
         const c = this.uiColor(name);
         if (!c) return "";
@@ -115,7 +133,7 @@ export default defineComponent({
               ";"
           : "color:" + c + ";";
       }
-      const dec = hexToArgbDec(this.rgb[name]);
+      const dec = hexToArgbDec(this.rgb[name] || "");
       if (dec == null) return "";
       const n = Number(dec);
       const css =
@@ -138,7 +156,7 @@ export default defineComponent({
         );
       return "text-shadow:2px 2px 0 " + css + ";";
     },
-    insertSkeleton(t) {
+    insertSkeleton(t: TagItem): void {
       if (this.isUiTag(t)) {
         this.insertUiTag(t);
         return;
@@ -150,7 +168,7 @@ export default defineComponent({
       if (!t.ins) return;
       this.$emit("insert", t.close ? { open: t.ins, close: t.close } : t.ins);
     },
-    insertTitle(t) {
+    insertTitle(t: TagItem): string {
       if (this.isUiTag(t)) {
         const id = (this.uiId[t.n] || "").trim();
         return "Вставить <" + t.n + "(" + (id || "…") + ")>";
@@ -161,11 +179,11 @@ export default defineComponent({
       }
       return "Вставить " + t.ins + (t.close || "");
     },
-    insertUiTag(t) {
+    insertUiTag(t: TagItem): void {
       const id = (this.uiId[t.n] || "").trim();
       this.$emit("insert", id ? "<" + t.n + "(" + id + ")>" : t.ins);
     },
-    togglePalette(name) {
+    togglePalette(name: string): void {
       this.paletteFor = this.paletteFor === name ? null : name;
       document.removeEventListener("click", this.onDocClick, true);
       if (this.paletteFor) {
@@ -174,27 +192,30 @@ export default defineComponent({
         );
       }
     },
-    onDocClick(e) {
+    onDocClick(e: MouseEvent): void {
       if (!this.paletteFor) return;
-      if (e.target.closest && e.target.closest(".palette-pop,.pal-toggle"))
+      if (
+        e.target instanceof Element &&
+        e.target.closest(".palette-pop,.pal-toggle")
+      )
         return;
       this.paletteFor = null;
       document.removeEventListener("click", this.onDocClick, true);
     },
-    pickUi(name, id) {
+    pickUi(name: string, id: string): void {
       this.uiId[name] = id;
     },
-    pickRgb(name, hex) {
+    pickRgb(name: string, hex: string): void {
       this.rgb[name] = hex;
     },
-    fmtSample(name) {
+    fmtSample(name: string): string {
       if (name === "italic") return "<i>Пример текста</i>";
       if (name === "bold") return "<b>Пример текста</b>";
       if (name === "ruby") return "<ruby>Пример текста<rt>чтение</rt></ruby>";
       return "";
     },
-    insertRgbTag(t) {
-      const dec = hexToArgbDec(this.rgb[t.n]);
+    insertRgbTag(t: TagItem): void {
+      const dec = hexToArgbDec(this.rgb[t.n] || "");
       this.$emit("insert", dec ? "<" + t.n + "(" + dec + ")>" : t.ins);
     },
   },
