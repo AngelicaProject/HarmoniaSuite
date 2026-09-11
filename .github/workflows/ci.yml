@@ -7,6 +7,26 @@ on:
     branches: [main]
 
 jobs:
+  installer:
+    name: installer (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+      - run: cargo fmt --check --manifest-path apps/installer/Cargo.toml
+      - run: cargo clippy --manifest-path apps/installer/Cargo.toml --all-targets -- -D warnings
+      - run: cargo test --manifest-path apps/installer/Cargo.toml
+      - run: cargo build --release --manifest-path apps/installer/Cargo.toml
+
   desktop:
     name: desktop (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
