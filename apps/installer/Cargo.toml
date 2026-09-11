@@ -1,0 +1,23 @@
+[package]
+name = "harmonia-installer"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+description = "Transactional installation and update primitives for Harmonia Suite"
+license = "MIT"
+
+[dependencies]
+fs2 = "0.4"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+thiserror = "2"
+uuid = { version = "1", features = ["v4"] }
+wait-timeout = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Storage_FileSystem"] }
+
+[dev-dependencies]
+tempfile = "3"
