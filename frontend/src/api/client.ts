@@ -316,12 +316,12 @@ function mapDeltaResult(value: unknown): DeltaImportResult {
   };
 }
 
-function query(
-  params: Record<string, string | number | boolean | undefined>,
-): string {
+export type QueryValue = string | number | boolean | null | undefined;
+
+export function query(params: Record<string, QueryValue>): string {
   const search = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
-    if (value !== undefined && value !== "" && value !== false && value !== 0) {
+    if (value !== undefined && value !== null && value !== "") {
       search.set(key, String(value));
     }
   }
@@ -364,7 +364,8 @@ function mapUpdateStatus(data: Record<string, unknown>): UpdateStatus {
   };
 }
 
-function mapSourcePreview(data: Record<string, unknown>): SourcePreview {
+function mapSourcePreview(value: unknown): SourcePreview {
+  const data = record(value);
   return {
     file: String(data.file || ""),
     rows: Number(data.rows || 0),

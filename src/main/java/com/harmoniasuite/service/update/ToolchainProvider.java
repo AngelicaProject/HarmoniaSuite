@@ -232,7 +232,10 @@ final class ToolchainProvider {
         if (home == null || home.isBlank()) {
             return path;
         }
-        return home + File.pathSeparator + (path == null ? "" : path);
+        if (path == null || path.isBlank()) {
+            return home;
+        }
+        return home + File.pathSeparator + path;
     }
 
     static String minGitDownloadUrl(List<Map<String, String>> assets) {

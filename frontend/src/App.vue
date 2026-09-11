@@ -394,7 +394,7 @@ const App = defineComponent({
     const updTitle = computed(() => {
       const u = upd.value;
       if (u.state === "toolchain_required")
-        return "Для обновления потребуется один раз установить JDK и Git";
+        return "Для обновления потребуется один раз установить JDK, Git и Node.js";
       if (u.state === "local_ahead")
         return "Локальная версия новее origin/main\n" + (u.currentSha || "");
       if (u.state === "diverged")
@@ -3877,7 +3877,7 @@ export default App;
       </template>
       <template v-else>
         <div v-if="upd.needsToolchain" class="muted">
-          Для обновления один раз установятся JDK и Git (около 250 МБ)
+          Для обновления один раз установятся JDK, Git и Node.js
         </div>
         <div v-if="!upd.needsToolchain" class="muted">
           v{{ upd.version }} · {{ (upd.currentSha || "").slice(0, 7) }} →

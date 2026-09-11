@@ -68,13 +68,7 @@ public class UpdateService {
             return failureStatus(version, null, UpdateState.UNAVAILABLE,
                     new UpdateException(UpdateErrorCode.SOURCES_NOT_FOUND));
         }
-        boolean nodeReady;
-        try {
-            nodeReady = ToolchainProvider.nodeHome(root) != null;
-        } catch (UpdateException e) {
-            nodeReady = false;
-        }
-        if (gitBinary == null || ToolchainProvider.javaHome() == null || !nodeReady) {
+        if (gitBinary == null || ToolchainProvider.javaHome() == null) {
             String launchMode = UpdateRelaunch.detectLaunchMode(System.getProperty("java.class.path", ""));
             return new UpdateStatusDto(version, true, launchMode, true,
                     null, null, null, null, false, UpdateState.TOOLCHAIN_REQUIRED,

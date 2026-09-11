@@ -1,400 +1,96 @@
-# Harmonia Suite — Agent Guide
+# Agent Notes
 
-This file documents stable engineering constraints for Harmonia Suite. Keep it concise. Do not turn it into an API catalog or a snapshot of every implementation detail.
+## Stack & Run
 
-## Architecture
+- Single Spring Boot 3.4.3 app under `src/main/java/com/harmoniasuite`; Java 21, Maven wrapper (`mvnw.cmd` on Windows).
+- Run commands from the repo root: `harmonia.workspace` defaults to the cwd, so the cwd defines all relative data paths.
+- Build/verify: `./mvnw.cmd -q -DskipTests compile`, `./mvnw.cmd test`, `./mvnw.cmd package`.
+- git-bash on Windows: export a JDK 21+ `JAVA_HOME` plus native temp dirs (`TMPDIR`/`TMP`/`TEMP` as plain Windows paths, unset lowercase `tmp`); the wrapper dist is pre-seeded under `.m2/wrapper/dists`, no download needed. Known-good `JAVA_HOME`: IntelliJ JBR 21+ (`<ide-home>/jbr`).
+- Local UI via `./mvnw.cmd spring-boot:run`; binds `127.0.0.1:8765`. The user normally runs the app from IntelliJ IDEA — a stale instance may already hold port 8765; probe the live instance before starting a second one. Run the project only via IntelliJ IDEA. A Spring bean with 2+ constructors needs explicit `@Autowired` on the injection one, else boot fails with `NoSuchMethodException: <init>()` — no unit test catches it, only a live boot does (verify with an isolated `--server.port` + temp-workspace instance, never a second 8765).
 
-Harmonia Suite is one product and one repository with two source trees:
+## Tests & Style
 
-```text
-backend:   Spring Boot / Java
-frontend:  Vue / TypeScript / Vite
-```
+- Unit tests under `src/test/java` (JUnit 5, no Spring context). Every test carries an English `@DisplayName`; new tests follow. Fixtures use abstract data only (`example.com`, `pack-one`, `Author One`) — never real vendor, author, or customer names. Code comments minimal, only the non-obvious. No lint, typecheck, or pre-commit configuration.
+- Git: branch `main`, `core.autocrlf=true`. Ignored: `data/` (CSV cache + SQLite), `projects/` (work state), `target/`, `.idea/`. Releases are `vX.Y.Z` tags (see §Release). Commits follow Conventional Commits: `type(scope): subject` (`feat`, `fix`, `docs`, `refactor`, `test`, `chore`, `build`). Committed files stay machine-neutral: no usernames, absolute local paths, IDE versions, secrets, or prompt fragments — generic paths, `%USERPROFILE%`/env placeholders, neutral examples only. Co-authors via PR to `main` only; CI (`ci.yml`) runs tests on `main` push/PR; `release.yml` builds the MSI + portable zip on `v*` tags only. New files meant for commit are staged explicitly (`git add <path>`); never leave intended files untracked. Coverage: JaCoCo XML → Codecov on every CI run (report only, no gates yet). Vulns: CodeQL (`codeql.yml`, push/PR + weekly) + Dependabot (maven, github-actions, weekly PRs).
 
-The backend owns persistence, filesystem access, external AI calls, jobs, exports and update logic.
+## State & Sources
 
-The frontend is a web client of the backend REST API. It must remain usable both from a normal browser and from a future desktop shell. Do not couple frontend business logic to Electron or another desktop runtime.
+- Game sources come from the local install via XivExdUnpacker into versioned cache `data/sources/<gameVersion>/en`. Source autodetect (`GET /api/settings/detect`): game — standard `Program Files` locations; unpacker is always the bundled `<jar>/unpacker/XivExdUnpacker.exe`, no settings for it
+(dev fallback, silent: `HARMONIA_UNPACKER_EXE` env, then VS-default `~/source/repos` build).
+- Project state lives in SQLite (`harmonia.db-path`, default `data/harmonia.db` in the workspace — workspace is the repo root in dev, `%APPDATA%/HarmoniaSuite` when installed; Flyway migrations in `db/migration/sqlite`, hand-written SQL via JdbcTemplate, no ORM). PostgreSQL profile (`-Dspring.profiles.active=postgres`, migrations in `db/migration/postgresql`, `PG_URL/PG_USER/PG_PASSWORD`) for real deploys.
+- `projects/<name>/` keeps only `exported_csv/`. No `project.json` anywhere (no import, no fallback).
+- DB backups (`BackupService`, SQLite profile only): consistent snapshots via `VACUUM INTO` into `backups/` beside the DB file — never raw-copy the live DB (torn `db`+`-wal` pair). Retention in `app_settings` (`backup.retention`, default 10, range 1–100, prune on create + on shrink); restore is manual file replace with the app stopped (README §Database backups, delete `-wal`/`-shm` sidecars); postgres profile answers 400.
 
-Production packaging produces one Spring Boot application that serves both:
+## Jobs, Status, Version
 
-```text
-/        frontend assets
-/api/**  REST API
-```
+- Job actions `extract` -> `gemini`/`openrouter` (optional translation) -> `merge`, plus `update` (self-update), `delete` (project delete), `sync-sources` (source cache sync); `update`/`sync-sources` run without project paths. Async via `POST /api/jobs` (`RunRequest{action,projectId:UUID,root,output,files,force,model,reasoning}`), polled via `GET /api/jobs/{id}` (`JobDto{id,action,status,output,code}`). `DELETE /api/jobs/{id}` cancels cooperatively (checked between batches, in-flight HTTP aborts without retry).
+- `GET /api/status` → `{geminiConfigured, geminiModel, geminiModels, openrouterConfigured, openrouterModel, openrouterReasoning}` for the UI indicator. `GET /api/version` → `{version, buildTime, commit}` (`dev` = non-packaged run, commit empty unless built with `-Dapp.commit=`). `GET /api/update/status` + `POST /api/update` run the self-update as an `update` job.
 
-## Repository layout
+## API
 
-```text
-frontend/                 Vue application source
-src/main/java/            backend source
-src/main/resources/       backend resources and DB migrations
-src/test/java/            backend tests
-tools/                    repository/release tooling
-target/                   generated Maven output
-frontend/dist/            generated Vite output
-```
+- Project-scoped REST under `/api/projects/{projectId}`. Project identity: `name` is a human-readable unique label (directory `projects/<name>/`, pack fallback id); the ONLY lookup key is the UUID `id` — controllers take `UUID` (malformed → 400 on conversion, JSON `project_id` is `UUID` too), services take `UUID` throughout; repositories convert driver String ids via `ProjectRepository.uuidOf` at the JDBC boundary. `findById` is existence + row fetch only (unknown id/entry → 404 `HarmoniaSuiteNotFoundException`; validation errors → 400 `HarmoniaSuiteBadRequestException`). No slug, no path-based lookup.
+- `GET /api/projects` → `{projects:[{id,name,...}]}`, `POST` (201, `{id,name}`), `DELETE /api/projects/{projectId}`, `GET .../{projectId}/overview` (meta+summary), `GET .../{projectId}/files/tree`, `GET .../{projectId}/translate/pending-by-file`, `GET .../{projectId}/files` (paged: `q,hideReady,readyOnly,offset,limit`, default 100, max 500, need-first order; `{files,total,offset,limit,needFiles,readyFiles,summary}` in one pass over `source_files` via `COUNT/SUM OVER()`; `total/done` materialized in `source_files`, recounted at write points: full `recountFiles` on extract, touched-only `recountEntries` on Gemini/manual saves, delta `updateTranslated` (no `refreshStats`) on manual save).
+- `GET .../entries` (always paged: `file,q,status(CSV),rowKey,untranslated,offset,limit`; default 80, max 500, 5000 in file scope; exact status match), `GET .../entries/{entryId}` (UUID only), `GET .../entries/by-cell/{cellId}` (tab restore), `PATCH .../entries/{entryId}` (UUID only, frontend sends `EntryDto.uuid`; blank status defaults to `human_reviewed`, broken tags → 400).
+- `GET/PUT .../pack`; `GET .../exports/csv?file=` + `/exports/zip` + `/exports/manifest` + `/exports` (built-CSV listing + manifest flag).
+- Team deltas under `.../{projectId}/delta`: `GET` export (`sinceUpdatedAt,sinceCellId,files,limit,author`; `cell_id`-keyed rows + sources-fingerprint header, fingerprint mismatch rejected), `POST .../preview` + `POST .../import` (conflict = own human-edited cell vs differing incoming; incoming never overwrites silently).
+- AI settings `GET/PUT /api/settings/ai` (+ `/models`, `/check`); source settings `GET/PUT /api/settings`.
+- DB backups (synchronous, no job — one `VACUUM INTO`): `GET/POST /api/backup` (list `{backups,retention,used_bytes,estimated_bytes}` / create), `PUT /api/backup/settings{retention}`, `GET/DELETE /api/backup/{name}` (download/delete; names are server-generated timestamps, allowlist-validated — never client paths), `POST /api/backup/open-folder` (`Desktop.open`, local UI only).
+- Filesystem browse (pre-extract source picking, raw CSV preview): `GET /api/source/files?root=`, `GET /api/source/preview?root=&file=&full=`; no server-side file-content search — search is DB-backed via `entries?q=`.
 
-Frontend source does not belong in `src/main/resources/static`.
+## Frontend
 
-Generated build output must not be committed.
+- Scope-based loading, never the whole table: open = `overview` + first files page; files list server-paged with server search (100 per page, need-first); per-file entries on open (`entries?file=`, cap 5000, client-side union cache); editor works on the focused file only (row-grouped cards); phrase search in the Search tab (`entries?q=`, jump by id), Ctrl+K file jump. Case-insensitive search relies on `source_lc`/`translation_lc` columns (SQLite `LOWER()` is ASCII-only).
+- Static files are served with `Cache-Control: no-cache` (`web/NoCacheStaticFilter`): the browser revalidates every load (cheap 304 on localhost) and picks up changes immediately — no manual `?v=` bumps, no hard refresh. Deliberate — build-time substitution breaks IntelliJ live serving. Self-update UI: version chip in the statusbar (check on open + hourly), update modal, restart overlay.
+- Settings → Database section: snake_case→camelCase mapping lives in `api.js` (`mapBackupList`) — components never read raw wire keys. Range slider `.bk-range` (thin bar, `--primary` fill via `--fill` var set synchronously in `@input`, silent save on `@change`, no focus ring, `user-select:none` on the value).
 
-## Backend stack
+## Layering & SQL
 
-* Java 21
-* Spring Boot 3.4.3
-* Maven wrapper
-* Spring JDBC
-* Flyway
-* SQLite by default
-* PostgreSQL profile for server deployments
-* MapStruct for DTO mapping
-* JUnit 5
+- `service/` is split by domain, not by layer: `ai` (providers + translation), `job` (queue + handlers), `project` (projects/entries/deltas/search), `source` (source cache + extract), `export` (merge/export/pack), `update` (self-update + relaunch scripts), `backup`, `system` (logs/tray); the `service` root holds no classes and tests mirror the same layout.
+- Controllers are thin and never touch repositories — only services do. Endpoints return DTO records (`dto` package) mapped from entities with MapStruct (`mapping` package, `componentModel=spring`); custom `ObjectMapper` bean disables Boot's `spring.jackson.*` defaults, so DTOs carry explicit `@JsonInclude(NON_NULL)`.
+- Every statement is a named `private static final String` constant at the top of its repository (uppercase keywords, one clause per line, literal table names, no inline concat except `COLUMNS` composition and `UPDATE ... SET` prefix + `SqlBuilder` filter text); dynamic filters only through `SqlBuilder` (`where/and/andIn/orderBy/limitOffset`) with bind params — no value interpolation, ever. Round trips are consolidated where it pays: `listWithStats` (projects JOIN stats, no N+1), `pageWithTotal` (`COUNT(*) OVER()`), `refreshStats` (one pass over entries + file counter), `batchWriteTranslations` (Gemini batch = 2 queries instead of 2N), `filesWithStats` (`source_files` only + window counters, no entries JOIN), `findByCell`/`findByCells` (`cell_id = ?` / `andIn`, no `OR`); `touch()` removed — `updated_at` changes only with its own table's UPDATE; long writes go through one programmatic transaction (`TransactionTemplate` — self-invocation bypasses the proxy, so `@Transactional` on internal methods does nothing); pack loads via 4 targeted queries deliberately (joining three one-to-many relations would cartesian-explode).
 
-Do not introduce an ORM unless a separate architectural decision explicitly requires one.
+## CSV, Entries, AI
 
-Controllers stay thin. Controllers call services; controllers do not access repositories directly.
+- CSV extraction expects the FFXIV layout from `CsvSupport`: row 4 (zero-based index 3) declares columns, translatable data starts at row 5 (zero-based index 4); only `String` columns with letter-containing, non-`TEXT_*` cells are extracted. Merge validates row/column structure before writing.
+- Entry ids are cell-addressed (`EntryIds.ofCell`: `c_` + first 16 hex of SHA-256 over `file\0rowKey\0columnIndex`); every String cell is its own entry. Never send them to the LLM. Record identity is DB-generated UUIDv6 (`uuid6()` SQL function in PostgreSQL, custom per-connection `uuid6()` in SQLite via `db/SqliteDataSources`; Java never mints ids, `RETURNING id` where needed); `cell_id` stays a per-project UNIQUE business key (stable across re-extracts: `syncSources` parses outside the transaction, upserts in one write transaction, deletes only stale rows by run timestamp — uuids survive game patches). API addresses entries by UUID; `cell_id` lookup only via `GET .../entries/by-cell/{cellId}`.
+- Gemini key resolves as UI settings (`ai.gemini.api-key`, no restart) over `GEMINI_API_KEY` env (IDEA run-config); OpenRouter mirrors it (`ai.openrouter.api-key` / `OPENROUTER_API_KEY`, default model/reasoning in config). Keys live in env vars or ignored local config, never in tracked files. Session reasoning override (`RunRequest.reasoning`: default/off/low/medium/high); thinking-model traces go to the log as `[REASONING]` lines (excerpted, shown separately in UI).
+- Gemini translator (free tier, default `gemini-3.5-flash-lite`): model per run comes from the tab (`RunRequest.model`, allowlist `harmonia.gemini.models`, default `harmonia.gemini.model`); token budgets shared across models (`max-input-chars`/`max-output-tokens`); request `[{i,s}]`, response `[{i,t}]` (tolerates `translation`/`index`/`id` keys and bare string arrays as positional fallback); echoes (translation == source) rejected. Greedy batches in `AbstractBatchTranslator.partition` over input chars (default 500000) and estimated output (default 65536, filled to 80% via self-calibrating `estimateOutTokens`); `MAX_TOKENS`/mismatch splits the batch recursively; deterministic echoes (temperature 0) become `no_translation_required` without retries; model tags are not validated (fixed at review). `request-delay-ms` default 5000 (~12 RPM under the 15 RPM free cap, pause before every request); `usageMetadata` accumulated, logged every 10 requests plus a final total. OpenRouter differs: no ceilings (`Integer.MAX_VALUE` — batch size set by slow-start window 40→2000, `LlmProvider.maxBatchItems/noteBatchOk`), `/models` catalog only for the model list and reasoning flag; 8 consecutive errors abort the run; output cap measured per route (`noteTruncated`/`noteRouteChanged`), 429s honored via `LlmHttp.waitSeconds`.
+- Game-patch workflow: re-`extract` reconciles by cell id (silent carry, `stale` when source text changed but the column name matches) with fallback carry by identical text (same file first, then anywhere — copied once, diverges after); report line `Перенесено/устарело/непереведённых`. `stale` is excluded from translated counts everywhere but included in editor "needs work" navigation. `merge` skips `stale`, verifies the target column is still `String` and the cell still equals the entry source, then `validateStructure`; mismatches are skipped with per-file errors, never silently miswritten.
+- Entry statuses: `untranslated`, `machine_translated`, `no_translation_required` (set by human or machine on echo), `stale`, `human_reviewed`, `approved` (writes reject unknown statuses with 400).
+- FFXIV tags: `node tools/sync-game-data.cjs` rebuilds `js/ui-colors.js` + `tools/tag-inventory.json`; unknown/payload tags go to `TAG_KINDS` (`js/tags.js`); server rejects broken tags on manual save and delta import (`TagSupport`, 400); check `node --test tools/test-tags.mjs`.
+- Raw source browsing (`/api/source/*`) lists CSV names via filesystem walk; search and progress are DB-backed, no ripgrep dependency.
 
-Repositories own SQL and database access.
+## Release
 
-Use bind parameters for dynamic values. Never interpolate user/data values into SQL.
+- Single pom `<version>` (SemVer, dev on `*-SNAPSHOT`); dist = `harmonia-suite-<version>.zip` with `VERSION.txt`; release = `versions:set` + tag `vX.Y.Z` + `package` (README §Release). On future front/back split: backend keeps the pom version, frontend gets its own, contract pinned via `/api/version`.
+- Distribution (Windows): per-user MSI on `v*` tags only (`release.yml`: extractor from `AngelicaProject/HarmoniaExtractor` self-contained, Temurin 21 + MinGit bundled under `toolchain/`, repo snapshot under `src/`, WiX via choco). Installed state defaults to `%APPDATA%/HarmoniaSuite`; game-only sources (no csvdir mode), unpacker always bundled.
+- Self-update (`UpdateService`, `POST /api/update` as `update` job): always from source — `git pull --ff-only` + full local `mvnw package` (toolchain: install-bundled → system → `%LOCALAPPDATA%` cache → download; dirty tree refused; auto-rollback via `reset --hard` on failure). Relaunch targets the freshly built jar (bundled runtime for the installed exe). UI: version chip (check on open + hourly) + update modal + restart overlay.
 
-## Frontend stack
+## Goal
 
-* Vue 3
-* Vite
-* TypeScript
-* npm
-* Vitest
-* Vue Test Utils when component mounting is useful
-* ESLint
-* Prettier
+Generate CSV and ZIP for import into Harmonia (sibling `Harmonia` checkout, Dalamud plugin `HarmoniaEngine`). Harmonia imports only translation packs: `manifest.json` + Lumina-EXD CSV packed in a ZIP. A flat ZIP of bare CSVs without a manifest is rejected.
 
-Do not add Nuxt, Pinia, Tailwind, Axios, TanStack Query, SSR or a UI component framework without a concrete need.
+## Harmonia Import Contract (verified against sources)
 
-Pinia is not the default place for state. Prefer component-local state and composables first.
+- Installed pack layout: `resources/packs/<pack-id>/manifest.json` + `*.csv` beside it (`TranslationPackStore.PacksDir`, `ManifestFileName`). Files outside `packs/` are ignored; a pack without a manifest is invisible (`Flat_resources_without_manifest_are_ignored`).
+- Folder name must equal `manifest.id`, else the pack is invalid (`Folder_name_must_match_manifest_id`).
+- `TranslationPackImporter.TryImportZip` accepts a ZIP in two shapes:
+  1. `manifest.json` at ZIP root + CSVs beside it;
+  2. a single top-level folder (`bundle-1.0/manifest.json`, `bundle-1.0/*.csv`) — installed under the name from `manifest.id`, not the folder name.
+  Without `manifest.json` the import fails with a `manifest.json` error and installs nothing. Zip-slip (`../evil.csv`) is rejected without writing.
+- `manifest.json` (`TranslationPackManifest`, `CurrentManifestVersion = 1`):
+  - required: `manifestVersion` = 1 (future versions rejected), `id` — slug (letters/digits/`-`/`_` only, no spaces), `translationVersion` (non-empty), `gameVersion` (non-empty — exact `Framework.GameVersionString`, e.g. `"2026.08.11.0000.0000"`, compared without normalization), `vendor.id` + `vendor.name` (non-empty), `authors` — at least 1 with non-empty `name` (`role` is a free string, unknown roles load).
+  - optional: `compatibleGameVersions[]` (empty means `[gameVersion]`, case-insensitive, `IsCompatibleWithGame(null)` = true), `languages[]` (e.g. `["ru"]`), `title`, `description`, `changelog`, `homepage`, `license`, `minPluginVersion`, `source{feedUrl,channel,signature}`, plus any `Extra` (unknown fields preserved, parsing never fails).
+  - Minimal valid manifest reference: `TranslationPacksTests.Manifest(id, gameVersion)` in Harmonia.
+- CSV (`CsvTranslationResourceReader`, `Sep` parser with `HasHeader = false`):
+  - Lumina EXD dump, NOT `sheet,row,column,text`. Service rows by first column skipped: `key`, `#`, `offset`.
+  - A row with `Int32` in the first column declares column types; translations read only from `String` columns.
+  - Data rows: first column is rowId (`int.TryParse`, `>= 0`), otherwise skipped (`key`/`-1`/`not-an-id` ignored).
+  - A row with fewer columns than the type header throws `InvalidDataException` — column counts must match.
+  - Values are stored `\0`-terminated inside Harmonia, plain text in CSV; Lumina macros (`<settime...>`, `<if...>`) must survive verbatim.
 
-Vue Router is optional and should only be introduced when URL-based navigation is intentionally adopted.
+## What This Project Must Output
 
-## Frontend structure
-
-Prefer the following boundaries:
-
-```text
-src/api/          HTTP transport and typed backend DTO boundary
-src/domain/       pure client-side domain logic
-src/composables/  reusable stateful UI behavior
-src/components/   reusable UI components
-src/views/        screen-level composition when useful
-```
-
-Vue components must not construct backend URLs or perform ad-hoc raw HTTP calls.
-
-Wire-format transformations belong at the API boundary.
-
-Use TypeScript for production frontend code. Avoid `any`; use it only when the boundary is genuinely unknown and document why.
-
-Prefer Vue SFCs. New components should normally use:
-
-```text
-<script setup lang="ts">
-```
-
-Do not move all application state into `App.vue`.
-
-## API boundary
-
-The frontend talks to the backend through relative `/api/**` URLs.
-
-Do not hardcode a backend host in components.
-
-Development uses the Vite proxy:
-
-```text
-/api/** → http://127.0.0.1:8765
-```
-
-Do not change the backend REST contract as part of unrelated frontend work.
-
-Backend project and entry identities are UUIDs. Preserve server-defined identity semantics.
-
-## Development
-
-Backend:
-
-```bash
-./mvnw spring-boot:run
-```
-
-On Windows use `mvnw.cmd`.
-
-Frontend:
-
-```bash
-cd frontend
-npm ci
-npm run dev
-```
-
-Vite is the normal frontend development server. Spring does not need to serve frontend source during development.
-
-## Verification
-
-Backend tests:
-
-```bash
-./mvnw test
-```
-
-Frontend verification:
-
-```bash
-cd frontend
-npm run check
-```
-
-`npm run check` must cover:
-
-```text
-TypeScript typecheck
-ESLint
-format check
-Vitest
-Vite production build
-```
-
-Full production package:
-
-```bash
-./mvnw clean package
-```
-
-Do not claim a change is complete when the relevant verification command is failing.
-
-For cross-layer changes, run both backend and frontend verification plus the full package.
-
-## Frontend tests
-
-Use Vitest for frontend application tests.
-
-Keep pure logic tests close to the code where practical:
-
-```text
-tags.ts
-tags.test.ts
-```
-
-Prioritize tests for meaningful logic and regressions over snapshot volume.
-
-Use Vue Test Utils for component behavior when mounting the component is useful.
-
-Do not create custom frontend test runners.
-
-Repository tooling that is not part of the frontend may use the Node built-in test runner where appropriate.
-
-## Packaging
-
-Frontend source is built by Vite:
-
-```text
-frontend/src
-→ frontend/dist
-```
-
-Maven production packaging copies the generated Vite output directly into Maven build output:
-
-```text
-frontend/dist
-→ target/classes/static
-→ Spring Boot JAR
-```
-
-Never copy generated frontend files back into tracked source directories.
-
-`./mvnw package` must produce a complete runnable artifact without requiring a separate manual frontend build first.
-
-A packaged JAR does not require Node at runtime.
-
-## Node toolchain
-
-Node is a build/update dependency, not an application runtime dependency.
-
-The canonical required Node version is stored in:
-
-```text
-frontend/.node-version
-```
-
-Use the Node 24 LTS line unless the project intentionally upgrades it.
-
-The Harmonia Windows distribution owns its build toolchain:
-
-```text
-toolchain/
-  jdk/
-  git/
-  node/
-```
-
-Do not install bundled tools globally and do not modify the user's global PATH.
-
-An installed application should prefer Harmonia-managed toolchain binaries over arbitrary system binaries.
-
-## Self-update
-
-Harmonia currently performs source-based self-update:
-
-```text
-Git update
-→ local build
-→ relaunch
-```
-
-Because frontend production build requires Node, self-update must provide a compatible Node/npm.
-
-After pulling the new source, determine the required Node version from the pulled checkout's:
-
-```text
-frontend/.node-version
-```
-
-This is important: do not permanently bind future source builds to the Node version hardcoded in the currently running JAR.
-
-Toolchain resolution should prefer:
-
-```text
-bundled
-→ Harmonia cache
-→ compatible system tool
-→ managed download
-```
-
-Downloaded Node versions should be cacheable side by side.
-
-A failed update must preserve the existing rollback behavior.
-
-Do not weaken dirty-worktree or history-divergence protections while changing updater code.
-
-## Distribution
-
-Windows releases include the toolchain needed for future source builds:
-
-```text
-JDK
-MinGit
-Node
-```
-
-Use portable distributions inside the application installation. Do not invoke system-wide installers for these dependencies.
-
-Release builds must continue to produce the existing MSI and portable distribution artifacts.
-
-A release must not depend on the end user having Java, Git or Node installed globally.
-
-## Data and persistence
-
-SQLite is the default local database. PostgreSQL is an alternate deployment profile.
-
-Do not raw-copy a live SQLite database for backup. Preserve the existing consistent SQLite backup mechanism.
-
-Database schema changes go through Flyway migrations.
-
-When changing schema behavior, keep SQLite and PostgreSQL migrations semantically aligned.
-
-Be particularly careful with operations that can overwrite or delete translations. Data preservation is more important than silently recovering from malformed source input.
-
-## Jobs and concurrency
-
-Background work goes through the job subsystem.
-
-Long-running work must remain cancellable where practical.
-
-Do not introduce mutable per-run state into singleton Spring services.
-
-When modifying project data from background jobs, consider interaction with concurrent manual edits and other jobs. Do not assume that localhost usage means operations cannot overlap.
-
-## Filesystem
-
-Treat user/project paths as untrusted input at filesystem boundaries.
-
-Normalize and validate paths before filesystem access.
-
-Do not introduce arbitrary client-controlled file writes outside intended workspace/export locations.
-
-## Secrets
-
-API keys and credentials must never be committed.
-
-Use environment variables, ignored local configuration, or the existing application settings mechanisms.
-
-Do not log secrets.
-
-Tests and committed examples must use neutral synthetic values.
-
-## Git and commits
-
-Default branch:
-
-```text
-main
-```
-
-Use Conventional Commit style:
-
-```text
-feat(scope): ...
-fix(scope): ...
-refactor(scope): ...
-test(scope): ...
-build(scope): ...
-docs(scope): ...
-chore(scope): ...
-```
-
-Keep commits focused and reviewable.
-
-Do not commit:
-
-```text
-target/
-frontend/node_modules/
-frontend/dist/
-IDE metadata
-local databases
-workspace data
-credentials
-machine-specific absolute paths
-```
-
-Do not rewrite unrelated code while implementing a focused task.
-
-## CI
-
-CI is expected to verify:
-
-```text
-backend tests
-frontend check
-production package
-```
-
-Release CI additionally verifies distribution packaging.
-
-When changing build or toolchain behavior, update CI in the same change so local and CI workflows remain equivalent.
-
-## Documentation discipline
-
-`AGENTS.md` contains stable engineering rules, not exhaustive implementation documentation.
-
-Do not add:
-
-* complete REST endpoint inventories;
-* lists of every DTO;
-* descriptions of every SQL query;
-* CSS widget details;
-* current LLM model catalogs;
-* temporary implementation notes;
-* historical migration notes.
-
-If a subsystem requires detailed documentation, put it under `docs/` or in a focused README near that subsystem.
-
-When architecture changes, update this file only where the stable rules actually changed.
+- `merge` writes translated EXD-CSVs to `projects/<id>/exported_csv/`, preserving structure (`CsvSupport.validateStructure`: same row/column counts, first key column untouched; plus String-column type and cell-hash checks before writing). This format is already Harmonia-reader-compatible — structure unchanged, only `String` cells change.
+- A `manifest.json` per the contract above accompanies `exported_csv/`; auto-assembled on `merge` from the project pack settings (Pack tab, `GET/PUT /api/projects/{projectId}/pack`, download `GET .../exports/manifest`). ZIP (`GET .../exports/zip`) puts `manifest.json` as the first entry at archive root beside the CSVs — `TranslationPackImporter` accepts such a ZIP. ZIP with an unconfigured pack is rejected with 400 and a validation-error list.
+- Checks before claiming readiness: `exported_csv/*.csv` open in the Harmonia reader (column count = header, integer rowIds `>= 0`); `manifest.json` passes `TranslationPackManifest.TryParse`; ZIP installs via `TryImportZip`; folder name in ZIP = `manifest.id`; `compatibleGameVersions` covers the target game version.
