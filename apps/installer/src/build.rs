@@ -440,6 +440,7 @@ impl<D: DownloadClient, P: ProcessRunner> BuildPipeline<D, P> {
         Ok(output)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn verify_and_write_result(
         &self,
         config: &BuildConfig,
@@ -1109,67 +1110,76 @@ mod tests {
         ));
     }
 
+    #[cfg(unix)]
     #[test]
     fn managed_maven_wrapper_environment_runs_real_subprocess() {
         let root = tempdir().unwrap();
         let java_home = root.path().join("managed-jdk");
         fs::create_dir_all(java_home.join("bin")).unwrap();
-        fs::write(java_home.join("bin/java"), b"managed java").unwrap();
-        let wrapper = if cfg!(windows) {
-            let path = root.path().join("mvnw.cmd");
-            fs::write(
-                &path,
-                "@echo off\r\nif not exist \"%JAVA_HOME%\\bin\\java\" exit /b 1\r\nwhere cmd >NUL\r\nif errorlevel 1 exit /b 1\r\nexit /b 0\r\n",
-            )
-            .unwrap();
-            path
-        } else {
-            use std::os::unix::fs::PermissionsExt;
-            let path = root.path().join("mvnw");
-            fs::write(
-                &path,
-                "#!/bin/sh\nset -eu\ncommand -v dirname >/dev/null\ntest -x \"$JAVA_HOME/bin/java\"\n",
-            )
-            .unwrap();
-            let mut permissions = fs::metadata(&path).unwrap().permissions();
-            permissions.set_mode(0o755);
-            fs::set_permissions(&path, permissions).unwrap();
-            fs::write(java_home.join("bin/java"), b"#!/bin/sh\n").unwrap();
-            let mut permissions = fs::metadata(java_home.join("bin/java"))
-                .unwrap()
-                .permissions();
-            permissions.set_mode(0o755);
-            fs::set_permissions(java_home.join("bin/java"), permissions).unwrap();
-            path
-        };
-
-        let utility_path = if cfg!(windows) {
-            let system_root =
-                std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into());
-            format!(
-                "{};{}",
-                java_home.join("bin").display(),
-                PathBuf::from(system_root).join("System32").display()
-            )
-        } else {
-            format!("{}:/usr/bin:/bin", java_home.join("bin").display())
-        };
+        use std::os::unix::fs::PermissionsExt;
+        fs::write(java_home.join("bin/java"), b"#!/bin/sh\n").unwrap();
+        let mut permissions = fs::metadata(java_home.join("bin/java"))
+            .unwrap()
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(java_home.join("bin/java"), permissions).unwrap();
+        let wrapper = root.path().join("mvnw");
+        fs::write(
+            &wrapper,
+            "#!/bin/sh\nset -eu\ncommand -v dirname >/dev/null\ntest -x \"$JAVA_HOME/bin/java\"\n",
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&wrapper).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&wrapper, permissions).unwrap();
         let environment = ManagedEnvironment {
             variables: BTreeMap::from([
-                ("PATH".to_owned(), utility_path),
+                (
+                    "PATH".to_owned(),
+                    format!("{}:/usr/bin:/bin", java_home.join("bin").display()),
+                ),
                 ("JAVA_HOME".to_owned(), java_home.display().to_string()),
             ]),
             path: vec![java_home.join("bin")],
         };
-        let command = if cfg!(windows) {
-            environment.apply_to(CommandSpec::new("cmd.exe").args([
-                "/D",
-                "/C",
-                &wrapper.display().to_string(),
-            ]))
-        } else {
-            environment.apply_to(CommandSpec::new(wrapper.clone()))
+        let command = environment.apply_to(CommandSpec::new(wrapper));
+        let output = SystemProcessRunner::default().run(&command).unwrap();
+        assert!(output.success(), "wrapper smoke test failed: {output:?}");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn managed_maven_wrapper_environment_runs_real_subprocess() {
+        let root = tempdir().unwrap();
+        let java_home = root.path().join("managed-jdk");
+        fs::create_dir_all(java_home.join("bin")).unwrap();
+        fs::write(java_home.join("bin/java.exe"), b"managed java").unwrap();
+        let wrapper = root.path().join("mvnw.cmd");
+        fs::write(
+            &wrapper,
+            "@echo off\r\nif not exist \"%JAVA_HOME%\\bin\\java.exe\" exit /b 1\r\nwhere cmd >NUL\r\nif errorlevel 1 exit /b 1\r\nexit /b 0\r\n",
+        )
+        .unwrap();
+        let system_root = std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into());
+        let environment = ManagedEnvironment {
+            variables: BTreeMap::from([
+                (
+                    "PATH".to_owned(),
+                    format!(
+                        "{};{}",
+                        java_home.join("bin").display(),
+                        PathBuf::from(system_root).join("System32").display()
+                    ),
+                ),
+                ("JAVA_HOME".to_owned(), java_home.display().to_string()),
+            ]),
+            path: vec![java_home.join("bin")],
         };
+        let command = environment.apply_to(CommandSpec::new("cmd.exe").args([
+            "/D",
+            "/C",
+            &wrapper.display().to_string(),
+        ]));
         let output = SystemProcessRunner::default().run(&command).unwrap();
         assert!(output.success(), "wrapper smoke test failed: {output:?}");
     }
