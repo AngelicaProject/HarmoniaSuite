@@ -35,6 +35,11 @@ pub enum StateError {
     },
     #[error("recovery refused to remove unowned or unsafe path: {0}")]
     UnsafeRecoveryPath(PathBuf),
+    #[error("pre-activation recovery cleanup failed for transaction {transaction_id}: {reason}")]
+    RecoveryCleanupFailed {
+        transaction_id: String,
+        reason: String,
+    },
     #[error("transaction {0} is still running")]
     ActiveTransaction(String),
 }
@@ -258,6 +263,61 @@ impl StateStore {
         })
     }
 
+    /// Finish a transaction left running by a process crash before activation.
+    ///
+    /// Only exact paths journaled by the transaction are considered. A cleanup error is
+    /// persisted as a failed transaction before being returned, so a stale Running record
+    /// cannot permanently prevent the next operation. Activation transactions remain blocked
+    /// for explicit review because their ownership may have crossed the activation boundary.
+    pub fn recover_pre_activation(&self) -> Result<(), StateError> {
+        let Some(mut transaction) = self.load_transaction()? else {
+            return Ok(());
+        };
+        if transaction.status != TransactionStatus::Running
+            || transaction.phase == TransactionPhase::Completed
+            || transaction.phase == TransactionPhase::Failed
+        {
+            return Ok(());
+        }
+        if transaction.activation_started
+            || matches!(
+                transaction.phase,
+                TransactionPhase::Activating
+                    | TransactionPhase::HealthChecking
+                    | TransactionPhase::RollingBack
+            )
+        {
+            return Err(StateError::ActiveTransaction(transaction.id));
+        }
+
+        let transaction_id = transaction.id.clone();
+        let owned_paths = transaction.owned_paths.clone();
+        let mut cleanup_error = None;
+        for path in owned_paths {
+            if let Err(error) = self.cleanup_owned_path(&transaction, &path) {
+                if cleanup_error.is_none() {
+                    cleanup_error = Some(error.to_string());
+                }
+            }
+        }
+
+        transaction.phase = TransactionPhase::Failed;
+        transaction.status = TransactionStatus::Failed;
+        transaction.finished_at_ms = Some(now_ms());
+        transaction.failure = cleanup_error
+            .clone()
+            .or_else(|| Some("recovered interrupted pre-activation transaction".to_owned()));
+        self.write_transaction(&transaction)?;
+
+        if let Some(reason) = cleanup_error {
+            return Err(StateError::RecoveryCleanupFailed {
+                transaction_id,
+                reason,
+            });
+        }
+        Ok(())
+    }
+
     pub fn cleanup_owned_path(
         &self,
         transaction: &TransactionRecord,
@@ -280,7 +340,7 @@ impl StateStore {
             return Err(StateError::UnsafeRecoveryPath(candidate));
         }
         if !candidate.exists() {
-            return Err(StateError::UnsafeRecoveryPath(candidate));
+            return Ok(());
         }
         if candidate.is_dir() {
             fs::remove_dir_all(candidate)?;
@@ -436,6 +496,14 @@ impl Transaction {
         self.record.finished_at_ms = Some(now_ms());
         self.store.write_transaction(&self.record)
     }
+
+    pub fn cleanup_owned_paths(&self) -> Result<(), StateError> {
+        let owned_paths = self.record.owned_paths.clone();
+        for path in owned_paths {
+            self.store.cleanup_owned_path(&self.record, &path)?;
+        }
+        Ok(())
+    }
 }
 
 fn allowed_transition(from: &TransactionPhase, to: &TransactionPhase) -> bool {
@@ -500,10 +568,19 @@ fn has_unsafe_ancestor(root: &Path, candidate: &Path) -> io::Result<bool> {
     let Ok(relative) = candidate.strip_prefix(root) else {
         return Ok(true);
     };
-    let mut current = root.to_path_buf();
-    if is_link_or_reparse(&current)? {
+    if !root.is_absolute() || !candidate.is_absolute() {
         return Ok(true);
     }
+    let ancestors = candidate.ancestors().collect::<Vec<_>>();
+    for ancestor in ancestors.into_iter().rev() {
+        match fs::symlink_metadata(ancestor) {
+            Ok(_) if is_link_or_reparse(ancestor)? => return Ok(true),
+            Ok(_) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+    }
+    let mut current = root.to_path_buf();
     for component in relative.components() {
         if !matches!(component, Component::Normal(_)) {
             return Ok(true);
@@ -707,6 +784,31 @@ mod tests {
             store.recovery_action().unwrap(),
             RecoveryAction::ReviewRequired { .. }
         ));
+    }
+
+    #[test]
+    fn recovery_cleans_journaled_partial_without_requiring_a_marker() {
+        let store = store();
+        let partial = store.paths().build_dir().join("candidates").join("partial");
+        fs::create_dir_all(&partial).unwrap();
+        fs::write(partial.join("checkout-file"), b"partial").unwrap();
+        let transaction = Transaction::begin(
+            store.clone(),
+            OperationKind::Update,
+            None,
+            Some("target".to_owned()),
+            vec![partial.clone()],
+        )
+        .unwrap();
+        drop(transaction);
+
+        store.recover_pre_activation().unwrap();
+        assert!(!partial.exists());
+        assert!(matches!(
+            store.load_transaction().unwrap().unwrap().status,
+            TransactionStatus::Failed
+        ));
+        assert!(Transaction::begin(store, OperationKind::Update, None, None, Vec::new()).is_ok());
     }
 
     #[test]

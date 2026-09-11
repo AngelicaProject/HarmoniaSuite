@@ -35,12 +35,16 @@ back to system Java or Node. Git operations are reserved for the Rust/libgit2 up
 
 Phase 4 additionally provides:
 
-- a libgit2-only bare mirror for `origin/main`, exact full-SHA resolution and installer-owned detached
-  checkouts under `build/<sha>`;
+- a libgit2-only bare mirror for `origin/main`, exact full-SHA resolution and installer-owned
+  attempt-specific staging and verified candidates under `build/staging/<transaction-id>/<sha>` and
+  `build/candidates/<sha>/<transaction-id>/<sha>`;
 - reproducible frontend, backend and desktop build orchestration through managed Node/JDK paths,
   `npm ci`, the Maven Wrapper checksum policy and persistent npm/Maven caches;
-- persistent build diagnostics and machine-readable results bound to one exact commit, with failed
-  pre-activation work cleaned without changing installation state or user data.
+- persistent build diagnostics and machine-readable results bound to one exact commit, with global
+  installation locking and crash recovery of journaled pre-activation paths without changing
+  installation state or user data;
+- complete unpacked Electron payloads, including runtime, compiled shell and frontend assets, ready
+  for later Phase 5 staging without another build step.
 
 Phase 4 deliberately does not stage or activate an artifact, switch current/previous versions, or
 implement signed manifests, installer UI, shortcuts or uninstall. Those are later phases.

@@ -547,6 +547,11 @@ impl<D: DownloadClient> ToolchainManager<D> {
                 }
             }
         }
+        for utility_path in safe_os_utility_paths(self.paths.platform) {
+            if utility_path.is_dir() && seen.insert(utility_path.clone()) {
+                path.push(utility_path);
+            }
+        }
         fs::create_dir_all(self.paths.maven_cache_dir())?;
         fs::create_dir_all(self.paths.npm_cache_dir())?;
         variables.insert(
@@ -1013,6 +1018,18 @@ fn join_paths(paths: &[PathBuf]) -> String {
         .map(|path| path.display().to_string())
         .collect::<Vec<_>>()
         .join(&separator.to_string())
+}
+
+fn safe_os_utility_paths(platform: Platform) -> Vec<PathBuf> {
+    match platform {
+        Platform::Linux => [PathBuf::from("/usr/bin"), PathBuf::from("/bin")].to_vec(),
+        Platform::Windows => {
+            let Some(root) = std::env::var_os("SystemRoot").map(PathBuf::from) else {
+                return Vec::new();
+            };
+            vec![root.join("System32"), root]
+        }
+    }
 }
 
 struct StagingGuard {

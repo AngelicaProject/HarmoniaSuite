@@ -52,6 +52,12 @@ pub struct ManagedCheckout {
     marker: PathBuf,
 }
 
+impl ManagedCheckout {
+    pub fn marker_path(&self) -> &Path {
+        &self.marker
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct ManagedGitRepository {
     source_dir: PathBuf,
@@ -100,7 +106,7 @@ impl ManagedGitRepository {
         let mut remote = repository.find_remote("origin")?;
         let mut fetch_options = FetchOptions::new();
         remote.fetch(
-            &["refs/heads/main:refs/remotes/origin/main"],
+            &["+refs/heads/main:refs/remotes/origin/main"],
             Some(&mut fetch_options),
             None,
         )?;
@@ -110,6 +116,15 @@ impl ManagedGitRepository {
     pub fn resolve_main(&self) -> Result<ResolvedCommit, GitError> {
         let repository = Repository::open_bare(&self.source_dir)?;
         resolve_main(&repository)
+    }
+
+    pub fn verify_commit(&self, target_sha: &str) -> Result<(), GitError> {
+        validate_commit_sha(target_sha)?;
+        let repository = Repository::open_bare(&self.source_dir)?;
+        let target = Oid::from_str(target_sha)
+            .map_err(|_| GitError::InvalidCommit(target_sha.to_owned()))?;
+        repository.find_commit(target)?;
+        Ok(())
     }
 
     pub fn prepare_checkout(
@@ -316,13 +331,10 @@ fn cleanup_partial_checkout(destination: &Path, marker: &Path) -> Result<(), io:
 }
 
 fn validate_managed_path(root: &Path, path: &Path) -> Result<(), GitError> {
-    if !path.starts_with(root) {
+    if !root.is_absolute() || !path.is_absolute() || !path.starts_with(root) {
         return Err(GitError::UnsafePath(path.to_path_buf()));
     }
     for ancestor in path.ancestors().collect::<Vec<_>>().into_iter().rev() {
-        if !ancestor.starts_with(root) {
-            continue;
-        }
         match fs::symlink_metadata(ancestor) {
             Ok(metadata) if metadata.file_type().is_symlink() || is_reparse_point(ancestor)? => {
                 return Err(GitError::UnsafePath(ancestor.to_path_buf()))
@@ -413,6 +425,24 @@ mod tests {
     }
 
     #[test]
+    fn force_updated_main_is_followed_by_the_fetch_refspec() {
+        let root = tempdir().unwrap();
+        let remote_path = root.path().join("remote.git");
+        let remote = Repository::init_bare(&remote_path).unwrap();
+        let first = commit_in_remote(&remote, b"first");
+        let source = ManagedGitRepository::new_for_test(
+            root.path().join("app/source"),
+            Url::from_file_path(&remote_path).unwrap().to_string(),
+        )
+        .unwrap();
+
+        assert_eq!(source.fetch_origin_main().unwrap().sha, first);
+        let second = commit_in_remote(&remote, b"second");
+        assert_eq!(source.fetch_origin_main().unwrap().sha, second);
+        assert_ne!(first, second);
+    }
+
+    #[test]
     fn rebuild_of_same_sha_replaces_dirty_owned_checkout() {
         let root = tempdir().unwrap();
         let remote_path = root.path().join("remote.git");
@@ -464,5 +494,73 @@ mod tests {
             Err(GitError::NotOwned(_))
         ));
         assert!(destination.join("user-file").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_symlink_ancestor_above_managed_build_root() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempdir().unwrap();
+        let remote_path = root.path().join("remote.git");
+        let remote = Repository::init_bare(&remote_path).unwrap();
+        let expected = commit_in_remote(&remote, b"symlink ancestor");
+        let source = ManagedGitRepository::new_for_test(
+            root.path().join("app/source"),
+            Url::from_file_path(&remote_path).unwrap().to_string(),
+        )
+        .unwrap();
+        source.fetch_origin_main().unwrap();
+
+        let outside = root.path().join("outside");
+        fs::create_dir_all(&outside).unwrap();
+        let managed_link = root.path().join("managed-link");
+        symlink(&outside, &managed_link).unwrap();
+        let build_root = managed_link.join("build");
+        assert!(matches!(
+            source.prepare_checkout(&expected, &build_root),
+            Err(GitError::UnsafePath(_))
+        ));
+        assert!(fs::read_dir(&outside).unwrap().next().is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_symlink_ancestor_above_managed_source_dir() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempdir().unwrap();
+        let remote_path = root.path().join("remote.git");
+        let remote = Repository::init_bare(&remote_path).unwrap();
+        commit_in_remote(&remote, b"source symlink ancestor");
+        let outside = root.path().join("outside");
+        fs::create_dir_all(&outside).unwrap();
+        let managed_link = root.path().join("managed-link");
+        symlink(&outside, &managed_link).unwrap();
+        let source = ManagedGitRepository::new_for_test(
+            managed_link.join("source"),
+            Url::from_file_path(&remote_path).unwrap().to_string(),
+        )
+        .unwrap();
+
+        assert!(matches!(
+            source.fetch_origin_main(),
+            Err(GitError::UnsafePath(_))
+        ));
+        assert!(fs::read_dir(&outside).unwrap().next().is_none());
+    }
+
+    #[test]
+    #[ignore = "network smoke test exercised explicitly by CI"]
+    fn fetches_public_https_origin_main_with_libgit2() {
+        let root = tempdir().unwrap();
+        let source = ManagedGitRepository::new(
+            root.path().join("source"),
+            "https://github.com/AngelicaProject/HarmoniaSuite.git",
+        )
+        .unwrap();
+        let resolved = source.fetch_origin_main().unwrap();
+        assert_eq!(resolved.sha.len(), 40);
+        assert!(resolved.sha.bytes().all(|byte| byte.is_ascii_hexdigit()));
     }
 }

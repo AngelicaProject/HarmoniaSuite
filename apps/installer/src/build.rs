@@ -12,6 +12,7 @@ use thiserror::Error;
 use crate::checksum::{sha256_file, ChecksumError};
 use crate::diagnostics::{DiagnosticError, DiagnosticLogger};
 use crate::git::{GitError, ManagedCheckout, ManagedGitRepository};
+use crate::lock::{InstallationLock, LockError};
 use crate::paths::InstallationPaths;
 use crate::process::{redacted_command, CommandSpec, ProcessError, ProcessRunner};
 use crate::state::{OperationKind, StateError, StateStore, Transaction, TransactionPhase};
@@ -78,8 +79,6 @@ pub struct BuildResult {
 pub enum BuildError {
     #[error("build configuration is invalid: {0}")]
     InvalidConfig(String),
-    #[error("build target moved while fetching origin/main: expected {expected}, got {actual}")]
-    TargetMoved { expected: String, actual: String },
     #[error("required lockfile is missing: {0}")]
     MissingLockfile(PathBuf),
     #[error("required build input is missing: {0}")]
@@ -104,6 +103,8 @@ pub enum BuildError {
     Diagnostics(#[from] DiagnosticError),
     #[error("build Git operation failed: {0}")]
     Git(#[from] GitError),
+    #[error("build installation lock failed: {0}")]
+    Lock(#[from] LockError),
     #[error("build process failed: {0}")]
     Process(#[from] ProcessError),
     #[error("build toolchain operation failed: {0}")]
@@ -151,10 +152,12 @@ impl<D: DownloadClient, P: ProcessRunner> BuildPipeline<D, P> {
         config: &BuildConfig,
         git: &ManagedGitRepository,
     ) -> Result<BuildResult, BuildError> {
+        let _installation_lock = InstallationLock::acquire(self.paths.lock_path(), "phase4-build")?;
         let state_store = match &self.logger {
             Some(logger) => StateStore::new(self.paths.clone()).with_logger(logger.clone()),
             None => StateStore::new(self.paths.clone()),
         };
+        state_store.recover_pre_activation()?;
         let installation = state_store.load_installation()?;
         let started_at_ms = now_ms();
         let mut transaction = Transaction::begin(
@@ -184,7 +187,6 @@ impl<D: DownloadClient, P: ProcessRunner> BuildPipeline<D, P> {
         transaction: &mut Transaction,
         started_at_ms: u128,
     ) -> Result<BuildResult, BuildError> {
-        let mut checkout = None;
         let result = (|| -> Result<BuildResult, BuildError> {
             transaction.transition(TransactionPhase::ResolvingTarget)?;
             let target = git.fetch_origin_main()?.sha;
@@ -215,26 +217,18 @@ impl<D: DownloadClient, P: ProcessRunner> BuildPipeline<D, P> {
             )?;
 
             transaction.transition(TransactionPhase::FetchingSource)?;
-            let fetched_target = git.fetch_origin_main()?.sha;
-            if fetched_target != target {
-                return Err(BuildError::TargetMoved {
-                    expected: target,
-                    actual: fetched_target,
-                });
-            }
-            let checkout_target = git.resolve_main()?.sha;
-            if checkout_target != target {
-                return Err(BuildError::TargetMoved {
-                    expected: target,
-                    actual: checkout_target,
-                });
-            }
+            // The fetch above selected the immutable build target. From this point on only
+            // inspect the already-fetched object; never fetch or re-read a moving remote ref.
+            git.verify_commit(&target)?;
 
             transaction.transition(TransactionPhase::PreparingWorktree)?;
-            let worktree_path = self.paths.build_dir().join(&target);
-            transaction.own_path(&worktree_path)?;
-            let prepared = git.prepare_checkout(&target, &self.paths.build_dir())?;
-            checkout = Some(prepared.clone());
+            let staging_root = self
+                .paths
+                .build_dir()
+                .join("staging")
+                .join(transaction.record().id.clone());
+            transaction.own_path(&staging_root)?;
+            let prepared = git.prepare_checkout(&target, &staging_root)?;
             self.log_phase(
                 &target,
                 &TransactionPhase::PreparingWorktree,
@@ -259,6 +253,7 @@ impl<D: DownloadClient, P: ProcessRunner> BuildPipeline<D, P> {
                 &jdk,
                 &node,
                 started_at_ms,
+                transaction,
             )?;
             self.log_phase(
                 &target,
@@ -272,10 +267,8 @@ impl<D: DownloadClient, P: ProcessRunner> BuildPipeline<D, P> {
         match result {
             Ok(result) => Ok(result),
             Err(error) => {
-                if let Some(checkout) = checkout {
-                    if let Err(cleanup_error) = git.cleanup_checkout(&checkout) {
-                        return Err(BuildError::Git(cleanup_error));
-                    }
+                if let Err(cleanup_error) = transaction.cleanup_owned_paths() {
+                    return Err(BuildError::State(cleanup_error));
                 }
                 Err(error)
             }
@@ -306,12 +299,39 @@ impl<D: DownloadClient, P: ProcessRunner> BuildPipeline<D, P> {
         target: &str,
     ) -> Result<(), BuildError> {
         let wrapper = self.toolchains.maven_wrapper_path(checkout)?;
+        let wrapper_args = ["-B", "-q", "-DskipTests", "package"];
+        #[cfg(windows)]
+        let output = {
+            let system_root = std::env::var_os("SystemRoot").ok_or_else(|| {
+                BuildError::InvalidConfig("SystemRoot is required to run mvnw.cmd".to_owned())
+            })?;
+            let command_line = std::iter::once(wrapper.display().to_string())
+                .chain(wrapper_args.iter().map(|argument| (*argument).to_owned()))
+                .map(|argument| quote_windows_argument(&argument))
+                .collect::<Vec<_>>()
+                .join(" ");
+            let command_args = vec![
+                "/D".to_owned(),
+                "/S".to_owned(),
+                "/C".to_owned(),
+                command_line,
+            ];
+            self.run_command_strings(
+                &TransactionPhase::BuildingBackend,
+                target,
+                environment,
+                &PathBuf::from(system_root).join("System32").join("cmd.exe"),
+                &command_args,
+                checkout,
+            )?
+        };
+        #[cfg(not(windows))]
         let output = self.run_command(
             &TransactionPhase::BuildingBackend,
             target,
             environment,
             &wrapper,
-            &["-B", "-q", "-DskipTests", "package"],
+            &wrapper_args,
             checkout,
         )?;
         if !output.success() {
@@ -356,7 +376,12 @@ impl<D: DownloadClient, P: ProcessRunner> BuildPipeline<D, P> {
                 kind: "node".to_owned(),
                 name: "npm".to_owned(),
             })?;
-        for args in [&["ci"][..], &["run", "build"][..]] {
+        let commands = if phase == &TransactionPhase::BuildingDesktop {
+            vec![&["ci"][..], &["run", "build"][..], &["run", "package"][..]]
+        } else {
+            vec![&["ci"][..], &["run", "build"][..]]
+        };
+        for args in commands {
             let output = self.run_command(phase, target, environment, npm, args, directory)?;
             if !output.success() {
                 return Err(command_failed(phase.clone(), npm, output));
@@ -374,9 +399,29 @@ impl<D: DownloadClient, P: ProcessRunner> BuildPipeline<D, P> {
         args: &[&str],
         current_dir: &Path,
     ) -> Result<crate::process::ProcessOutput, BuildError> {
+        let owned_args = args.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>();
+        self.run_command_strings(
+            phase,
+            target,
+            environment,
+            program,
+            &owned_args,
+            current_dir,
+        )
+    }
+
+    fn run_command_strings(
+        &self,
+        phase: &TransactionPhase,
+        target: &str,
+        environment: &ManagedEnvironment,
+        program: &Path,
+        args: &[String],
+        current_dir: &Path,
+    ) -> Result<crate::process::ProcessOutput, BuildError> {
         let command = environment.apply_to(
             CommandSpec::new(program.to_path_buf())
-                .args(args.iter().copied())
+                .args(args.iter().cloned())
                 .current_dir(current_dir.to_path_buf()),
         );
         let output = self.runner.run(&command)?;
@@ -403,10 +448,14 @@ impl<D: DownloadClient, P: ProcessRunner> BuildPipeline<D, P> {
         jdk: &ResolvedToolchain,
         node: &ResolvedToolchain,
         started_at_ms: u128,
+        transaction: &mut Transaction,
     ) -> Result<BuildResult, BuildError> {
         let frontend_path = checkout.path.join("frontend").join("dist");
         let backend_path = checkout.path.join("target").join("harmonia-suite.jar");
-        let desktop_path = checkout.path.join("apps").join("desktop").join("dist");
+        let desktop_relative = PathBuf::from("apps/desktop/artifacts")
+            .join(self.paths.platform.as_str())
+            .join(self.paths.architecture.as_str());
+        let desktop_path = checkout.path.join(&desktop_relative);
         let frontend = BuildArtifact {
             path: PathBuf::from("frontend/dist"),
             sha256: hash_directory(&frontend_path)?,
@@ -416,14 +465,36 @@ impl<D: DownloadClient, P: ProcessRunner> BuildPipeline<D, P> {
             sha256: sha256_file(&backend_path)?,
         };
         let desktop = BuildArtifact {
-            path: PathBuf::from("apps/desktop/dist"),
+            path: desktop_relative,
             sha256: hash_directory(&desktop_path)?,
         };
-        let finished_at_ms = now_ms();
-        let checkout_dir = checkout
+
+        let staging_root = checkout
             .path
+            .parent()
+            .ok_or_else(|| BuildError::InvalidOutput(checkout.path.clone()))?;
+        let candidate_root = self
+            .paths
+            .build_dir()
+            .join("candidates")
+            .join(target)
+            .join(transaction.record().id.clone());
+        if candidate_root.exists() {
+            return Err(BuildError::InvalidOutput(candidate_root));
+        }
+        transaction.own_path(&candidate_root)?;
+        if let Some(parent) = candidate_root.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::rename(staging_root, &candidate_root)?;
+        let published_checkout = candidate_root.join(target);
+        if !published_checkout.is_dir() {
+            return Err(BuildError::InvalidOutput(published_checkout));
+        }
+        let finished_at_ms = now_ms();
+        let checkout_dir = published_checkout
             .strip_prefix(&self.paths.app_root)
-            .map_err(|_| BuildError::InvalidOutput(checkout.path.clone()))?
+            .map_err(|_| BuildError::InvalidOutput(published_checkout.clone()))?
             .to_path_buf();
         let result = BuildResult {
             schema_version: BUILD_RESULT_SCHEMA_VERSION,
@@ -445,7 +516,8 @@ impl<D: DownloadClient, P: ProcessRunner> BuildPipeline<D, P> {
         let result_path = self
             .paths
             .build_results_dir()
-            .join(format!("{target}.json"));
+            .join(format!("{}.json", transaction.record().id));
+        transaction.own_path(&result_path)?;
         crate::state::atomic_write_json(&result_path, &result)?;
         Ok(result)
     }
@@ -468,6 +540,11 @@ impl<D: DownloadClient, P: ProcessRunner> BuildPipeline<D, P> {
         logger.log("info", event, values)?;
         Ok(())
     }
+}
+
+#[cfg(windows)]
+fn quote_windows_argument(value: &str) -> String {
+    format!("\"{}\"", value.replace('"', "\\\""))
 }
 
 fn validate_config(config: &BuildConfig) -> Result<(), BuildError> {
@@ -563,7 +640,7 @@ mod tests {
     use super::*;
     use crate::download::{DownloadError, DownloadReceipt, DownloadRequest};
     use crate::paths::{Platform, TargetArchitecture};
-    use crate::process::{CommandSpec, ProcessOutput};
+    use crate::process::{CommandSpec, ProcessOutput, SystemProcessRunner};
     use crate::toolchain::{ArchiveFormat, ToolchainKind};
     use flate2::write::GzEncoder;
     use flate2::Compression;
@@ -654,6 +731,13 @@ mod tests {
                 let output = current_dir.join("dist");
                 fs::create_dir_all(&output)?;
                 fs::write(output.join("index.js"), b"fixture build")?;
+            } else if is_desktop_package_command(command) {
+                let output = current_dir.join("artifacts/linux-x64");
+                fs::create_dir_all(&output)?;
+                fs::write(
+                    output.join("harmonia-electron"),
+                    b"fixture electron payload",
+                )?;
             } else if program_name.starts_with("mvnw") {
                 let output = current_dir.join("target");
                 fs::create_dir_all(&output)?;
@@ -833,6 +917,16 @@ mod tests {
         command.args.len() == 2 && command.args[0] == "run" && command.args[1] == "build"
     }
 
+    fn is_desktop_package_command(command: &CommandSpec) -> bool {
+        command.args.len() == 2
+            && command.args[0] == "run"
+            && command.args[1] == "package"
+            && command
+                .current_dir
+                .as_ref()
+                .is_some_and(|path| path.ends_with(Path::new("desktop")))
+    }
+
     #[test]
     fn pipeline_uses_exact_sha_managed_tools_and_ci_only() {
         let fixture = fixture();
@@ -845,12 +939,18 @@ mod tests {
 
         assert_eq!(result.target_commit, fixture.target);
         assert_eq!(result.status, BuildStatus::Completed);
-        assert!(fixture
-            .paths
-            .state_root
-            .join("build-results")
-            .join(format!("{}.json", fixture.target))
-            .is_file());
+        let first_checkout = fixture.paths.app_root.join(&result.checkout_dir);
+        assert!(first_checkout.is_dir());
+        assert_eq!(
+            result.desktop.path,
+            PathBuf::from("apps/desktop/artifacts/linux-x64")
+        );
+        assert_eq!(
+            fs::read_dir(fixture.paths.state_root.join("build-results"))
+                .unwrap()
+                .count(),
+            1
+        );
         let calls = calls.lock().unwrap();
         let npm_calls = calls
             .iter()
@@ -876,17 +976,23 @@ mod tests {
         }));
         drop(calls);
 
-        let contamination = fixture
-            .paths
-            .build_dir()
-            .join(&fixture.target)
-            .join("contamination.txt");
+        let contamination = first_checkout.join("contamination.txt");
         fs::write(&contamination, b"must not survive a rebuild").unwrap();
         let second = pipeline
             .run_with_git(&fixture.config, &fixture.git)
             .unwrap();
         assert_eq!(second.target_commit, fixture.target);
-        assert!(!contamination.exists());
+        assert!(
+            contamination.exists(),
+            "previous verified candidate was destroyed"
+        );
+        assert_ne!(result.checkout_dir, second.checkout_dir);
+        assert_eq!(
+            fs::read_dir(fixture.paths.state_root.join("build-results"))
+                .unwrap()
+                .count(),
+            2
+        );
     }
 
     #[test]
@@ -944,7 +1050,14 @@ mod tests {
                 Some("current-commit")
             );
             assert!(user_file.is_file());
-            assert!(!fixture.paths.build_dir().join(&fixture.target).exists());
+            let candidate_root = fixture
+                .paths
+                .build_dir()
+                .join("candidates")
+                .join(&fixture.target);
+            assert!(
+                !candidate_root.exists() || fs::read_dir(candidate_root).unwrap().next().is_none()
+            );
             assert!(matches!(
                 state_store.load_transaction().unwrap().unwrap().status,
                 crate::state::TransactionStatus::Failed
@@ -994,5 +1107,70 @@ mod tests {
             Err(ToolchainError::InvalidDescriptor(message))
                 if message.contains("distributionSha256Sum")
         ));
+    }
+
+    #[test]
+    fn managed_maven_wrapper_environment_runs_real_subprocess() {
+        let root = tempdir().unwrap();
+        let java_home = root.path().join("managed-jdk");
+        fs::create_dir_all(java_home.join("bin")).unwrap();
+        fs::write(java_home.join("bin/java"), b"managed java").unwrap();
+        let wrapper = if cfg!(windows) {
+            let path = root.path().join("mvnw.cmd");
+            fs::write(
+                &path,
+                "@echo off\r\nif not exist \"%JAVA_HOME%\\bin\\java\" exit /b 1\r\nwhere cmd >NUL\r\nif errorlevel 1 exit /b 1\r\nexit /b 0\r\n",
+            )
+            .unwrap();
+            path
+        } else {
+            use std::os::unix::fs::PermissionsExt;
+            let path = root.path().join("mvnw");
+            fs::write(
+                &path,
+                "#!/bin/sh\nset -eu\ncommand -v dirname >/dev/null\ntest -x \"$JAVA_HOME/bin/java\"\n",
+            )
+            .unwrap();
+            let mut permissions = fs::metadata(&path).unwrap().permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(&path, permissions).unwrap();
+            fs::write(java_home.join("bin/java"), b"#!/bin/sh\n").unwrap();
+            let mut permissions = fs::metadata(java_home.join("bin/java"))
+                .unwrap()
+                .permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(java_home.join("bin/java"), permissions).unwrap();
+            path
+        };
+
+        let utility_path = if cfg!(windows) {
+            let system_root =
+                std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into());
+            format!(
+                "{};{}",
+                java_home.join("bin").display(),
+                PathBuf::from(system_root).join("System32").display()
+            )
+        } else {
+            format!("{}:/usr/bin:/bin", java_home.join("bin").display())
+        };
+        let environment = ManagedEnvironment {
+            variables: BTreeMap::from([
+                ("PATH".to_owned(), utility_path),
+                ("JAVA_HOME".to_owned(), java_home.display().to_string()),
+            ]),
+            path: vec![java_home.join("bin")],
+        };
+        let command = if cfg!(windows) {
+            environment.apply_to(CommandSpec::new("cmd.exe").args([
+                "/D",
+                "/C",
+                &wrapper.display().to_string(),
+            ]))
+        } else {
+            environment.apply_to(CommandSpec::new(wrapper.clone()))
+        };
+        let output = SystemProcessRunner::default().run(&command).unwrap();
+        assert!(output.success(), "wrapper smoke test failed: {output:?}");
     }
 }
