@@ -6,7 +6,7 @@
 
 [![CI](https://github.com/AngelicaProject/HarmoniaSuite/actions/workflows/ci.yml/badge.svg)](https://github.com/AngelicaProject/HarmoniaSuite/actions/workflows/ci.yml) [![codecov](https://codecov.io/gh/AngelicaProject/HarmoniaSuite/branch/main/graph/badge.svg)](https://codecov.io/gh/AngelicaProject/HarmoniaSuite) [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0.html)
 
-**A local pipeline for translating Final Fantasy XIV into other languages, packed for the Harmonia Dalamud plugin.** It reads strings out of an installed game client, runs them through machine translation, and hands them to a web editor for review by hand. What comes out is a ZIP that Harmonia installs as-is. One Spring Boot service with a web UI and SQLite underneath. No accounts, nothing to operate.
+**A local pipeline for translating Final Fantasy XIV into other languages, packed for the Harmonia Dalamud plugin.** It reads strings out of an installed game client, runs them through machine translation, and hands them to a desktop editor for review by hand. What comes out is a ZIP that Harmonia installs as-is. The Spring Boot service remains the gateway/business layer; Electron owns the desktop window and local gateway lifecycle.
 
 Machine translation runs on either Gemini or OpenRouter. Paste the key in settings and it picks it up without a restart. With no key that step stays unavailable; the rest works the same.
 
@@ -47,7 +47,11 @@ npm ci
 npm run dev
 ```
 
-Run both from the repo root/project as shown, since `data/` and `projects/` resolve against the working directory. The Vite UI is on http://127.0.0.1:5173 and proxies `/api` to Spring Boot on http://127.0.0.1:8765.
+For the browser-independent frontend, keep API calls relative to `/api/**`. The Phase 1 desktop shell
+serves the built frontend through `harmonia://app/`, chooses a dynamic loopback port for Spring Boot,
+waits for `/api/status`, and proxies API requests without exposing that port to Vue. See
+[apps/desktop/README.md](apps/desktop/README.md) for the manual Electron run. Vite's fixed-port proxy
+remains only as a standalone browser development fallback.
 
 ---
 

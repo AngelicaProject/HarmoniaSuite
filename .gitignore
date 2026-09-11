@@ -19,4 +19,6 @@ plans/
 node_modules/
 frontend/dist/
 frontend/coverage/
+apps/desktop/dist/
+apps/desktop/coverage/
 **/.hermes-tmp.*

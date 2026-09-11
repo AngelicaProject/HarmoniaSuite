@@ -7,7 +7,9 @@ export default defineConfig({
     host: "127.0.0.1",
     port: 5173,
     proxy: {
-      "/api": "http://127.0.0.1:8765",
+      // Browser-only development fallback. Electron uses harmonia://app and
+      // its main-process proxy, so this is never a production gateway contract.
+      "/api": process.env.HARMONIA_DEV_GATEWAY_URL || "http://127.0.0.1:8765",
     },
   },
   preview: {
