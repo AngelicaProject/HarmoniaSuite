@@ -244,7 +244,7 @@ fn absolute_root(platform: Platform, path: Option<&Path>) -> Option<PathBuf> {
 
 fn is_absolute_for(platform: Platform, path: &Path) -> bool {
     if platform == Platform::Linux {
-        return path.is_absolute();
+        return path.to_string_lossy().starts_with('/');
     }
     let value = path.to_string_lossy();
     value.starts_with("\\\\")
