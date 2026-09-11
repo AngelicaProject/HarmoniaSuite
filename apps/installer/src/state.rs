@@ -220,7 +220,9 @@ impl StateStore {
             .cloned()
             .collect::<BTreeSet<_>>();
         if let Some(transaction) = self.load_transaction()? {
-            protected.extend(transaction.toolchain_refs.values().cloned());
+            if transaction.status == TransactionStatus::Running {
+                protected.extend(transaction.toolchain_refs.values().cloned());
+            }
         }
         Ok(protected)
     }
@@ -363,6 +365,23 @@ impl Transaction {
         &self.record
     }
 
+    pub fn set_target_commit(
+        &mut self,
+        target_commit: impl Into<String>,
+    ) -> Result<(), StateError> {
+        self.record.target_commit = Some(target_commit.into());
+        self.store.write_transaction(&self.record)
+    }
+
+    pub fn own_path(&mut self, path: impl AsRef<Path>) -> Result<(), StateError> {
+        let path = normalize(path.as_ref())?;
+        if !self.record.owned_paths.contains(&path) {
+            self.record.owned_paths.push(path);
+            self.store.write_transaction(&self.record)?;
+        }
+        Ok(())
+    }
+
     pub fn pin_toolchain(
         &mut self,
         kind: impl Into<String>,
@@ -437,7 +456,7 @@ fn allowed_transition(from: &TransactionPhase, to: &TransactionPhase) -> bool {
             | (BuildingFrontend, BuildingBackend | Verifying)
             | (BuildingBackend, BuildingDesktop | Verifying)
             | (BuildingDesktop, Verifying)
-            | (Verifying, Staging | Failed)
+            | (Verifying, Completed | Staging | Failed)
             | (Staging, WaitingForShutdown | Activating | Failed)
             | (WaitingForShutdown, Activating | Failed)
             | (Activating, HealthChecking | RollingBack | Failed)

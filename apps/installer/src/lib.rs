@@ -1,3 +1,4 @@
+pub mod build;
 pub mod checksum;
 pub mod diagnostics;
 pub mod download;
@@ -9,12 +10,14 @@ pub mod process;
 pub mod state;
 pub mod toolchain;
 
+pub use build::{BuildArtifact, BuildConfig, BuildError, BuildPipeline, BuildResult, BuildStatus};
 pub use diagnostics::DiagnosticLogger;
 pub use download::{
     DownloadClient, DownloadError, DownloadReceipt, DownloadRequest, DownloadResponse,
     DownloadTransport, HttpDownloader, ResumableDownloader,
 };
 pub use extract::ExtractionError;
+pub use git::{GitError, ManagedCheckout, ManagedGitRepository, ResolvedCommit};
 pub use lock::{InstallationLock, LockError};
 pub use paths::{InstallationPaths, PathEnvironment, PathError, Platform, TargetArchitecture};
 pub use process::{CommandSpec, ProcessError, ProcessOutput, ProcessRunner, SystemProcessRunner};

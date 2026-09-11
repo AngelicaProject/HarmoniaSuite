@@ -1,8 +1,8 @@
 # Harmonia installer core
 
-Phase 2 and Phase 3 provide the shared Rust foundation for future install, repair and update commands.
-It is currently a library crate; no installer UI, OS registration, exact-commit Git/build pipeline or
-self-update helper is included yet.
+Phase 2 through Phase 4 provide the shared Rust foundation for future install, repair and update
+commands. It is currently a library crate; no installer UI, OS registration, activation or self-update
+helper is included yet.
 
 The core owns:
 
@@ -32,6 +32,18 @@ Phase 3 additionally provides:
 The production descriptor catalog is data supplied by the release/update layer. Every descriptor must
 carry an exact upstream version, HTTPS URL and SHA-256; the manager does not resolve “latest” or fall
 back to system Java or Node. Git operations are reserved for the Rust/libgit2 updater phase.
+
+Phase 4 additionally provides:
+
+- a libgit2-only bare mirror for `origin/main`, exact full-SHA resolution and installer-owned detached
+  checkouts under `build/<sha>`;
+- reproducible frontend, backend and desktop build orchestration through managed Node/JDK paths,
+  `npm ci`, the Maven Wrapper checksum policy and persistent npm/Maven caches;
+- persistent build diagnostics and machine-readable results bound to one exact commit, with failed
+  pre-activation work cleaned without changing installation state or user data.
+
+Phase 4 deliberately does not stage or activate an artifact, switch current/previous versions, or
+implement signed manifests, installer UI, shortcuts or uninstall. Those are later phases.
 
 Run the checks from the repository root with:
 
