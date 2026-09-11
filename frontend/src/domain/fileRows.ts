@@ -31,6 +31,31 @@ export function mergeEntries(
   };
 }
 
+export function replacePageEntries(
+  document: ProjectDocument | null,
+  previousPageIds: ReadonlySet<string>,
+  activeEntryId: string | null | undefined,
+  nextPageEntries: Entry[],
+): ProjectDocument {
+  const entries = new Map<string, Entry>();
+  for (const entry of document?.entries || []) {
+    if (
+      entry?.id &&
+      (!previousPageIds.has(entry.id) || entry.id === activeEntryId)
+    ) {
+      entries.set(entry.id, entry);
+    }
+  }
+  for (const entry of nextPageEntries) {
+    if (entry?.id) entries.set(entry.id, entry);
+  }
+  return {
+    files: document?.files || [],
+    entries: [...entries.values()],
+    _loadMs: document?._loadMs,
+  };
+}
+
 export function groupPreviewEntries(entries: Entry[]): DisplayRowGroup[] {
   const groups = new Map<number, DisplayRowGroup>();
   for (const entry of entries || []) {

@@ -6,6 +6,7 @@ import {
   groupPreviewEntries,
   mergeEntries as mergeDocumentEntries,
   pageCount,
+  replacePageEntries,
   ROW_GROUP_PAGE_SIZE,
 } from "../domain/fileRows";
 import { needsWork } from "../domain/translationStatus";
@@ -150,21 +151,12 @@ export function useFileRows(options: FileRowsOptions): FileRowsController {
       if (request !== rowRequest) return null;
       const groups = decorateRowGroups(response.groups || [], cleanPage);
       const pageEntries = groups.flatMap((group) => group.cells || []);
-      const entries = new Map<string, Entry>();
-      for (const entry of options.document.value?.entries || []) {
-        if (
-          entry?.id &&
-          (!previousPageIds.has(entry.id) || entry.id === activeEntryId)
-        ) {
-          entries.set(entry.id, entry);
-        }
-      }
-      for (const entry of pageEntries) {
-        if (entry?.id) entries.set(entry.id, entry);
-      }
-      options.document.value = mergeDocumentEntries(options.document.value, [
-        ...entries.values(),
-      ]);
+      options.document.value = replacePageEntries(
+        options.document.value,
+        previousPageIds,
+        activeEntryId,
+        pageEntries,
+      );
       notifyCacheChanged();
       fileRows.value = {
         file,

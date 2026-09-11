@@ -5,6 +5,7 @@ import {
   groupPreviewEntries,
   mergeEntries,
   pageCount,
+  replacePageEntries,
 } from "./fileRows";
 
 function entry(id: string, rowIndex: number, columnIndex: number): Entry {
@@ -53,6 +54,47 @@ describe("file row transforms", () => {
 
     expect(merged._loadMs).toBe(12);
     expect(merged.entries).toEqual([replacement, entry("b", 1, 0)]);
+  });
+
+  it("replaces the previous page while retaining the active entry and cache", () => {
+    const oldA = entry("oldA", 0, 0);
+    const oldB = entry("oldB", 1, 0);
+    const unrelated = entry("unrelated", 9, 0);
+    const newC = entry("newC", 2, 0);
+    const newD = entry("newD", 3, 0);
+    const document = {
+      files: [
+        { path: "dialog.csv", total: 10, translated: 0, untranslated: 10 },
+      ],
+      entries: [oldA, oldB, unrelated],
+      _loadMs: 12,
+    };
+
+    const replaced = replacePageEntries(
+      document,
+      new Set(["oldA", "oldB"]),
+      "oldB",
+      [newC, newD],
+    );
+
+    expect(replaced.entries).toEqual([oldB, unrelated, newC, newD]);
+    expect(replaced.files).toBe(document.files);
+    expect(replaced._loadMs).toBe(12);
+  });
+
+  it("removes all previous page entries when there is no active entry", () => {
+    const oldA = entry("oldA", 0, 0);
+    const oldB = entry("oldB", 1, 0);
+    const newC = entry("newC", 2, 0);
+
+    const replaced = replacePageEntries(
+      { files: [], entries: [oldA, oldB] },
+      new Set(["oldA", "oldB"]),
+      null,
+      [newC, newC],
+    );
+
+    expect(replaced.entries).toEqual([newC]);
   });
 
   it("returns at least one page for an empty result", () => {
