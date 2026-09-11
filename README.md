@@ -1,5 +1,5 @@
 <p align="center">
-<img src="src/main/resources/static/img/yuki-banner.jpg" alt="Harmonia Suite" width="100%">
+<img src="frontend/public/img/yuki-banner.jpg" alt="Harmonia Suite" width="100%">
 </p>
 
 # Harmonia Suite
@@ -25,13 +25,13 @@ Machine translation runs on either Gemini or OpenRouter. Paste the key in settin
 
 ### Windows, MSI
 
-Grab the MSI from [Releases](https://github.com/AngelicaProject/HarmoniaSuite/releases) — it installs per user, no admin rights needed. JDK, git, and the unpacker come with it, so you only point it at the game path. State lives in `%APPDATA%/HarmoniaSuite`.
+Grab the MSI from [Releases](https://github.com/AngelicaProject/HarmoniaSuite/releases) — it installs per user, no admin rights needed. The bundled JDK, Git, Node.js toolchain, and unpacker come with it, so you only point it at the game path. Node.js is used for future source updates and is not needed to run the packaged JAR. State lives in `%APPDATA%/HarmoniaSuite`.
 
 Updates handle themselves: a version chip in the status bar, one button. The app pulls sources and rebuilds locally, rolling back on failure. If your checkout is dirty it refuses the update instead of risking local work.
 
 ### From source
 
-You need JDK 21 and git.
+You need JDK 21, git, and Node 24 LTS. The frontend runs through Vite while Spring Boot serves the API.
 
 ```bash
 git clone https://github.com/AngelicaProject/HarmoniaSuite.git
@@ -39,7 +39,15 @@ cd HarmoniaSuite
 .\mvnw.cmd spring-boot:run
 ```
 
-Run it from the repo root, since `data/` and `projects/` resolve against the working directory. The UI is on http://127.0.0.1:8765.
+In a second terminal:
+
+```bash
+cd frontend
+npm ci
+npm run dev
+```
+
+Run both from the repo root/project as shown, since `data/` and `projects/` resolve against the working directory. The Vite UI is on http://127.0.0.1:5173 and proxies `/api` to Spring Boot on http://127.0.0.1:8765.
 
 ---
 
@@ -63,7 +71,7 @@ Patches move strings around. Re-extract matches translations back by cell id and
 
 Stale entries no longer count as translated and stay out of merge. In the editor they stand apart, so only they need retranslation.
 
-Tag tooling: `node tools/sync-game-data.cjs` rebuilds `js/ui-colors.js` from `UIColor.csv` and refreshes `tools/tag-inventory.json`. Unknown and payload tags go into `TAG_KINDS` (`js/tags.js`). Check: `node --test tools/test-tags.mjs`.
+Tag tooling: `node tools/sync-game-data.cjs` rebuilds `frontend/src/domain/uiColors.ts` from `UIColor.csv` and refreshes `tools/tag-inventory.json`. Unknown and payload tags go into `TAG_KINDS` (`frontend/src/domain/tags.ts`). Frontend checks run with `cd frontend && npm run check`.
 
 ## Team workflow
 
@@ -91,12 +99,12 @@ PostgreSQL profile: backups are embedded-SQLite only there (`400`); use `pg_dump
 ```bash
 .\mvnw.cmd -q -DskipTests compile   # build
 .\mvnw.cmd test                      # tests (JUnit 5, no Spring context)
-node --test tools/test-tags.mjs      # FFXIV tag checks
+cd frontend && npm run check        # typecheck, lint, format, Vitest, Vite build
 ```
 
 The stack is Spring Boot 3.4.3 and Java 21, SQLite by default with a PostgreSQL profile for real deploys.
 
-If you touch `js` or `css`, bump `?v=` in `index.html` and every import, or stale files stick in cache. Commits follow Conventional Commits on `main`; fixtures stay invented (`example.com`, `pack-one`).
+The production frontend is built by Vite and copied directly to `target/classes/static` during Maven `prepare-package`; generated `frontend/dist` is not committed. Commits follow Conventional Commits on `main`; fixtures stay invented (`example.com`, `pack-one`).
 
 ## Release
 

@@ -17,4 +17,5 @@ projects/
 plans/
 *.db*
 node_modules/
+frontend/dist/
 **/.hermes-tmp.*

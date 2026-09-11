@@ -260,10 +260,13 @@ public class UpdateService {
             phase = UpdatePhase.BUILD;
             phaseOutput.clear();
             List<String> mavenCommand = mavenBuildCommand(plan.root());
+            String nodeHome = ToolchainProvider.requireNodeHome(plan.root(), log);
             code = runProcess(plan.root(), mavenCommand, line -> {
                 phaseOutput.add(line);
                 log.accept(line);
-            }, Map.of("JAVA_HOME", plan.javaHome()));
+            }, Map.of(
+                    "JAVA_HOME", plan.javaHome(),
+                    "PATH", ToolchainProvider.prependToPath(nodeHome, System.getenv("PATH"))));
             if (code != 0) {
                 throw new UpdateException(phase.errorCode, formatFailure(mavenCommand, code, phaseOutput));
             }

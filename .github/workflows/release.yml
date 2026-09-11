@@ -19,6 +19,15 @@ jobs:
         with:
           repository: AngelicaProject/HarmoniaExtractor
           path: extractor
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: app/frontend/.node-version
+          cache: npm
+          cache-dependency-path: app/frontend/package-lock.json
+      - run: npm ci
+        working-directory: app/frontend
+      - run: npm run check
+        working-directory: app/frontend
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
@@ -36,11 +45,16 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force toolchain-dl | Out-Null
           Invoke-WebRequest -Uri 'https://api.adoptium.net/v3/binary/latest/21/ga/windows/x64/jdk/hotspot/normal/eclipse' -OutFile toolchain-dl/jdk.zip
+          $nodeVersion = (Get-Content app/frontend/.node-version -Raw).Trim().TrimStart('v')
+          Invoke-WebRequest -Uri "https://nodejs.org/dist/v$nodeVersion/node-v$nodeVersion-win-x64.zip" -OutFile toolchain-dl/node.zip
           $mingit = gh release view -R git-for-windows/git --json assets -q '.assets[].name' | Where-Object { $_ -like 'MinGit-*-64-bit.zip' -and $_ -notlike '*busybox*' } | Select-Object -First 1
           gh release download -R git-for-windows/git -p $mingit -D toolchain-dl
-          New-Item -ItemType Directory -Force staging/toolchain/jdk, staging/toolchain/git | Out-Null
+          New-Item -ItemType Directory -Force staging/toolchain/jdk, staging/toolchain/git, staging/toolchain/node | Out-Null
           Expand-Archive toolchain-dl/jdk.zip staging/toolchain/jdk
           Expand-Archive "toolchain-dl/$mingit" staging/toolchain/git
+          Expand-Archive toolchain-dl/node.zip staging/toolchain/node
+          & "staging/toolchain/node/node-v$nodeVersion-win-x64/node.exe" --version
+          & "staging/toolchain/node/node-v$nodeVersion-win-x64/npm.cmd" --version
       - name: Ensure WiX
         shell: pwsh
         run: |
