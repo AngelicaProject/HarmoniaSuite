@@ -18,9 +18,9 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.89.0
         with:
-          toolchain: stable
+          toolchain: 1.89.0
           components: rustfmt, clippy
       - run: cargo fmt --check --manifest-path apps/installer/Cargo.toml
       - run: cargo clippy --manifest-path apps/installer/Cargo.toml --all-targets -- -D warnings

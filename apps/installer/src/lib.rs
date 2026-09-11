@@ -1,12 +1,15 @@
 pub mod checksum;
 pub mod diagnostics;
 pub mod download;
+pub mod extract;
 pub mod lock;
 pub mod paths;
 pub mod process;
 pub mod state;
+pub mod toolchain;
 
 pub use diagnostics::DiagnosticLogger;
+pub use extract::ExtractionError;
 pub use download::{
     DownloadClient, DownloadError, DownloadReceipt, DownloadRequest, DownloadResponse,
     DownloadTransport, HttpDownloader, ResumableDownloader,
@@ -17,4 +20,9 @@ pub use process::{CommandSpec, ProcessError, ProcessOutput, ProcessRunner, Syste
 pub use state::{
     InstallationState, OperationKind, RecoveryAction, StateError, StateStore, Transaction,
     TransactionPhase, TransactionRecord, TransactionStatus,
+};
+pub use toolchain::{
+    ArchiveFormat, ManagedEnvironment, OfficialToolchainCatalog, ResolvedToolchain,
+    ToolchainDescriptor, ToolchainError, ToolchainKind, ToolchainManager, ToolchainRecord,
+    ToolchainState, ToolchainStateStore,
 };
