@@ -1,10 +1,11 @@
 <script lang="ts">
 import { defineComponent } from "vue";
 import { TAG_CATALOG } from "../domain/tagCatalog";
-import { tagKindLabel, tagKindOf } from "../domain/tags";
+import { tagKindLabel } from "../domain/tags";
+import type { TagKind } from "../domain/tags";
 import { UI_COLORS } from "../domain/uiColors";
 
-const KINDS = [
+const KINDS: readonly Exclude<TagKind, "anon">[] = [
   "break",
   "color",
   "fmt",
@@ -53,7 +54,7 @@ const RGB_PRESETS = [
 type TagItem = (typeof TAG_CATALOG)[number];
 
 interface TagsData {
-  cat: "all" | (typeof KINDS)[number];
+  cat: "all" | Exclude<TagKind, "anon">;
   uiId: Record<string, string>;
   rgb: Record<string, string>;
   paletteFor: string | null;
@@ -78,7 +79,7 @@ export default defineComponent({
   },
   computed: {
     cats(): Array<{ kind: TagsData["cat"]; label: string }> {
-      return KINDS.map((k) => ({ kind: k, label: tagKindLabel(tagKindOf(k)) }));
+      return KINDS.map((k) => ({ kind: k, label: tagKindLabel(k) }));
     },
     uiEntries() {
       return Object.entries(UI_COLORS)
@@ -100,7 +101,7 @@ export default defineComponent({
       );
       return KINDS.map((k) => ({
         kind: k,
-        label: tagKindLabel(tagKindOf(k)),
+        label: tagKindLabel(k),
         items: items.filter((t) => t.k === k),
       })).filter((g) => g.items.length);
     },

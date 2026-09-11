@@ -47,6 +47,28 @@ describe("dock layout helpers", () => {
     expect(currentActive.right).toBe("b");
   });
 
+  it("selects the remaining source tab when moving the active tab", () => {
+    const currentLayout = layout({ left: ["a", "b"], right: ["c"] });
+    const currentActive = active({ left: "b", right: "c" });
+
+    moveDockView(currentLayout, currentActive, "b", "left", "right", 1);
+
+    expect(currentLayout.left).toEqual(["a"]);
+    expect(currentActive.left).toBe("a");
+    expect(currentActive.right).toBe("b");
+  });
+
+  it("clears the source active tab when its only tab moves away", () => {
+    const currentLayout = layout({ left: ["a"], right: ["c"] });
+    const currentActive = active({ left: "a", right: "c" });
+
+    moveDockView(currentLayout, currentActive, "a", "left", "right", 1);
+
+    expect(currentLayout.left).toEqual([]);
+    expect(currentActive.left).toBeNull();
+    expect(currentActive.right).toBe("a");
+  });
+
   it("returns the CSS class for the current drop position", () => {
     expect(getDropIndicatorClass({ zone: "left", index: 1 }, "left", 1)).toBe(
       "drop-before",

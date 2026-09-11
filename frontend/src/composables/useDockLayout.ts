@@ -65,7 +65,7 @@ export function moveDockView(
     targetIndex -= 1;
   destination.splice(targetIndex, 0, view);
   active[zone] = view;
-  if (from !== zone && !destination.includes(active[from] || ""))
+  if (from !== zone && !layout[from].includes(active[from] || ""))
     active[from] = layout[from][0] || null;
 }
 

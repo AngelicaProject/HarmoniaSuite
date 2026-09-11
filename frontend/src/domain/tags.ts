@@ -19,7 +19,7 @@ export interface ValidationIssue {
   message: string;
 }
 
-type TagKind =
+export type TagKind =
   "break" | "color" | "fmt" | "logic" | "value" | "media" | "misc" | "anon";
 
 interface ColorState {

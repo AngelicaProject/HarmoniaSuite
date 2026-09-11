@@ -12,6 +12,7 @@ import {
   tagKindOf as kindOfTag,
   tagKindLabel as kindLabel,
 } from "../domain/tags";
+import type { TagKind } from "../domain/tags";
 import {
   ENTRY_STATUS,
   ENTRY_STATUS_DOTS,
@@ -419,8 +420,8 @@ export default defineComponent({
     tagKindOf(t: string): ReturnType<typeof kindOfTag> {
       return kindOfTag(t);
     },
-    tagKindLabel(k: string): string {
-      return kindLabel(kindOfTag(k));
+    tagKindLabel(k: TagKind): string {
+      return kindLabel(k);
     },
     normTag(t: string): string {
       return normTag(t);

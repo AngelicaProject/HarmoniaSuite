@@ -62,6 +62,14 @@ describe("parse", () => {
   });
 });
 
+describe("kind labels", () => {
+  it("labels ready kinds without parsing them as tag text", () => {
+    expect(tagKindLabel("break")).toBe("Перенос строки");
+    expect(tagKindLabel("color")).toBe("Цвет");
+    expect(tagKindLabel("misc")).toBe("Тег");
+  });
+});
+
 describe("deep", () => {
   it("находит вложенные теги", () => {
     assert.deepEqual(texts(parseDeep("A<if(X,<br>)>B")), [
