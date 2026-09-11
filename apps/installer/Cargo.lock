@@ -254,8 +254,9 @@ dependencies = [
 name = "harmonia-installer"
 version = "0.1.0"
 dependencies = [
- "fs2",
- "reqwest",
+    "fs2",
+    "libc",
+    "reqwest",
  "serde",
  "serde_json",
  "sha2",
