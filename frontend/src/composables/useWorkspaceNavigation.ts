@@ -129,6 +129,10 @@ export function useWorkspaceNavigation(options: WorkspaceNavigationOptions) {
     options.leftMode.value = "phrases";
     options.phrasePage.value = 0;
     options.phraseSearchQ.value = "";
+    await loadFileAndFocusFirst(file);
+  }
+
+  async function loadFileAndFocusFirst(file: string): Promise<void> {
     const page = await options.rows.loadFileRows(file, 0, "");
     let first: Entry | null = null;
     try {
@@ -290,22 +294,7 @@ export function useWorkspaceNavigation(options: WorkspaceNavigationOptions) {
     options.leftMode.value = "phrases";
     options.phrasePage.value = 0;
     options.phraseSearchQ.value = "";
-    const page = await options.rows.loadFileRows(file, 0, "");
-    let first: Entry | null = null;
-    try {
-      first = await api.rowsNext(options.projectId.value, {
-        file,
-        afterRow: -1,
-        afterCol: -1,
-      });
-      if (first) options.rows.mergeEntries([first]);
-    } catch (error) {
-      options.log("\n" + errorMessage(error));
-    }
-    const fallback =
-      page && page.groups.length ? page.groups[0].cells[0] : null;
-    const target = first || fallback;
-    if (target) setFocusId(target.id);
+    await loadFileAndFocusFirst(file);
   }
 
   async function editorRowNext(

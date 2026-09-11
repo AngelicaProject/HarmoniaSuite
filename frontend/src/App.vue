@@ -941,7 +941,6 @@ export default App;
     "
   />
   <AppTopBar
-    v-else
     :project-id="projectId"
     :project-name="projectName"
     :theme="theme"

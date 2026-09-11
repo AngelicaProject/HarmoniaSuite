@@ -99,6 +99,8 @@ export default defineComponent({
       if (e.key === "Escape") {
         e.preventDefault();
         this.close();
+      } else if (e.key === "Tab") {
+        this.close(false);
       } else if (e.key === "ArrowDown") {
         e.preventDefault();
         this.moveHighlight(1);
@@ -131,7 +133,6 @@ export default defineComponent({
       aria-haspopup="listbox"
       :aria-expanded="open"
       :aria-controls="menuId"
-      :aria-activedescendant="open && hl >= 0 ? menuId + '-' + hl : undefined"
     >
       <span class="dd-label">{{ curLabel }}</span
       ><svg class="icon" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6" /></svg>

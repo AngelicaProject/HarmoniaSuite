@@ -1,3 +1,4 @@
+import { nextTick } from "vue";
 import { afterEach, describe, expect, it } from "vitest";
 import { mount, type VueWrapper } from "@vue/test-utils";
 import Dropdown from "./Dropdown.vue";
@@ -25,6 +26,7 @@ describe("Dropdown", () => {
     const trigger = wrapper.find("button");
     expect(trigger.attributes("aria-haspopup")).toBe("listbox");
     expect(trigger.attributes("aria-expanded")).toBe("false");
+    expect(trigger.attributes("aria-activedescendant")).toBeUndefined();
 
     await trigger.trigger("click");
 
@@ -73,5 +75,35 @@ describe("Dropdown", () => {
     await options[0].trigger("keydown", { key: "Escape" });
     expect(wrapper.find('[role="listbox"]').exists()).toBe(false);
     expect(document.activeElement).toBe(trigger.element);
+  });
+
+  it("closes on Tab without preventing the native focus transition", async () => {
+    wrapper = mount(Dropdown, {
+      props: {
+        modelValue: "one",
+        options: [
+          { value: "one", label: "One" },
+          { value: "two", label: "Two" },
+        ],
+      },
+      attachTo: document.body,
+    });
+
+    const trigger = wrapper.find("button");
+    await trigger.trigger("click");
+    const option = wrapper.find('[role="option"]');
+    (option.element as HTMLElement).focus();
+
+    const event = new KeyboardEvent("keydown", {
+      key: "Tab",
+      bubbles: true,
+      cancelable: true,
+    });
+    option.element.dispatchEvent(event);
+    await nextTick();
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(wrapper.find('[role="listbox"]').exists()).toBe(false);
+    expect(document.activeElement).not.toBe(trigger.element);
   });
 });
