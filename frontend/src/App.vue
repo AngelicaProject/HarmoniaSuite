@@ -14,6 +14,7 @@ import { useFileTree } from "./composables/useFileTree";
 import { useUpdater } from "./composables/useUpdater";
 import { useCommandPalette } from "./composables/useCommandPalette";
 import { useDockLayout } from "./composables/useDockLayout";
+import { useRenderedDockViews } from "./composables/useRenderedDockViews";
 import { useJobs } from "./composables/useJobs";
 import {
   useFileRows,
@@ -279,12 +280,9 @@ const App = defineComponent({
       document.documentElement.getAttribute("data-theme") || "dark",
     );
 
-    const renderedViews = ref<Record<string, boolean>>({});
-
     // ---- IDE docking: state and interactions live in a dedicated composable ----
     const dock = useDockLayout(VIEWS, VIEW_IDS, {
       onActivateView: (view) => {
-        renderedViews.value[view] = true;
         if (view === "pack" && !pack.value) loadPack();
       },
       onToast: showToast,
@@ -330,12 +328,10 @@ const App = defineComponent({
       hidePanel,
     } = dock;
 
-    for (const view of Object.values(active.value)) {
-      if (view) renderedViews.value[view] = true;
-    }
+    const { isRendered } = useRenderedDockViews(active);
 
     function shouldRenderView(view: string): boolean {
-      return !!renderedViews.value[view] && !!hostEl(view);
+      return isRendered(view) && !!hostEl(view);
     }
 
     function closeMenusOnDocClick(e: MouseEvent): void {

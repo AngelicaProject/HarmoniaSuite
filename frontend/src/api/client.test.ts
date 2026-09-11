@@ -116,6 +116,178 @@ describe("API response mapping", () => {
       },
     });
   });
+
+  it("maps rows pages and nested cells into the frontend model", async () => {
+    stubJsonFetch({
+      groups: [
+        {
+          row: 7,
+          row_key: "line-7",
+          un: 1,
+          cells: [
+            {
+              uuid: "uuid-7",
+              cell_id: "cell-7",
+              source: "Goodbye",
+              translation: "Пока",
+              status: "human_reviewed",
+              file_path: "dialogue.csv",
+              row_key: "line-7",
+              column_index: 2,
+              column_name: "text",
+              row_index: 7,
+              created_at: "2026-09-11T10:00:00Z",
+              updated_at: "2026-09-11T10:05:00Z",
+            },
+          ],
+        },
+      ],
+      total_groups: 12,
+      offset: 6,
+      limit: 6,
+    });
+
+    await expect(
+      api.rowsPage("project-1", { offset: 6, limit: 6 }),
+    ).resolves.toEqual({
+      groups: [
+        {
+          row: 7,
+          rowKey: "line-7",
+          un: 1,
+          cells: [
+            {
+              uuid: "uuid-7",
+              id: "cell-7",
+              source: "Goodbye",
+              translation: "Пока",
+              status: "human_reviewed",
+              file: "dialogue.csv",
+              rowKey: "line-7",
+              columnIndex: 2,
+              columnName: "text",
+              rowIndex: 7,
+              createdAt: "2026-09-11T10:00:00Z",
+              updatedAt: "2026-09-11T10:05:00Z",
+            },
+          ],
+        },
+      ],
+      totalGroups: 12,
+      offset: 6,
+      limit: 6,
+    });
+  });
+
+  it("maps entries pages and preserves nested entry fields", async () => {
+    stubJsonFetch({
+      entries: [
+        {
+          uuid: "uuid-8",
+          id: "entry-8",
+          source: "Hello",
+          translation: "Привет",
+          status: "approved",
+          file_path: "menu.csv",
+          row_key: "menu-8",
+          column_index: 1,
+          column_name: "value",
+          row_index: 8,
+        },
+      ],
+      total: 1,
+      offset: 0,
+      limit: 50,
+    });
+
+    await expect(
+      api.entries("project-1", undefined, { limit: 50 }),
+    ).resolves.toEqual({
+      entries: [
+        {
+          uuid: "uuid-8",
+          id: "entry-8",
+          source: "Hello",
+          translation: "Привет",
+          status: "approved",
+          file: "menu.csv",
+          rowKey: "menu-8",
+          columnIndex: 1,
+          columnName: "value",
+          rowIndex: 8,
+        },
+      ],
+      total: 1,
+      offset: 0,
+      limit: 50,
+    });
+  });
+
+  it("maps update status fields and subject arrays", async () => {
+    stubJsonFetch({
+      version: "1.4.0",
+      supported: true,
+      mode: "git",
+      needs_toolchain: false,
+      current_sha: "abc123",
+      latest_sha: "def456",
+      behind_by: 2,
+      subjects: ["fix: one", "feat: two"],
+      update_available: true,
+      state: "ready",
+      reason: "new commits",
+    });
+
+    await expect(api.updateStatus()).resolves.toEqual({
+      version: "1.4.0",
+      supported: true,
+      mode: "git",
+      needsToolchain: false,
+      currentSha: "abc123",
+      latestSha: "def456",
+      behindBy: 2,
+      subjects: ["fix: one", "feat: two"],
+      updateAvailable: true,
+      state: "ready",
+      reason: "new commits",
+    });
+  });
+
+  it("maps pack metadata, nested authors, and arrays", async () => {
+    stubJsonFetch({
+      pack: {
+        pack_id: "pack-1",
+        translation_version: "2.0",
+        game_version: "7.0",
+        compatible_game_versions: ["7.0", "7.1"],
+        vendor_id: "vendor-1",
+        vendor_name: "Harmonia",
+        authors: [
+          { name: "Ada", role: "translator", contact: "ada@example.test" },
+        ],
+        languages: ["ru", "en"],
+      },
+      manifest: { files: ["dialogue.csv"] },
+      errors: [],
+    });
+
+    await expect(api.getPack("project-1")).resolves.toEqual({
+      pack: {
+        packId: "pack-1",
+        translationVersion: "2.0",
+        gameVersion: "7.0",
+        compatibleGameVersions: ["7.0", "7.1"],
+        vendorId: "vendor-1",
+        vendorName: "Harmonia",
+        authors: [
+          { name: "Ada", role: "translator", contact: "ada@example.test" },
+        ],
+        languages: ["ru", "en"],
+      },
+      manifest: { files: ["dialogue.csv"] },
+      errors: [],
+    });
+  });
 });
 
 describe("transport errors", () => {
