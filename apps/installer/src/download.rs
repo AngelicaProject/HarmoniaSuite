@@ -119,7 +119,7 @@ impl<T: DownloadTransport> DownloadClient for ResumableDownloader<T> {
             if request.destination.is_file()
                 && verify_sha256(&request.destination, expected).is_ok()
             {
-                return Ok(receipt_for(&request.destination, false)?);
+                return receipt_for(&request.destination, false);
             }
             if request.destination.is_file() {
                 fs::remove_file(&request.destination)?;
