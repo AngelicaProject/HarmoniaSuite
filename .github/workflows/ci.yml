@@ -38,12 +38,12 @@ jobs:
         working-directory: frontend
       - run: ./mvnw -B -q test
       - run: node --test tools/test-release-notes.mjs
-      - uses: codecov/codecov-action@v5
+      - uses: codecov/codecov-action@v7
         with:
           use_oidc: true
           files: target/site/jacoco/jacoco.xml
           fail_ci_if_error: false
-      - uses: codecov/codecov-action@v5
+      - uses: codecov/codecov-action@v7
         with:
           use_oidc: true
           files: frontend/coverage/lcov.info
