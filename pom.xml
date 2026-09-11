@@ -27,6 +27,7 @@
     <properties>
         <java.version>21</java.version>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <npm.executable>npm</npm.executable>
     </properties>
 
     <dependencies>
@@ -83,6 +84,54 @@
     <build>
         <finalName>harmonia-suite</finalName>
         <plugins>
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>exec-maven-plugin</artifactId>
+                <version>3.5.0</version>
+                <configuration>
+                    <workingDirectory>${project.basedir}/frontend</workingDirectory>
+                    <executable>${npm.executable}</executable>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>frontend-npm-ci</id>
+                        <phase>prepare-package</phase>
+                        <goals><goal>exec</goal></goals>
+                        <configuration>
+                            <arguments><argument>ci</argument></arguments>
+                        </configuration>
+                    </execution>
+                    <execution>
+                        <id>frontend-npm-build</id>
+                        <phase>prepare-package</phase>
+                        <goals><goal>exec</goal></goals>
+                        <configuration>
+                            <arguments><argument>run</argument><argument>build</argument></arguments>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-resources-plugin</artifactId>
+                <version>3.3.1</version>
+                <executions>
+                    <execution>
+                        <id>copy-frontend-dist</id>
+                        <phase>prepare-package</phase>
+                        <goals><goal>copy-resources</goal></goals>
+                        <configuration>
+                            <outputDirectory>${project.build.outputDirectory}/static</outputDirectory>
+                            <resources>
+                                <resource>
+                                    <directory>${project.basedir}/frontend/dist</directory>
+                                    <filtering>false</filtering>
+                                </resource>
+                            </resources>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
             <plugin>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>

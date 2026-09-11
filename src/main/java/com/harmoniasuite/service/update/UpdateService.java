@@ -68,7 +68,13 @@ public class UpdateService {
             return failureStatus(version, null, UpdateState.UNAVAILABLE,
                     new UpdateException(UpdateErrorCode.SOURCES_NOT_FOUND));
         }
-        if (gitBinary == null || ToolchainProvider.javaHome() == null) {
+        boolean nodeReady;
+        try {
+            nodeReady = ToolchainProvider.nodeHome(root) != null;
+        } catch (UpdateException e) {
+            nodeReady = false;
+        }
+        if (gitBinary == null || ToolchainProvider.javaHome() == null || !nodeReady) {
             String launchMode = UpdateRelaunch.detectLaunchMode(System.getProperty("java.class.path", ""));
             return new UpdateStatusDto(version, true, launchMode, true,
                     null, null, null, null, false, UpdateState.TOOLCHAIN_REQUIRED,
@@ -260,10 +266,13 @@ public class UpdateService {
             phase = UpdatePhase.BUILD;
             phaseOutput.clear();
             List<String> mavenCommand = mavenBuildCommand(plan.root());
+            String nodeHome = ToolchainProvider.requireNodeHome(plan.root(), log);
             code = runProcess(plan.root(), mavenCommand, line -> {
                 phaseOutput.add(line);
                 log.accept(line);
-            }, Map.of("JAVA_HOME", plan.javaHome()));
+            }, Map.of(
+                    "JAVA_HOME", plan.javaHome(),
+                    "PATH", ToolchainProvider.prependToPath(nodeHome, System.getenv("PATH"))));
             if (code != 0) {
                 throw new UpdateException(phase.errorCode, formatFailure(mavenCommand, code, phaseOutput));
             }

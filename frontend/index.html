@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Harmonia Suite</title>
+    <meta
+      name="description"
+      content="Harmonia Suite — пайплайн локализации FFXIV (EN → RU)"
+    />
+    <meta name="theme-color" content="#0e0f12" />
+    <meta name="color-scheme" content="dark light" />
+    <link rel="icon" type="image/png" href="/img/yuki-icon.png" />
+    <script>
+      try {
+        const theme =
+          localStorage.getItem("theme") ||
+          (matchMedia("(prefers-color-scheme: light)").matches
+            ? "light"
+            : "dark");
+        document.documentElement.setAttribute("data-theme", theme);
+      } catch (error) {
+        document.documentElement.setAttribute("data-theme", "dark");
+      }
+    </script>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

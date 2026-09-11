@@ -1,10 +1,10 @@
 // Syncs game-derived frontend data after a game patch + sources refresh:
-//  1. Regenerates src/main/resources/static/js/ui-colors.js from
+//  1. Regenerates frontend/src/domain/uiColors.ts from
 //     data/sources/<version>/en/UIColor.csv (Dark theme column, UInt32 RGBA).
 //  2. Scans data/sources/<version>/en/*.csv with the real tag parser and refreshes
 //     tools/tag-inventory.json (tag name -> uses, kind, sample).
 //     Names that resolve to kind "misc" or appear for the first time need
-//     a human decision in TAG_KINDS (src/main/resources/static/js/tags.js).
+//     a human decision in TAG_KINDS (frontend/src/domain/tags.ts).
 //
 // Usage: node tools/sync-game-data.cjs   (run from the repo root)
 const fs = require('fs');
@@ -29,7 +29,8 @@ function latestSourceEn() {
 
 const LATEST = latestSourceEn();
 const RAW = LATEST.dir;
-const COLORS_JS = path.join(ROOT, 'src', 'main', 'resources', 'static', 'js', 'ui-colors.js');
+const COLORS_TS = path.join(ROOT, 'frontend', 'src', 'domain', 'uiColors.ts');
+const TAGS_TS = path.join(ROOT, 'frontend', 'src', 'domain', 'tags.ts');
 const INVENTORY = path.join(__dirname, 'tag-inventory.json');
 
 function cssOf(uint32) {
@@ -69,12 +70,17 @@ async function main() {
   const js = '// Generated from data/sources/' + LATEST.version + '/en/UIColor.csv (Dark theme column, UInt32 RGBA).\n'
     + '// Regenerate on game patch: node tools/sync-game-data.cjs\n'
     + 'export const UI_COLORS = ' + JSON.stringify(map) + ';\n';
-  const before = fs.existsSync(COLORS_JS) ? fs.readFileSync(COLORS_JS, 'utf8') : null;
-  fs.writeFileSync(COLORS_JS, js);
-  console.log(`ui-colors.js: ${Object.keys(map).length} rows${before === js ? ' (unchanged)' : ' (UPDATED)'}`);
+  const before = fs.existsSync(COLORS_TS) ? fs.readFileSync(COLORS_TS, 'utf8') : null;
+  fs.writeFileSync(COLORS_TS, js);
+  console.log(`uiColors.ts: ${Object.keys(map).length} rows${before === js ? ' (unchanged)' : ' (UPDATED)'}`);
 
   // 2. Tag inventory with the real parser.
-  const tags = await import('../src/main/resources/static/js/tags.js');
+  // tags.ts is intentionally also valid JavaScript, but Node's native loader does not
+  // resolve Vite's extensionless TypeScript imports. Inline the generated color table
+  // into a data module so this repository tool remains dependency-free.
+  const tagSource = fs.readFileSync(TAGS_TS, 'utf8')
+    .replace(/^import[^\n]+\n/, 'const UI_COLORS = ' + JSON.stringify(map) + ';\n');
+  const tags = await import('data:text/javascript,' + encodeURIComponent(tagSource));
   const files = fs.readdirSync(RAW).filter(f => f.toLowerCase().endsWith('.csv'));
   const stats = new Map();
   let payloads = 0;

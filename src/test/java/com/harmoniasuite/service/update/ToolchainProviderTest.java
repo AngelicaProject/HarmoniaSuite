@@ -5,6 +5,8 @@ import org.junit.jupiter.api.Test;
 
 import java.util.List;
 import java.util.Map;
+import java.nio.file.Files;
+import java.nio.file.Path;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
@@ -29,5 +31,22 @@ class ToolchainProviderTest {
         assertEquals(null, ToolchainProvider.minGitDownloadUrl(List.of(
                 Map.of("name", "MinGit-2.51.0-32-bit.zip", "browser_download_url", "https://example.com/m32.zip"))));
         assertEquals(null, ToolchainProvider.minGitDownloadUrl(null));
+    }
+
+    @Test
+    @DisplayName("Node.js requirement comes from the checkout and matches exactly")
+    void readsNodeVersionRequirement() throws Exception {
+        Path checkout = Files.createTempDirectory("harmonia-node-test");
+        try {
+            Path frontend = Files.createDirectories(checkout.resolve("frontend"));
+            Files.writeString(frontend.resolve(".node-version"), "v24.15.0\n");
+            assertEquals("24.15.0", ToolchainProvider.requiredNodeVersion(checkout));
+            assertEquals(true, ToolchainProvider.isCompatibleNodeVersion("v24.15.0", "24.15.0"));
+            assertEquals(false, ToolchainProvider.isCompatibleNodeVersion("v24.14.0", "24.15.0"));
+        } finally {
+            Files.deleteIfExists(checkout.resolve("frontend").resolve(".node-version"));
+            Files.deleteIfExists(checkout.resolve("frontend"));
+            Files.deleteIfExists(checkout);
+        }
     }
 }

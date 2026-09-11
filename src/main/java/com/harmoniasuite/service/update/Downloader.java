@@ -26,7 +26,7 @@ final class Downloader {
 
     private static final Set<String> ALLOWED_DOWNLOAD_HOSTS = Set.of(
             "api.github.com", "github.com", "objects.githubusercontent.com",
-            "release-assets.githubusercontent.com", "api.adoptium.net");
+            "release-assets.githubusercontent.com", "api.adoptium.net", "nodejs.org");
     private static final int MAX_BODY_EXCERPT_CHARS = 4096;
     private static final Logger logger = LoggerFactory.getLogger(Downloader.class);
 
