@@ -7,8 +7,8 @@
 
 На Windows application-managed root — `%LOCALAPPDATA%\HarmoniaSuite\`, а user-data root —
 `%APPDATA%\HarmoniaSuite\`. На Linux application-managed root — `$XDG_DATA_HOME/harmonia-suite`
-(fallback `~/.local/share/harmonia-suite`), user-data root — `$XDG_DATA_HOME/HarmoniaSuite`
-(fallback `~/.local/share/HarmoniaSuite`), state — `$XDG_STATE_HOME/harmonia-suite`
+(fallback `~/.local/share/harmonia-suite`), user-data root — `$XDG_DATA_HOME/harmonia-suite-data`
+(fallback `~/.local/share/harmonia-suite-data`), state — `$XDG_STATE_HOME/harmonia-suite`
 (fallback `~/.local/state/harmonia-suite`), cache — `$XDG_CACHE_HOME/harmonia-suite`
 (fallback `~/.cache/harmonia-suite`). Эти корни вычисляются без привязки frontend к ОС.
 
@@ -34,9 +34,10 @@ exports, logs and user configuration. Installer никогда не делает
 `harmonia://app`, создаёт окно с `nodeIntegration=false`, `contextIsolation=true`, `sandbox=true`
 и `webviewTag=false`, затем выбирает единственный active `GatewayProfile`.
 
-В local mode main process выбирает port `0` на `127.0.0.1`, запускает принадлежащий ему Spring
-child с `--server.address=127.0.0.1 --server.port=<port>`, ждёт `GET /api/status` и только после
-readiness загружает UI. В remote mode child не запускается; proxy разрешает HTTPS gateway (HTTP
+В local mode main process запускает принадлежащий ему Spring child с
+`--server.address=127.0.0.1 --server.port=0 --harmonia.gateway-instance=<token>`, принимает
+от него после bind точный порт через identity-bound readiness marker, затем ждёт `GET /api/status`
+и только после readiness загружает UI. В remote mode child не запускается; proxy разрешает HTTPS gateway (HTTP
 только для loopback или явного development override). Renderer видит только относительные
 `/api/**`: `harmonia://app/api/**` проксируется main process, остальные пути custom protocol
 отдают Vue `dist` и fallback на `index.html`.
@@ -81,7 +82,7 @@ artifact URLs:
 {
   "schemaVersion": 1,
   "channel": "rolling-main",
-  "targetCommit": "<full sha256 git commit>",
+  "targetCommit": "<full Git object id / commit SHA>",
   "productVersion": "1.2.0",
   "components": {"desktop": "1", "gateway": "1", "installer": "1", "extractor": "1"},
   "artifacts": [{"component": "desktop", "platform": "windows", "arch": "x64",

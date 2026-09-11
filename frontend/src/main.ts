@@ -1,6 +1,7 @@
 import { createApp } from "vue";
 import App from "./App.vue";
 import "./assets/app.css";
+import "./theme";
 import { showNotification } from "./composables/useNotifications";
 
 const app = createApp(App);

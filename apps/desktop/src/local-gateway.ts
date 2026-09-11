@@ -1,8 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
-
-import { findFreeLoopbackPort } from "./ports.js";
+import { randomUUID } from "node:crypto";
 
 type LocalGatewayOptions = {
   jarPath?: string;
@@ -11,12 +10,23 @@ type LocalGatewayOptions = {
   readinessTimeoutMs?: number;
   log?: (message: string) => void;
   fetchImpl?: typeof fetch;
+  spawnImpl?: SpawnGateway;
 };
+
+type SpawnGateway = (
+  command: string,
+  args: string[],
+  options: Parameters<typeof spawn>[2],
+) => ChildProcess;
 
 export class LocalGateway {
   private child: ChildProcess | undefined;
   private port: number | undefined;
   private stopping = false;
+  private readyResolve: ((port: number) => void) | undefined;
+  private readyReject: ((error: Error) => void) | undefined;
+  private instanceId: string | undefined;
+  private outputBuffer = "";
   private readonly options: LocalGatewayOptions;
 
   constructor(options: LocalGatewayOptions = {}) {
@@ -27,7 +37,6 @@ export class LocalGateway {
     if (this.child) {
       throw new Error("local gateway is already running");
     }
-    const port = await findFreeLoopbackPort();
     const jarPath = this.options.jarPath || defaultGatewayJar();
     if (!jarPath || !existsSync(jarPath)) {
       throw new Error(
@@ -36,17 +45,23 @@ export class LocalGateway {
     }
     const java = this.options.javaBinary || defaultJavaBinary();
     const workspace = this.options.workspace || process.env.HARMONIA_WORKSPACE;
+    const instanceId = randomUUID().replaceAll("-", "");
+    this.instanceId = instanceId;
+    this.stopping = false;
+    this.outputBuffer = "";
     const args = [
       "-jar",
       jarPath,
       "--server.address=127.0.0.1",
-      `--server.port=${port}`,
+      "--server.port=0",
+      `--harmonia.gateway-instance=${instanceId}`,
     ];
     if (workspace) {
       args.push(`--harmonia.workspace=${workspace}`);
     }
-    this.options.log?.(`Запуск local gateway на 127.0.0.1:${port}`);
-    const child = spawn(java, args, {
+    this.options.log?.("Запуск local gateway на динамическом loopback-порту");
+    const spawnGateway = this.options.spawnImpl || spawn;
+    const child = spawnGateway(java, args, {
       cwd: resolve(jarPath, ".."),
       env: {
         ...process.env,
@@ -57,11 +72,14 @@ export class LocalGateway {
       windowsHide: true,
     });
     this.child = child;
-    this.port = port;
     child.stdout?.setEncoding("utf8");
     child.stderr?.setEncoding("utf8");
-    child.stdout?.on("data", (chunk: string) => this.logLines(chunk));
-    child.stderr?.on("data", (chunk: string) => this.logLines(chunk));
+    child.stdout?.on("data", (chunk: string) => this.handleOutput(chunk));
+    child.stderr?.on("data", (chunk: string) => this.handleOutput(chunk));
+    const readyPort = new Promise<number>((resolveReady, rejectReady) => {
+      this.readyResolve = resolveReady;
+      this.readyReject = rejectReady;
+    });
     const exited = new Promise<never>((_, reject) => {
       child.once("error", (error) => reject(new Error(`local gateway process failed: ${error.message}`)));
       child.once("exit", (code, signal) => {
@@ -71,11 +89,15 @@ export class LocalGateway {
       });
     });
     try {
-      await Promise.race([this.waitUntilReady(port), exited]);
+      const port = await Promise.race([readyPort, exited]);
+      await this.waitUntilReady(port);
       return `http://127.0.0.1:${port}`;
     } catch (error) {
       await this.stop();
       throw error;
+    } finally {
+      this.readyResolve = undefined;
+      this.readyReject = undefined;
     }
   }
 
@@ -87,6 +109,9 @@ export class LocalGateway {
     this.stopping = true;
     this.child = undefined;
     this.port = undefined;
+    this.readyReject?.(new Error("local gateway stopped"));
+    this.readyResolve = undefined;
+    this.readyReject = undefined;
     if (child.exitCode !== null || child.signalCode !== null) {
       return;
     }
@@ -125,11 +150,28 @@ export class LocalGateway {
     throw new Error(`local gateway readiness timeout (${lastError})`);
   }
 
-  private logLines(chunk: string): void {
-    chunk.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).forEach((line) => {
+  private handleOutput(chunk: string): void {
+    this.outputBuffer += chunk;
+    const lines = this.outputBuffer.split(/\r?\n/);
+    this.outputBuffer = lines.pop() || "";
+    lines.map((line) => line.trim()).filter(Boolean).forEach((line) => {
       this.options.log?.(`[gateway] ${line}`);
+      const port = parseGatewayReadyLine(line, this.instanceId);
+      if (port !== undefined) {
+        this.port = port;
+        this.readyResolve?.(port);
+      }
     });
   }
+}
+
+export function parseGatewayReadyLine(line: string, expectedInstance?: string): number | undefined {
+  const match = /^HARMONIA_GATEWAY_READY instance=([A-Za-z0-9_-]+) port=(\d+)$/.exec(line.trim());
+  if (!match || !expectedInstance || match[1] !== expectedInstance) {
+    return undefined;
+  }
+  const port = Number(match[2]);
+  return Number.isInteger(port) && port > 0 && port <= 65535 ? port : undefined;
 }
 
 export function defaultGatewayJar(): string | undefined {

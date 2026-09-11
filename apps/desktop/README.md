@@ -26,8 +26,8 @@ npm run dev
 
 The shell finds `target/harmonia-suite.jar` automatically. Set `HARMONIA_GATEWAY_JAR` when using a
 different backend artifact, and `HARMONIA_WORKSPACE` to point at an existing development workspace.
-The shell chooses a free loopback port, starts Spring with explicit address/port arguments, waits
-for `/api/status`, and stops that child when the window closes.
+The shell starts Spring with `--server.port=0`, consumes an identity-bound readiness marker with
+the actual loopback port, waits for `/api/status`, and stops that child when the window closes.
 
 ## Gateway profiles
 
@@ -55,5 +55,5 @@ override for explicit HTTP testing.
 npm run check
 ```
 
-The tests cover profile parsing, remote URL policy, dynamic port allocation, SPA protocol mapping
-and path traversal protection.
+The tests cover profile parsing, remote URL policy, the port-0 readiness handshake and failed-bind
+cleanup, SPA protocol mapping and path traversal protection.

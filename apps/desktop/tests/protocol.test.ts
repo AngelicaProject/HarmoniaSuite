@@ -1,10 +1,19 @@
 import { describe, expect, it } from "vitest";
 import { resolve } from "node:path";
 
+import { CONTENT_SECURITY_POLICY } from "../src/csp.js";
 import { apiGatewayUrl, resolveFrontendFile } from "../src/protocol-mapping.js";
 import { proxyApiRequest } from "../src/protocol-proxy.js";
 
 describe("harmonia protocol mapping", () => {
+  it("uses a restrictive renderer CSP without general inline execution", () => {
+    expect(CONTENT_SECURITY_POLICY).toContain("script-src 'self'");
+    expect(CONTENT_SECURITY_POLICY).toContain("style-src 'self'");
+    expect(CONTENT_SECURITY_POLICY).toContain("style-src-attr 'unsafe-inline'");
+    expect(CONTENT_SECURITY_POLICY).not.toContain("script-src 'self' 'unsafe-inline'");
+    expect(CONTENT_SECURITY_POLICY).not.toContain("style-src 'self' 'unsafe-inline'");
+  });
+
   it("maps API requests to the active gateway while preserving query", () => {
     expect(apiGatewayUrl("https://gateway.example.test/base", "/api/status?x=1")).toBe(
       "https://gateway.example.test/base/api/status?x=1",
