@@ -10,8 +10,10 @@ The core owns:
 - atomic installation state and transaction journal writes;
 - exclusive installation locking;
 - persistent structured diagnostics;
-- HTTPS download abstraction with retries, `.partial` resume and SHA-256 promotion checks;
-- shell-free process execution with timeout and redacted command diagnostics;
+- HTTPS download abstraction with retries, `.partial` resume, mandatory SHA-256 checks and
+  `Content-Range` validation before append;
+- shell-free process execution with process-tree timeout termination, bounded output capture,
+  explicit environment policy and redacted command diagnostics;
 - validated transaction phases and conservative crash-recovery inspection.
 
 Run the checks from the repository root with:

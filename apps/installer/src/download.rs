@@ -14,27 +14,26 @@ use crate::checksum::{sha256_file, verify_sha256, ChecksumError};
 pub struct DownloadRequest {
     pub url: String,
     pub destination: PathBuf,
-    pub expected_sha256: Option<String>,
+    expected_sha256: String,
     pub timeout: Duration,
     pub max_retries: u32,
     pub resume: bool,
 }
 
 impl DownloadRequest {
-    pub fn new(url: impl Into<String>, destination: impl Into<PathBuf>) -> Self {
+    pub fn new(
+        url: impl Into<String>,
+        destination: impl Into<PathBuf>,
+        expected_sha256: impl Into<String>,
+    ) -> Self {
         Self {
             url: url.into(),
             destination: destination.into(),
-            expected_sha256: None,
+            expected_sha256: expected_sha256.into(),
             timeout: Duration::from_secs(10 * 60),
             max_retries: 2,
             resume: true,
         }
-    }
-
-    pub fn expected_sha256(mut self, value: impl Into<String>) -> Self {
-        self.expected_sha256 = Some(value.into());
-        self
     }
 
     pub fn timeout(mut self, value: Duration) -> Self {
@@ -70,10 +69,16 @@ pub enum DownloadError {
     Io(#[from] io::Error),
     #[error("download checksum failed: {0}")]
     Checksum(#[from] ChecksumError),
+    #[error("download resume range mismatch: expected start {expected}, got {actual:?}")]
+    ResumeRangeMismatch {
+        expected: u64,
+        actual: Option<u64>,
+    },
 }
 
 pub struct DownloadResponse {
     pub status: u16,
+    pub content_range_start: Option<u64>,
     pub body: Box<dyn Read + Send>,
 }
 
@@ -115,15 +120,12 @@ impl<T> ResumableDownloader<T> {
 impl<T: DownloadTransport> DownloadClient for ResumableDownloader<T> {
     fn download(&self, request: &DownloadRequest) -> Result<DownloadReceipt, DownloadError> {
         validate_request(request)?;
-        if let Some(expected) = &request.expected_sha256 {
-            if request.destination.is_file()
-                && verify_sha256(&request.destination, expected).is_ok()
-            {
-                return receipt_for(&request.destination, false);
-            }
-            if request.destination.is_file() {
-                fs::remove_file(&request.destination)?;
-            }
+        let expected = &request.expected_sha256;
+        if request.destination.is_file() && verify_sha256(&request.destination, expected).is_ok() {
+            return receipt_for(&request.destination, false);
+        }
+        if request.destination.is_file() {
+            fs::remove_file(&request.destination)?;
         }
         if let Some(parent) = request.destination.parent() {
             fs::create_dir_all(parent)?;
@@ -149,16 +151,14 @@ impl<T: DownloadTransport> DownloadClient for ResumableDownloader<T> {
                 Err(error) => return Err(error),
             };
             if response.status == 416 {
-                if let Some(expected) = &request.expected_sha256 {
-                    match verify_sha256(&partial, expected) {
-                        Ok(_) => {
-                            promote(&partial, &request.destination)?;
-                            return receipt_for(&request.destination, true);
-                        }
-                        Err(error) => {
-                            let _ = fs::remove_file(&partial);
-                            return Err(error.into());
-                        }
+                match verify_sha256(&partial, expected) {
+                    Ok(_) => {
+                        promote(&partial, &request.destination)?;
+                        return receipt_for(&request.destination, true);
+                    }
+                    Err(error) => {
+                        let _ = fs::remove_file(&partial);
+                        return Err(error.into());
                     }
                 }
             }
@@ -170,6 +170,12 @@ impl<T: DownloadTransport> DownloadClient for ResumableDownloader<T> {
             }
 
             let append = existing > 0 && response.status == 206;
+            if append && response.content_range_start != Some(existing) {
+                return Err(DownloadError::ResumeRangeMismatch {
+                    expected: existing,
+                    actual: response.content_range_start,
+                });
+            }
             let mut file = if append {
                 resumed = true;
                 OpenOptions::new().append(true).open(&partial)?
@@ -184,11 +190,9 @@ impl<T: DownloadTransport> DownloadClient for ResumableDownloader<T> {
                 return Err(error.into());
             }
             let digest = sha256_file(&partial)?;
-            if let Some(expected) = &request.expected_sha256 {
-                if let Err(error) = verify_sha256(&partial, expected) {
-                    let _ = fs::remove_file(&partial);
-                    return Err(error.into());
-                }
+            if let Err(error) = verify_sha256(&partial, expected) {
+                let _ = fs::remove_file(&partial);
+                return Err(error.into());
             }
             promote(&partial, &request.destination)?;
             return Ok(DownloadReceipt {
@@ -252,6 +256,11 @@ impl DownloadTransport for HttpDownloader {
         }
         Ok(DownloadResponse {
             status: response.status().as_u16(),
+            content_range_start: response
+                .headers()
+                .get(reqwest::header::CONTENT_RANGE)
+                .and_then(|value| value.to_str().ok())
+                .and_then(parse_content_range_start),
             body: Box::new(response),
         })
     }
@@ -272,15 +281,19 @@ fn validate_request(request: &DownloadRequest) -> Result<(), DownloadError> {
             "destination must name a file".to_owned(),
         ));
     }
-    if let Some(expected) = &request.expected_sha256 {
-        let value = expected.trim();
-        if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-            return Err(DownloadError::InvalidRequest(
-                "invalid expected SHA-256".to_owned(),
-            ));
-        }
+    let expected = request.expected_sha256.trim();
+    if expected.len() != 64 || !expected.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(DownloadError::InvalidRequest(
+            "a valid expected SHA-256 is required".to_owned(),
+        ));
     }
     Ok(())
+}
+
+fn parse_content_range_start(value: &str) -> Option<u64> {
+    let range = value.strip_prefix("bytes ")?;
+    let (start, _) = range.split_once('-')?;
+    start.parse().ok()
 }
 
 fn partial_path(destination: &Path) -> Result<PathBuf, DownloadError> {
@@ -350,6 +363,15 @@ mod tests {
     fn response(status: u16, body: &[u8]) -> DownloadResponse {
         DownloadResponse {
             status,
+            content_range_start: None,
+            body: Box::new(Cursor::new(body.to_vec())),
+        }
+    }
+
+    fn partial_response(start: u64, body: &[u8]) -> DownloadResponse {
+        DownloadResponse {
+            status: 206,
+            content_range_start: Some(start),
             body: Box::new(Cursor::new(body.to_vec())),
         }
     }
@@ -358,8 +380,11 @@ mod tests {
     fn verifies_checksum_before_promoting_download() {
         let directory = tempdir().unwrap();
         let destination = directory.path().join("tool.zip");
-        let request = DownloadRequest::new("https://example.test/tool.zip", &destination)
-            .expected_sha256("2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824");
+        let request = DownloadRequest::new(
+            "https://example.test/tool.zip",
+            &destination,
+            "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
+        );
         let downloader = ResumableDownloader::with_retry_delay(
             FakeTransport::new(vec![response(200, b"hello")]),
             Duration::ZERO,
@@ -379,10 +404,9 @@ mod tests {
         let expected_file = directory.path().join("expected");
         fs::write(&expected_file, b"hello world").unwrap();
         let expected = sha256_file(&expected_file).unwrap();
-        let request = DownloadRequest::new("https://example.test/tool.zip", &destination)
-            .expected_sha256(expected);
+        let request = DownloadRequest::new("https://example.test/tool.zip", &destination, expected);
         let downloader = ResumableDownloader::with_retry_delay(
-            FakeTransport::new(vec![response(206, b"world")]),
+            FakeTransport::new(vec![partial_response(6, b"world")]),
             Duration::ZERO,
         );
         let receipt = downloader.download(&request).unwrap();
@@ -392,8 +416,11 @@ mod tests {
         let bad_destination = directory.path().join("bad.zip");
         let bad_partial = directory.path().join("bad.zip.partial");
         fs::write(&bad_partial, b"stale").unwrap();
-        let bad_request = DownloadRequest::new("https://example.test/bad.zip", &bad_destination)
-            .expected_sha256("0000000000000000000000000000000000000000000000000000000000000000");
+        let bad_request = DownloadRequest::new(
+            "https://example.test/bad.zip",
+            &bad_destination,
+            "0000000000000000000000000000000000000000000000000000000000000000",
+        );
         let bad_downloader = ResumableDownloader::with_retry_delay(
             FakeTransport::new(vec![response(200, b"bad")]),
             Duration::ZERO,
@@ -413,10 +440,54 @@ mod tests {
         let request = DownloadRequest::new(
             "http://example.test/tool.zip",
             directory.path().join("tool.zip"),
+            "0000000000000000000000000000000000000000000000000000000000000000",
         );
         assert!(matches!(
             downloader.download(&request),
             Err(DownloadError::InvalidUrl)
         ));
+    }
+
+    #[test]
+    fn rejects_missing_checksum_before_transport() {
+        let directory = tempdir().unwrap();
+        let request = DownloadRequest::new(
+            "https://example.test/tool.zip",
+            directory.path().join("tool.zip"),
+            "",
+        );
+        let downloader = ResumableDownloader::with_retry_delay(
+            FakeTransport::new(vec![response(200, b"unused")]),
+            Duration::ZERO,
+        );
+        assert!(matches!(
+            downloader.download(&request),
+            Err(DownloadError::InvalidRequest(_))
+        ));
+    }
+
+    #[test]
+    fn rejects_resume_response_with_wrong_content_range_start() {
+        let directory = tempdir().unwrap();
+        let destination = directory.path().join("tool.zip");
+        let partial = directory.path().join("tool.zip.partial");
+        fs::write(&partial, b"hello ").unwrap();
+        let expected_file = directory.path().join("expected");
+        fs::write(&expected_file, b"hello world").unwrap();
+        let expected = sha256_file(&expected_file).unwrap();
+        let request = DownloadRequest::new("https://example.test/tool.zip", &destination, expected);
+        let downloader = ResumableDownloader::with_retry_delay(
+            FakeTransport::new(vec![partial_response(0, b"world")]),
+            Duration::ZERO,
+        );
+        assert!(matches!(
+            downloader.download(&request),
+            Err(DownloadError::ResumeRangeMismatch {
+                expected: 6,
+                actual: Some(0)
+            })
+        ));
+        assert_eq!(fs::read(partial).unwrap(), b"hello ");
+        assert!(!destination.exists());
     }
 }

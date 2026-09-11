@@ -8,11 +8,11 @@ pub mod state;
 
 pub use diagnostics::DiagnosticLogger;
 pub use download::{
-    DownloadClient, DownloadReceipt, DownloadRequest, DownloadResponse, DownloadTransport,
-    HttpDownloader, ResumableDownloader,
+    DownloadClient, DownloadError, DownloadReceipt, DownloadRequest, DownloadResponse,
+    DownloadTransport, HttpDownloader, ResumableDownloader,
 };
 pub use lock::{InstallationLock, LockError};
-pub use paths::{InstallationPaths, PathEnvironment, Platform, TargetArchitecture};
+pub use paths::{InstallationPaths, PathEnvironment, PathError, Platform, TargetArchitecture};
 pub use process::{CommandSpec, ProcessError, ProcessOutput, ProcessRunner, SystemProcessRunner};
 pub use state::{
     InstallationState, OperationKind, RecoveryAction, StateError, StateStore, Transaction,
