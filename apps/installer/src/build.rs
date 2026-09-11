@@ -710,7 +710,7 @@ mod tests {
                 {
                     true
                 }
-                Some(FailurePoint::Backend) if program_name.starts_with("mvnw") => true,
+                Some(FailurePoint::Backend) if is_maven_command(command) => true,
                 Some(FailurePoint::Desktop)
                     if current_dir.ends_with(Path::new("desktop")) && is_build_command(command) =>
                 {
@@ -739,7 +739,7 @@ mod tests {
                     output.join("harmonia-electron"),
                     b"fixture electron payload",
                 )?;
-            } else if program_name.starts_with("mvnw") {
+            } else if is_maven_command(command) {
                 let output = current_dir.join("target");
                 fs::create_dir_all(&output)?;
                 fs::write(output.join("harmonia-suite.jar"), b"fixture jar")?;
@@ -926,6 +926,18 @@ mod tests {
                 .current_dir
                 .as_ref()
                 .is_some_and(|path| path.ends_with(Path::new("desktop")))
+    }
+
+    fn is_maven_command(command: &CommandSpec) -> bool {
+        command
+            .program
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with("mvnw"))
+            || command
+                .args
+                .iter()
+                .any(|argument| argument.contains("mvnw"))
     }
 
     #[test]

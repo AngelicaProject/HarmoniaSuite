@@ -394,6 +394,12 @@ mod tests {
         tree_builder.insert("README.md", blob, 0o100644).unwrap();
         let tree = repository.find_tree(tree_builder.write().unwrap()).unwrap();
         let signature = git2::Signature::now("Harmonia Test", "test@example.invalid").unwrap();
+        let parent = repository
+            .find_reference("refs/heads/main")
+            .ok()
+            .and_then(|reference| reference.target())
+            .and_then(|oid| repository.find_commit(oid).ok());
+        let parents = parent.iter().collect::<Vec<_>>();
         repository
             .commit(
                 Some("refs/heads/main"),
@@ -401,7 +407,7 @@ mod tests {
                 &signature,
                 "test commit",
                 &tree,
-                &[],
+                &parents,
             )
             .unwrap()
             .to_string()
