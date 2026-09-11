@@ -1,20 +1,11 @@
 <script lang="ts">
-import { defineComponent } from "vue";
+import { defineAsyncComponent, defineComponent } from "vue";
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import { api } from "./api/client";
 import { ENTRY_STATUS } from "./domain/translationStatus";
 import { buildContextMenuItems } from "./domain/contextMenu";
 import Picker from "./components/Picker.vue";
 import Editor from "./components/Editor.vue";
-import Settings from "./components/Settings.vue";
-import TranslateView from "./components/TranslateView.vue";
-import SearchView from "./components/SearchView.vue";
-import TagsView from "./components/TagsView.vue";
-import SummaryView from "./components/SummaryView.vue";
-import PackView from "./components/PackView.vue";
-import ExportView from "./components/ExportView.vue";
-import DeltaView from "./components/DeltaView.vue";
-import LogView from "./components/LogView.vue";
 import Dropdown from "./components/Dropdown.vue";
 import AppTopBar from "./components/shell/AppTopBar.vue";
 import JobBar from "./components/shell/JobBar.vue";
@@ -23,6 +14,7 @@ import { useFileTree } from "./composables/useFileTree";
 import { useUpdater } from "./composables/useUpdater";
 import { useCommandPalette } from "./composables/useCommandPalette";
 import { useDockLayout } from "./composables/useDockLayout";
+import { useRenderedDockViews } from "./composables/useRenderedDockViews";
 import { useJobs } from "./composables/useJobs";
 import {
   useFileRows,
@@ -37,6 +29,32 @@ import { useNotifications } from "./composables/useNotifications";
 import { useWorkspaceNavigation } from "./composables/useWorkspaceNavigation";
 import { VIEWS, VIEW_IDS } from "./workspace/views";
 import type { Entry, FileStats, Job, DeltaConflict } from "./api/types";
+
+const Settings = defineAsyncComponent(
+  () => import("./components/Settings.vue"),
+);
+const TranslateView = defineAsyncComponent(
+  () => import("./components/TranslateView.vue"),
+);
+const SearchView = defineAsyncComponent(
+  () => import("./components/SearchView.vue"),
+);
+const TagsView = defineAsyncComponent(
+  () => import("./components/TagsView.vue"),
+);
+const SummaryView = defineAsyncComponent(
+  () => import("./components/SummaryView.vue"),
+);
+const PackView = defineAsyncComponent(
+  () => import("./components/PackView.vue"),
+);
+const ExportView = defineAsyncComponent(
+  () => import("./components/ExportView.vue"),
+);
+const DeltaView = defineAsyncComponent(
+  () => import("./components/DeltaView.vue"),
+);
+const LogView = defineAsyncComponent(() => import("./components/LogView.vue"));
 
 interface EditorHandle {
   current?: Entry | null;
@@ -309,6 +327,12 @@ const App = defineComponent({
       hideZone,
       hidePanel,
     } = dock;
+
+    const { isRendered } = useRenderedDockViews(active);
+
+    function shouldRenderView(view: string): boolean {
+      return isRendered(view) && !!hostEl(view);
+    }
 
     function closeMenusOnDocClick(e: MouseEvent): void {
       const target = e.target instanceof Element ? e.target : null;
@@ -783,6 +807,7 @@ const App = defineComponent({
       dropClass,
       setHost,
       hostEl,
+      shouldRenderView,
       activeTitle,
       paletteOpen,
       paletteQ,
@@ -1648,10 +1673,10 @@ export default App;
         </div>
       </div>
     </section>
-    <Teleport v-if="hostEl('log')" :to="hostEl('log')">
+    <Teleport v-if="shouldRenderView('log')" :to="hostEl('log')">
       <LogView :log="logText" data-ctx="log" />
     </Teleport>
-    <Teleport v-if="hostEl('translate')" :to="hostEl('translate')">
+    <Teleport v-if="shouldRenderView('translate')" :to="hostEl('translate')">
       <TranslateView
         :files="sourceFiles"
         :selected="selTranslateSet"
@@ -1673,7 +1698,7 @@ export default App;
         @cancel="cancelJob"
       />
     </Teleport>
-    <Teleport v-if="hostEl('search')" :to="hostEl('search')">
+    <Teleport v-if="shouldRenderView('search')" :to="hostEl('search')">
       <SearchView
         :q="searchQ"
         @update:q="searchQ = $event"
@@ -1683,17 +1708,17 @@ export default App;
         @open="openSearchResult"
       />
     </Teleport>
-    <Teleport v-if="hostEl('tags')" :to="hostEl('tags')">
+    <Teleport v-if="shouldRenderView('tags')" :to="hostEl('tags')">
       <TagsView
         :filter="tagFilter"
         @update:filter="tagFilter = $event"
         @insert="insertTagToEditor"
       />
     </Teleport>
-    <Teleport v-if="hostEl('summary')" :to="hostEl('summary')">
+    <Teleport v-if="shouldRenderView('summary')" :to="hostEl('summary')">
       <SummaryView :summary="summary" />
     </Teleport>
-    <Teleport v-if="hostEl('pack')" :to="hostEl('pack')">
+    <Teleport v-if="shouldRenderView('pack')" :to="hostEl('pack')">
       <PackView
         :project-id="projectId"
         :pack="pack"
@@ -1710,7 +1735,7 @@ export default App;
         @toast="showToast"
       />
     </Teleport>
-    <Teleport v-if="hostEl('export')" :to="hostEl('export')">
+    <Teleport v-if="shouldRenderView('export')" :to="hostEl('export')">
       <ExportView
         :project-id="projectId"
         :job="job"
@@ -1724,7 +1749,7 @@ export default App;
         @clear-scope="clearExportScope"
       />
     </Teleport>
-    <Teleport v-if="hostEl('delta')" :to="hostEl('delta')">
+    <Teleport v-if="shouldRenderView('delta')" :to="hostEl('delta')">
       <DeltaView
         ref="deltaRef"
         :project-id="projectId"

@@ -5,11 +5,19 @@ import type {
   BackupList,
   SourceSettings,
 } from "./types";
-import { mapBackupList } from "./mappers";
-import { encode, request } from "./transport";
+import {
+  mapAiModels,
+  mapAiStatus,
+  mapBackup,
+  mapBackupList,
+  mapDetectedSettings,
+  mapSourceSettings,
+} from "./mappers";
+import { encode, record, request } from "./transport";
 
 export const settingsApi = {
-  aiSettings: (): Promise<AiStatus> => request<AiStatus>("/api/settings/ai"),
+  aiSettings: (): Promise<AiStatus> =>
+    request("/api/settings/ai").then(mapAiStatus),
   saveAiSettings: (body: {
     provider?: string;
     geminiKey?: string;
@@ -17,7 +25,7 @@ export const settingsApi = {
     openrouterModel?: string;
     openrouterReasoning?: string;
   }): Promise<AiStatus> =>
-    request<AiStatus>("/api/settings/ai", {
+    request("/api/settings/ai", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -27,37 +35,37 @@ export const settingsApi = {
         openrouter_model: body.openrouterModel,
         openrouter_reasoning: body.openrouterReasoning,
       }),
-    }),
+    }).then(mapAiStatus),
   settings: (): Promise<SourceSettings> =>
-    request<SourceSettings>("/api/settings"),
+    request("/api/settings").then(mapSourceSettings),
   saveSettings: (body: { gamePath?: string }): Promise<SourceSettings> =>
-    request<SourceSettings>("/api/settings", {
+    request("/api/settings", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ game_path: body.gamePath }),
-    }),
+    }).then(mapSourceSettings),
   checkAiKey: (body: {
     provider?: string;
     key?: string;
   }): Promise<Record<string, unknown>> =>
-    request<Record<string, unknown>>("/api/settings/ai/check", {
+    request("/api/settings/ai/check", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ provider: body.provider, key: body.key }),
-    }),
+    }).then(record),
   aiModels: (): Promise<AiModel[]> =>
-    request<AiModel[]>("/api/settings/ai/models"),
+    request("/api/settings/ai/models").then(mapAiModels),
   detectSettings: (): Promise<{ gamePath?: string }> =>
-    request<{ gamePath?: string }>("/api/settings/detect"),
+    request("/api/settings/detect").then(mapDetectedSettings),
   backups: (): Promise<BackupList> =>
-    request<Record<string, unknown>>("/api/backup").then(mapBackupList),
+    request("/api/backup").then(mapBackupList),
   createBackup: (): Promise<Backup> =>
-    request<Backup>("/api/backup", { method: "POST" }),
+    request("/api/backup", { method: "POST" }).then(mapBackup),
   saveBackupSettings: (
     retention?: number,
     autoIntervalMinutes?: number,
   ): Promise<BackupList> =>
-    request<Record<string, unknown>>("/api/backup/settings", {
+    request("/api/backup/settings", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -66,8 +74,12 @@ export const settingsApi = {
       }),
     }).then(mapBackupList),
   deleteBackup: (name: string): Promise<void> =>
-    request<void>(`/api/backup/${encode(name)}`, { method: "DELETE" }),
+    request(`/api/backup/${encode(name)}`, { method: "DELETE" }).then(
+      () => undefined,
+    ),
   openBackupFolder: (): Promise<void> =>
-    request<void>("/api/backup/open-folder", { method: "POST" }),
+    request("/api/backup/open-folder", { method: "POST" }).then(
+      () => undefined,
+    ),
   backupDownloadUrl: (name: string): string => `/api/backup/${encode(name)}`,
 };

@@ -1,16 +1,16 @@
 import type { SourceFiles, SourcePreview } from "./types";
-import { mapSourcePreview } from "./mappers";
+import { mapSourceFiles, mapSourcePreview } from "./mappers";
 import { query, request } from "./transport";
 
 export const sourceApi = {
   preview: (root: string, file: string): Promise<SourcePreview> =>
-    request<unknown>(`/api/source/preview?${query({ root, file })}`).then(
+    request(`/api/source/preview?${query({ root, file })}`).then(
       mapSourcePreview,
     ),
   previewFull: (root: string, file: string): Promise<SourcePreview> =>
-    request<unknown>(
-      `/api/source/preview?${query({ root, file, full: true })}`,
-    ).then(mapSourcePreview),
+    request(`/api/source/preview?${query({ root, file, full: true })}`).then(
+      mapSourcePreview,
+    ),
   sourceFiles: (root: string): Promise<SourceFiles> =>
-    request<SourceFiles>(`/api/source/files?${query({ root })}`),
+    request(`/api/source/files?${query({ root })}`).then(mapSourceFiles),
 };

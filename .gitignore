@@ -18,4 +18,5 @@ plans/
 *.db*
 node_modules/
 frontend/dist/
+frontend/coverage/
 **/.hermes-tmp.*
