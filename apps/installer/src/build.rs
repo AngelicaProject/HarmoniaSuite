@@ -698,11 +698,6 @@ mod tests {
                     program: command.program.display().to_string(),
                     source: io::Error::new(io::ErrorKind::InvalidInput, "missing fixture cwd"),
                 })?;
-            let program_name = command
-                .program
-                .file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or_default();
             let failure = match self.failure {
                 Some(FailurePoint::Frontend)
                     if current_dir.ends_with(Path::new("frontend"))
