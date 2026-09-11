@@ -573,6 +573,7 @@ export default defineComponent({
         this.trimTabs(t);
         this.persistTabs();
       } else if (t.phraseId !== id) {
+        if (t === this.activeTab) this.stashDraft();
         t.phraseId = id;
         this.persistTabs();
       }
@@ -1223,8 +1224,8 @@ export default defineComponent({
             :style="fieldDirty ? 'border-color:var(--accent)' : ''"
             v-model="translation"
             @keydown.ctrl.enter.prevent="save(true)"
-            @keydown.alt.arrowDown.prevent="next()"
-            @keydown.alt.arrowUp.prevent="prev()"
+            @keydown.alt.down.prevent="next()"
+            @keydown.alt.up.prevent="prev()"
             placeholder="Введите перевод…"
           ></textarea>
           <div

@@ -1,4 +1,5 @@
 import type { ExportList } from "./types";
+import { mapExportList } from "./mappers";
 import { download, encode, request } from "./transport";
 
 export const exportsApi = {
@@ -9,7 +10,7 @@ export const exportsApi = {
   exportManifestUrl: (projectId: string): string =>
     `/api/projects/${encode(projectId)}/exports/manifest`,
   exportList: (projectId: string): Promise<ExportList> =>
-    request<ExportList>(`/api/projects/${encode(projectId)}/exports`),
+    request(`/api/projects/${encode(projectId)}/exports`).then(mapExportList),
   downloadExportCsv: (projectId: string, file: string): Promise<Blob> =>
     download(
       `/api/projects/${encode(projectId)}/exports/csv?file=${encode(file)}`,

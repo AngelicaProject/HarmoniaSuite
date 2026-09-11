@@ -100,6 +100,7 @@ describe("App settings shell integration", () => {
     expect(settingsAction).toBeDefined();
     await settingsAction!.trigger("click");
     await flushPromises();
+    await vi.dynamicImportSettled();
     await nextTick();
 
     const dialog = wrapper.get('[role="dialog"]');

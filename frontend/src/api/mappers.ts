@@ -1,4 +1,7 @@
 import type {
+  AiModel,
+  AiStatus,
+  Backup,
   BackupList,
   DeltaExport,
   DeltaImportResult,
@@ -12,12 +15,16 @@ import type {
   PackMeta,
   PackResponse,
   ProjectsResponse,
+  PendingByFile,
+  ExportList,
   RowGroupsPage,
   SourcePreview,
+  SourceFiles,
+  SourceSettings,
   Summary,
   UpdateStatus,
 } from "./types";
-import type { DeltaRequest } from "./requestTypes";
+import type { AppVersion, DeltaRequest } from "./requestTypes";
 import { record } from "./transport";
 
 export function mapSummary(value: unknown): Summary | undefined {
@@ -32,6 +39,139 @@ export function mapSummary(value: unknown): Summary | undefined {
     outputDir:
       typeof data.output_dir === "string" ? data.output_dir : undefined,
   };
+}
+
+export function mapCreateProject(value: unknown): { id: string; name: string } {
+  const data = record(value);
+  return { id: String(data.id || ""), name: String(data.name || "") };
+}
+
+export function mapPendingByFile(value: unknown): PendingByFile {
+  const files = record(record(value).files);
+  return {
+    files: Object.fromEntries(
+      Object.entries(files).map(([file, count]) => [file, Number(count || 0)]),
+    ),
+  };
+}
+
+export function mapSourceFiles(value: unknown): SourceFiles {
+  const data = record(value);
+  return {
+    files: Array.isArray(data.files) ? data.files.map(String) : [],
+    root: String(data.root || ""),
+  };
+}
+
+export function mapSourceSettings(value: unknown): SourceSettings {
+  const data = record(value);
+  return {
+    gamePath: typeof data.game_path === "string" ? data.game_path : undefined,
+    gameValid: Boolean(data.game_valid),
+    gameVersion:
+      typeof data.game_version === "string" ? data.game_version : undefined,
+    activeRoot:
+      typeof data.active_root === "string" ? data.active_root : undefined,
+    ready: Boolean(data.ready),
+    configured: Boolean(data.configured),
+  };
+}
+
+export function mapAiStatus(value: unknown): AiStatus {
+  const data = record(value);
+  const stringArray = (field: string): string[] =>
+    Array.isArray(data[field]) ? data[field].map(String) : [];
+  return {
+    provider: typeof data.provider === "string" ? data.provider : undefined,
+    providers: stringArray("providers"),
+    geminiKeySet: Boolean(data.gemini_key_set),
+    geminiKeyHint:
+      typeof data.gemini_key_hint === "string"
+        ? data.gemini_key_hint
+        : undefined,
+    geminiKeySource:
+      typeof data.gemini_key_source === "string"
+        ? data.gemini_key_source
+        : undefined,
+    geminiConfigured: Boolean(data.gemini_configured),
+    geminiModel:
+      typeof data.gemini_model === "string" ? data.gemini_model : undefined,
+    geminiModels: stringArray("gemini_models"),
+    openrouterKeySet: Boolean(data.openrouter_key_set),
+    openrouterKeyHint:
+      typeof data.openrouter_key_hint === "string"
+        ? data.openrouter_key_hint
+        : undefined,
+    openrouterKeySource:
+      typeof data.openrouter_key_source === "string"
+        ? data.openrouter_key_source
+        : undefined,
+    openrouterConfigured: Boolean(data.openrouter_configured),
+    openrouterModel:
+      typeof data.openrouter_model === "string"
+        ? data.openrouter_model
+        : undefined,
+    openrouterReasoning:
+      typeof data.openrouter_reasoning === "string"
+        ? data.openrouter_reasoning
+        : undefined,
+  };
+}
+
+export function mapAiModels(value: unknown): AiModel[] {
+  return (Array.isArray(value) ? value : []).map((item) => {
+    const data = record(item);
+    return {
+      id: String(data.id || ""),
+      name: typeof data.name === "string" ? data.name : undefined,
+      context_length:
+        typeof data.context_length === "string" ||
+        typeof data.context_length === "number"
+          ? data.context_length
+          : undefined,
+    };
+  });
+}
+
+export function mapDetectedSettings(value: unknown): { gamePath?: string } {
+  const data = record(value);
+  return {
+    gamePath: typeof data.game_path === "string" ? data.game_path : undefined,
+  };
+}
+
+export function mapBackup(value: unknown): Backup {
+  const data = record(value);
+  return {
+    name: String(data.name || ""),
+    size: Number(data.size || 0),
+    createdAt: String(data.created_at || ""),
+  };
+}
+
+export function mapExportList(value: unknown): ExportList {
+  const data = record(value);
+  return {
+    files: (Array.isArray(data.files) ? data.files : []).map((item) => {
+      const file = record(item);
+      return { name: String(file.name || ""), size: Number(file.size || 0) };
+    }),
+    manifest: Boolean(data.manifest),
+  };
+}
+
+export function mapVersion(value: unknown): AppVersion {
+  const data = record(value);
+  return {
+    version: String(data.version || ""),
+    buildTime:
+      typeof data.build_time === "string" ? data.build_time : undefined,
+    commit: typeof data.commit === "string" ? data.commit : undefined,
+  };
+}
+
+export function mapNumber(value: unknown): number {
+  return typeof value === "number" ? value : Number(value || 0);
 }
 
 export function mapEntry(value: unknown): Entry {
@@ -209,7 +349,8 @@ export function mapDeltaResult(value: unknown): DeltaImportResult {
   };
 }
 
-export function mapBackupList(data: Record<string, unknown>): BackupList {
+export function mapBackupList(value: unknown): BackupList {
+  const data = record(value);
   return {
     backups: (
       (data.backups as Array<Record<string, unknown>> | undefined) || []
@@ -225,7 +366,8 @@ export function mapBackupList(data: Record<string, unknown>): BackupList {
   };
 }
 
-export function mapUpdateStatus(data: Record<string, unknown>): UpdateStatus {
+export function mapUpdateStatus(value: unknown): UpdateStatus {
+  const data = record(value);
   return {
     version: String(data.version || ""),
     supported: Boolean(data.supported),
@@ -290,7 +432,8 @@ export function mapPackMeta(data: Record<string, unknown>): PackMeta {
   };
 }
 
-export function mapPackResponse(data: Record<string, unknown>): PackResponse {
+export function mapPackResponse(value: unknown): PackResponse {
+  const data = record(value);
   return {
     pack: mapPackMeta((data.pack as Record<string, unknown> | undefined) || {}),
     manifest: data.manifest as Record<string, unknown> | undefined,
@@ -319,7 +462,8 @@ export function packPayload(pack: PackMeta): Record<string, unknown> {
   };
 }
 
-export function mapDeltaExport(data: Record<string, unknown>): DeltaExport {
+export function mapDeltaExport(value: unknown): DeltaExport {
+  const data = record(value);
   const header = record(data.header);
   const rows = (data.rows as Array<Record<string, unknown>> | undefined) || [];
   return {

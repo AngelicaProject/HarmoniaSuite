@@ -5,7 +5,7 @@ import { encode, request } from "./transport";
 
 export const jobsApi = {
   startJob: (body: JobRequest): Promise<Job> =>
-    request<unknown>("/api/jobs", {
+    request("/api/jobs", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -20,9 +20,7 @@ export const jobsApi = {
       }),
     }).then(mapJob),
   jobGet: (jobId: string): Promise<Job> =>
-    request<unknown>(`/api/jobs/${encode(jobId)}`).then(mapJob),
+    request(`/api/jobs/${encode(jobId)}`).then(mapJob),
   jobCancel: (jobId: string): Promise<Job> =>
-    request<unknown>(`/api/jobs/${encode(jobId)}`, { method: "DELETE" }).then(
-      mapJob,
-    ),
+    request(`/api/jobs/${encode(jobId)}`, { method: "DELETE" }).then(mapJob),
 };
