@@ -62,9 +62,10 @@ impl DiagnosticLogger {
             fields: fields.into_iter().collect(),
         };
         let encoded = serde_json::to_vec(&record)?;
-        let mut file = self.file.lock().map_err(|_| {
-            DiagnosticError::Io(io::Error::other("diagnostic log mutex poisoned"))
-        })?;
+        let mut file = self
+            .file
+            .lock()
+            .map_err(|_| DiagnosticError::Io(io::Error::other("diagnostic log mutex poisoned")))?;
         file.write_all(&encoded)?;
         file.write_all(b"\n")?;
         file.flush()?;
