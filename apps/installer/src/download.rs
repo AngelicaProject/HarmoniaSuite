@@ -70,10 +70,7 @@ pub enum DownloadError {
     #[error("download checksum failed: {0}")]
     Checksum(#[from] ChecksumError),
     #[error("download resume range mismatch: expected start {expected}, got {actual:?}")]
-    ResumeRangeMismatch {
-        expected: u64,
-        actual: Option<u64>,
-    },
+    ResumeRangeMismatch { expected: u64, actual: Option<u64> },
 }
 
 pub struct DownloadResponse {

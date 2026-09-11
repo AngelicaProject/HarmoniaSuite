@@ -420,7 +420,10 @@ fn allowed_transition(from: &TransactionPhase, to: &TransactionPhase) -> bool {
 }
 
 fn normalize(path: &Path) -> Result<PathBuf, StateError> {
-    if path.components().any(|component| component == Component::ParentDir) {
+    if path
+        .components()
+        .any(|component| component == Component::ParentDir)
+    {
         return Err(StateError::UnsafeRecoveryPath(path.to_path_buf()));
     }
     if path.is_absolute() {
@@ -733,16 +736,10 @@ mod tests {
     #[test]
     fn rejects_unknown_transaction_schema_before_recovery() {
         let store = store();
-        let transaction = Transaction::begin(
-            store.clone(),
-            OperationKind::Update,
-            None,
-            None,
-            Vec::new(),
-        )
-        .unwrap();
-        let mut record: serde_json::Value =
-            serde_json::to_value(transaction.record()).unwrap();
+        let transaction =
+            Transaction::begin(store.clone(), OperationKind::Update, None, None, Vec::new())
+                .unwrap();
+        let mut record: serde_json::Value = serde_json::to_value(transaction.record()).unwrap();
         record["schema_version"] = serde_json::json!(999);
         fs::write(
             store.paths().transaction_path(),

@@ -358,9 +358,8 @@ mod windows_job {
         }
 
         pub fn assign(&self, child: &std::process::Child) -> io::Result<()> {
-            let assigned = unsafe {
-                AssignProcessToJobObject(self.handle, child.as_raw_handle() as HANDLE)
-            };
+            let assigned =
+                unsafe { AssignProcessToJobObject(self.handle, child.as_raw_handle() as HANDLE) };
             if assigned == 0 {
                 return Err(io::Error::last_os_error());
             }

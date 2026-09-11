@@ -71,7 +71,6 @@ impl PathEnvironment {
             xdg_cache_home: env::var_os("XDG_CACHE_HOME").map(PathBuf::from),
         }
     }
-
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
