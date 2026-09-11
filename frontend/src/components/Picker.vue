@@ -1,12 +1,21 @@
 <script lang="ts">
 import { defineComponent } from "vue";
 import { api } from "../api/client";
+import type { Job, ProjectListItem } from "../api/types";
+
+interface DeleteJob extends Job {
+  done: boolean;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 export default defineComponent({
   props: ["modelValue", "defaultRoot"],
   emits: ["update:modelValue", "confirm"],
   data() {
     return {
-      projects: [],
+      projects: [] as ProjectListItem[],
       pending: this.modelValue,
       newId: "",
       newRoot: "",
@@ -14,19 +23,19 @@ export default defineComponent({
       q: "",
       loading: true,
       confirmId: "",
-      deleteJob: null,
-      deleteTimer: null,
+      deleteJob: null as DeleteJob | null,
+      deleteTimer: null as ReturnType<typeof setInterval> | null,
     };
   },
   computed: {
     filtered() {
       const q = this.q.toLowerCase();
       return this.projects.filter(
-        (p) => !q || (p.name || "").toLowerCase().includes(q),
+        (p: ProjectListItem) => !q || (p.name || "").toLowerCase().includes(q),
       );
     },
     progress() {
-      return (p) => {
+      return (p: ProjectListItem): number => {
         const n = p.entries || 0,
           t = p.translated || 0;
         return n ? Math.round((t / n) * 100) : 0;
@@ -61,7 +70,7 @@ export default defineComponent({
       };
     },
     fmt() {
-      return (n) => Number(n || 0).toLocaleString("ru-RU");
+      return (n: number): string => Number(n || 0).toLocaleString("ru-RU");
     },
   },
   async mounted() {
@@ -70,12 +79,12 @@ export default defineComponent({
       this.projects = d.projects || [];
       if (this.projects[0] && !this.pending) this.pending = this.projects[0].id;
     } catch (e) {
-      this.error = e.message;
+      this.error = errorMessage(e);
     }
     this.loading = false;
   },
   methods: {
-    pick(p) {
+    pick(p: string): void {
       this.pending = p;
       this.error = "";
     },
@@ -93,7 +102,7 @@ export default defineComponent({
         this.newId = "";
         this.error = "";
       } catch (e) {
-        this.error = e.message;
+        this.error = errorMessage(e);
       }
     },
     async handleOpen() {
@@ -104,7 +113,7 @@ export default defineComponent({
       this.$emit("update:modelValue", this.pending);
       this.$emit("confirm", this.pending);
     },
-    async handleDelete(e) {
+    async handleDelete(e: MouseEvent): Promise<void> {
       if (!this.pending) {
         this.error = "Выберите проект";
         return;
@@ -121,13 +130,14 @@ export default defineComponent({
         const d = await api.startJob({ action: "delete", projectId: id });
         this.deleteJob = {
           id: d.id,
+          action: d.action,
           output: "",
           status: d.status || "running",
           done: false,
         };
         this.pollDelete();
       } catch (err) {
-        this.error = err.message;
+        this.error = errorMessage(err);
         this.confirmId = "";
       }
     },
@@ -136,7 +146,7 @@ export default defineComponent({
       this.deleteTimer = setInterval(async () => {
         const dj = this.deleteJob;
         if (!dj) {
-          clearInterval(this.deleteTimer);
+          if (this.deleteTimer) clearInterval(this.deleteTimer);
           this.deleteTimer = null;
           return;
         }
@@ -145,7 +155,7 @@ export default defineComponent({
           dj.output = d.output || "";
           dj.status = d.status;
           if (d.status && d.status !== "running" && d.status !== "queued") {
-            clearInterval(this.deleteTimer);
+            if (this.deleteTimer) clearInterval(this.deleteTimer);
             this.deleteTimer = null;
             dj.done = true;
             if (d.status === "completed") {
@@ -162,7 +172,7 @@ export default defineComponent({
             }
           }
         } catch (e) {
-          dj.output += "\n" + e.message;
+          dj.output += "\n" + errorMessage(e);
         }
       }, 700);
     },
@@ -171,7 +181,7 @@ export default defineComponent({
       try {
         await api.jobCancel(this.deleteJob.id);
       } catch (e) {
-        this.error = e.message;
+        this.error = errorMessage(e);
       }
     },
     closeDelete() {
@@ -187,7 +197,7 @@ export default defineComponent({
         const r = await api.projects();
         this.projects = r.projects || [];
       } catch (e) {
-        this.error = e.message;
+        this.error = errorMessage(e);
       }
     },
   },
@@ -427,7 +437,7 @@ export default defineComponent({
         <button
           class="btn-danger"
           @click="handleDelete($event)"
-          :disabled="!pending || deleteJob"
+          :disabled="!pending || !!deleteJob"
           title="Зажмите Ctrl для удаления выбранного проекта"
         >
           <svg class="icon" viewBox="0 0 24 24">
@@ -438,7 +448,7 @@ export default defineComponent({
         </button>
         <button
           class="primary"
-          :disabled="!pending || deleteJob"
+          :disabled="!pending || !!deleteJob"
           @click="handleOpen()"
           style="padding: 12px 24px; font-size: 15px"
         >

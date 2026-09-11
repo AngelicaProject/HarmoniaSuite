@@ -53,7 +53,7 @@ export default defineComponent({
       return (this.errors || []).length - this.visibleErrors.length;
     },
     invalidSet() {
-      const s = new Set();
+      const s = new Set<string>();
       for (const e of this.visibleErrors) {
         const k = this.errKey(e);
         if (k === "vendor") {
@@ -80,11 +80,11 @@ export default defineComponent({
     packAuthors(): Array<{ name?: string; role?: string; contact?: string }> {
       return this.pack?.authors || [];
     },
-    isStaleRequired(e) {
+    isStaleRequired(e: string): boolean {
       if (!/обязател/.test(String(e || ""))) return false;
       const p = this.pack || {};
       const k = this.errKey(e);
-      const filled = (v) => !!String(v || "").trim();
+      const filled = (v: unknown): boolean => !!String(v || "").trim();
       if (k === "packId") return filled(p.packId);
       if (k === "translationVersion") return filled(p.translationVersion);
       if (k === "gameVersion") return filled(p.gameVersion);
@@ -93,7 +93,7 @@ export default defineComponent({
         return (p.authors || []).some((a) => a && filled(a.name));
       return false;
     },
-    errKey(e) {
+    errKey(e: string): string {
       const s = String(e || "");
       if (s.startsWith("packId")) return "packId";
       if (s.startsWith("translationVersion")) return "translationVersion";
@@ -102,33 +102,36 @@ export default defineComponent({
       if (s.startsWith("authors")) return "authors";
       return "";
     },
-    errFixed(e) {
+    errFixed(e: string): boolean {
       const k = this.errKey(e);
       if (!k) return false;
       const t = this.touched || {};
       if (k === "vendor") return !!(t.vendorId && t.vendorName);
       return !!t[k];
     },
-    goErr(e) {
+    goErr(e: string): void {
       const k = this.errKey(e);
       if (!k || !this.$el || !this.$el.querySelector) return;
       const el = this.$el.querySelector('[data-err-field="' + k + '"]');
       if (!el) return;
       try {
         el.scrollIntoView({ block: "center" });
-        const inps = el.querySelectorAll("input,textarea");
-        const bad = [];
+        const inps = Array.from(el.querySelectorAll("input,textarea"));
+        const bad: HTMLElement[] = [];
         inps.forEach((i) => {
-          if (i.classList.contains("invalid")) bad.push(i);
+          const input = i as HTMLElement;
+          if (input.classList.contains("invalid")) bad.push(input);
         });
-        (bad.length ? bad : [inps[0]].filter(Boolean)).forEach((i) => {
-          i.classList.add("flash");
-          setTimeout(() => {
-            try {
-              i.classList.remove("flash");
-            } catch (e2) {}
-          }, 2400);
-        });
+        (bad.length ? bad : [inps[0] as HTMLElement].filter(Boolean)).forEach(
+          (i) => {
+            i.classList.add("flash");
+            setTimeout(() => {
+              try {
+                i.classList.remove("flash");
+              } catch (e2) {}
+            }, 2400);
+          },
+        );
         const inp = el.querySelector("input,textarea");
         if (inp) inp.focus({ preventScroll: true });
       } catch (err) {}
@@ -143,7 +146,7 @@ export default defineComponent({
         a.click();
         URL.revokeObjectURL(u);
       } catch (e) {
-        this.$emit("toast", e.message);
+        this.$emit("toast", e instanceof Error ? e.message : String(e));
       }
     },
   },

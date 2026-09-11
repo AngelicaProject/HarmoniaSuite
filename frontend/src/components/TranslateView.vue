@@ -1,7 +1,37 @@
 <script lang="ts">
 import { defineComponent } from "vue";
 import { api } from "../api/client";
+import type { AiModel } from "../api/types";
 import Dropdown from "./Dropdown.vue";
+
+interface TranslateTreeNode {
+  name: string;
+  path: string;
+  dirs: Map<string, TranslateTreeNode>;
+  files: string[];
+}
+
+interface TranslateDirRow {
+  t: "d";
+  key: string;
+  path: string;
+  depth: number;
+  name: string;
+  open: boolean;
+  sum: number;
+  files: string[];
+  dir: TranslateTreeNode;
+}
+
+interface TranslateFileRow {
+  t: "f";
+  key: string;
+  path: string;
+  depth: number;
+  need: number;
+}
+
+type TranslateRow = TranslateDirRow | TranslateFileRow;
 export default defineComponent({
   components: { Dropdown },
   props: [
@@ -34,10 +64,10 @@ export default defineComponent({
       reasoning: "",
       reasonOpen: true,
       reasonStick: true,
-      orModels: [],
+      orModels: [] as AiModel[],
       orComboOpen: false,
       orComboQ: "",
-      openDirs: {},
+      openDirs: {} as Record<string, boolean>,
       sort: "need",
     };
   },
@@ -47,31 +77,37 @@ export default defineComponent({
     },
     pendOf() {
       const m = this.pendingMap || {};
-      return (f) => m[f] || 0;
+      return (f: string): number => m[f] || 0;
     },
     matchFiles() {
       const q = (this.filter || "").toLowerCase();
       const m = this.pendingMap || {};
       return (this.files || []).filter(
-        (f) =>
+        (f: string) =>
           f.toLowerCase().includes(q) && (!this.mapReady || (m[f] || 0) > 0),
       );
     },
     tree() {
-      const root = { dirs: new Map(), files: [] };
+      const root: TranslateTreeNode = {
+        name: "",
+        path: "",
+        dirs: new Map(),
+        files: [],
+      };
       for (const f of this.matchFiles) {
         const parts = (f || "").split("/");
-        let node = root;
+        let node: TranslateTreeNode = root;
         for (let i = 0; i < parts.length - 1; i++) {
           let d = node.dirs.get(parts[i]);
           if (!d) {
-            d = {
+            const created: TranslateTreeNode = {
               name: parts[i],
               path: parts.slice(0, i + 1).join("/"),
               dirs: new Map(),
               files: [],
             };
-            node.dirs.set(parts[i], d);
+            node.dirs.set(parts[i], created);
+            d = created;
           }
           node = d;
         }
@@ -82,14 +118,14 @@ export default defineComponent({
     rows() {
       const m = this.pendingMap || {};
       const q = (this.filter || "").trim();
-      const rows = [];
-      const collect = (n) => {
+      const rows: TranslateRow[] = [];
+      const collect = (n: TranslateTreeNode): string[] => {
         const all = [...n.files];
         for (const c of n.dirs.values()) all.push(...collect(c));
         return all;
       };
-      const emit = (node, depth) => {
-        const kids = [];
+      const emit = (node: TranslateTreeNode, depth: number): void => {
+        const kids: TranslateRow[] = [];
         for (const d of node.dirs.values()) {
           const all = collect(d);
           kids.push({
@@ -125,7 +161,7 @@ export default defineComponent({
       return rows;
     },
     visibleFiles() {
-      const out = [];
+      const out: string[] = [];
       for (const r of this.rows) {
         if (r.t === "d") out.push(...r.files);
         else out.push(r.path);
@@ -161,12 +197,12 @@ export default defineComponent({
       return this.model || (this.gemini && this.gemini.model) || "";
     },
     orOptions() {
-      const out = (this.orModels || []).map((m) => ({
+      const out = (this.orModels || []).map((m: AiModel) => ({
         id: m.id,
         name: m.name || m.id,
       }));
       const def = (this.gemini && this.gemini.openrouterModel) || "";
-      const has = (v) => out.some((o) => o.id === v);
+      const has = (v: string): boolean => out.some((o) => o.id === v);
       if (this.model && !has(this.model))
         out.unshift({ id: this.model, name: this.model });
       if (def && !has(def))
@@ -208,21 +244,21 @@ export default defineComponent({
     reasonLines() {
       const out = ((this.job && this.job.output) || "").split("\n");
       return out
-        .filter((l) => l.startsWith("[REASONING]"))
-        .map((l) => l.slice(11).trim());
+        .filter((l: string) => l.startsWith("[REASONING]"))
+        .map((l: string) => l.slice(11).trim());
     },
   },
   methods: {
-    fmtNum(n) {
+    fmtNum(n: number): string {
       return Number(n || 0).toLocaleString("ru-RU");
     },
-    toggleDir(path) {
+    toggleDir(path: string): void {
       this.openDirs = { ...this.openDirs, [path]: !this.openDirs[path] };
     },
-    dirChecked(files) {
+    dirChecked(files: string[]): boolean {
       return files.length > 0 && files.every((f) => this.selected.has(f));
     },
-    toggleDirSel(files) {
+    toggleDirSel(files: string[]): void {
       this.$emit("selVisible", !this.dirChecked(files), files);
     },
     toggleOrCombo() {
@@ -240,19 +276,15 @@ export default defineComponent({
     },
     closeOrCombo(e?: Event) {
       const target = e?.target as Element | null;
-      if (
-        target?.closest &&
-        target.closest(".or-combo,.or-combo-btn")
-      )
-        return;
+      if (target?.closest && target.closest(".or-combo,.or-combo-btn")) return;
       this.orComboOpen = false;
       document.removeEventListener("click", this.closeOrCombo, true);
     },
-    pickOrModel(id) {
+    pickOrModel(id: string): void {
       this.model = id;
       this.closeOrCombo();
     },
-    onReasonScroll() {
+    onReasonScroll(): void {
       const el = this.$refs.reasonBox as HTMLElement | undefined;
       if (!el) return;
       this.reasonStick = el.scrollHeight - el.scrollTop - el.clientHeight < 48;

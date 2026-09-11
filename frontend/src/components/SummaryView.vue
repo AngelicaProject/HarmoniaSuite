@@ -25,10 +25,18 @@ export default defineComponent({
       return Math.max(this.pct, this.translated ? 1.5 : 0);
     },
     rows() {
-      const by = this.summary?.byStatus || {};
-      const order = ENTRY_STATUS_SUMMARY.map((s) => [s.value, s.label, s.dot]);
-      const seen = new Set();
-      const out = [];
+      const by: Record<string, number> = this.summary?.byStatus || {};
+      const order: Array<[string, string, string]> = ENTRY_STATUS_SUMMARY.map(
+        (s) => [s.value, s.label, s.dot],
+      );
+      const seen = new Set<string>();
+      const out: Array<{
+        k: string;
+        label: string;
+        dot: string;
+        v: number;
+        share: string;
+      }> = [];
       for (const [k, label, dot] of order) {
         if (by[k] != null && by[k] > 0) {
           seen.add(k);
@@ -49,10 +57,10 @@ export default defineComponent({
     },
   },
   methods: {
-    fmt(n) {
+    fmt(n: number): string {
       return Number(n || 0).toLocaleString("ru-RU");
     },
-    share(v) {
+    share(v: number): string {
       if (!this.entries) return "0%";
       const p = (v / this.entries) * 100;
       return (

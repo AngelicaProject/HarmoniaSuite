@@ -1,7 +1,20 @@
 <script lang="ts">
 import { defineComponent } from "vue";
 import { api } from "../api/client";
-import type { AiModel, AiStatus, Backup, Job, SourceSettings } from "../api/types";
+import type {
+  AiModel,
+  AiStatus,
+  Backup,
+  Job,
+  SourceSettings,
+} from "../api/types";
+
+type Provider = "gemini" | "openrouter";
+type CheckMessage = { ok: boolean; text: string } | null;
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 export default defineComponent({
   props: ["initial", "forced"],
   emits: ["close", "changed"],
@@ -14,7 +27,7 @@ export default defineComponent({
       srcSaved: "",
       srcSaving: false,
       syncJob: null as Job | null,
-      syncTimer: null,
+      syncTimer: null as ReturnType<typeof setInterval> | null,
       provider: "gemini",
       geminiKey: "",
       openrouterKey: "",
@@ -35,7 +48,10 @@ export default defineComponent({
       orComboOpen: false,
       orComboQ: "",
       checkBusy: "",
-      checkMsg: { gemini: null, openrouter: null },
+      checkMsg: {
+        gemini: null,
+        openrouter: null,
+      } as Record<Provider, CheckMessage>,
       bkItems: [] as Backup[],
       bkRetention: 10,
       bkInput: "10",
@@ -145,8 +161,8 @@ export default defineComponent({
     document.removeEventListener("click", this.closeOrCombo, true);
   },
   methods: {
-    bkSlide(e) {
-      const el = e && e.target;
+    bkSlide(e: Event): void {
+      const el = e.target as HTMLInputElement | null;
       if (!el || !el.style) return;
       const n = Math.min(Math.max(parseInt(el.value, 10) || 1, 1), 100);
       el.style.setProperty("--fill", (((n - 1) / 99) * 100).toFixed(1) + "%");
@@ -157,7 +173,7 @@ export default defineComponent({
         this.srcSt = s;
         if (s.gamePath) this.gamePath = s.gamePath;
       } catch (e) {
-        this.srcError = e.message;
+        this.srcError = errorMessage(e);
       }
     },
     async detect() {
@@ -167,7 +183,7 @@ export default defineComponent({
         if (d.gamePath) this.gamePath = d.gamePath;
         else this.srcError = "Игра не найдена — укажите путь вручную";
       } catch (e) {
-        this.srcError = e.message;
+        this.srcError = errorMessage(e);
       }
     },
     async srcSave() {
@@ -179,7 +195,7 @@ export default defineComponent({
         this.srcSaved = "Сохранено";
         this.$emit("changed");
       } catch (e) {
-        this.srcError = e.message;
+        this.srcError = errorMessage(e);
       }
       this.srcSaving = false;
     },
@@ -196,7 +212,7 @@ export default defineComponent({
         };
         this.pollSync();
       } catch (e) {
-        this.srcError = e.message;
+        this.srcError = errorMessage(e);
       }
     },
     pollSync() {
@@ -204,7 +220,7 @@ export default defineComponent({
       this.syncTimer = setInterval(async () => {
         const j = this.syncJob;
         if (!j) {
-          clearInterval(this.syncTimer);
+          if (this.syncTimer) clearInterval(this.syncTimer);
           this.syncTimer = null;
           return;
         }
@@ -213,13 +229,13 @@ export default defineComponent({
           j.output = d.output || "";
           j.status = d.status;
           if (d.status && d.status !== "running" && d.status !== "queued") {
-            clearInterval(this.syncTimer);
+            if (this.syncTimer) clearInterval(this.syncTimer);
             this.syncTimer = null;
             await this.srcReload();
             this.$emit("changed");
           }
         } catch (e) {
-          j.output += "\n" + e.message;
+          j.output += "\n" + errorMessage(e);
         }
       }, 700);
     },
@@ -228,7 +244,7 @@ export default defineComponent({
       try {
         await api.jobCancel(this.syncJob.id);
       } catch (e) {
-        this.srcError = e.message;
+        this.srcError = errorMessage(e);
       }
     },
     async aiReload() {
@@ -239,7 +255,7 @@ export default defineComponent({
         if (s.openrouterModel) this.openrouterModel = s.openrouterModel;
         this.openrouterReasoning = s.openrouterReasoning || "";
       } catch (e) {
-        this.aiError = e.message;
+        this.aiError = errorMessage(e);
       }
     },
     async aiSave() {
@@ -261,7 +277,7 @@ export default defineComponent({
         this.aiSaved = "Сохранено — перезапуск не нужен";
         this.$emit("changed");
       } catch (e) {
-        this.aiError = e.message;
+        this.aiError = errorMessage(e);
       }
       this.aiSaving = false;
     },
@@ -280,19 +296,15 @@ export default defineComponent({
     },
     closeOrCombo(e?: Event) {
       const target = e?.target as Element | null;
-      if (
-        target?.closest &&
-        target.closest(".or-combo,.or-combo-btn")
-      )
-        return;
+      if (target?.closest && target.closest(".or-combo,.or-combo-btn")) return;
       this.orComboOpen = false;
       document.removeEventListener("click", this.closeOrCombo, true);
     },
-    pickOrModel(id) {
+    pickOrModel(id: string): void {
       this.openrouterModel = id;
       this.closeOrCombo();
     },
-    async clearKey(which) {
+    async clearKey(which: Provider): Promise<void> {
       this.aiError = "";
       this.aiSaved = "";
       try {
@@ -312,10 +324,10 @@ export default defineComponent({
         this.aiSaved = "Ключ стёрт";
         this.$emit("changed");
       } catch (e) {
-        this.aiError = e.message;
+        this.aiError = errorMessage(e);
       }
     },
-    async checkKey(which) {
+    async checkKey(which: Provider): Promise<void> {
       const key =
         which === "gemini" ? this.geminiKey.trim() : this.openrouterKey.trim();
       this.checkBusy = which;
@@ -327,10 +339,10 @@ export default defineComponent({
         });
         this.checkMsg[which] = {
           ok: !!r.ok,
-          text: r.message || (r.ok ? "Доступ OK" : "Нет доступа"),
+          text: String(r.message || (r.ok ? "Доступ OK" : "Нет доступа")),
         };
       } catch (e) {
-        this.checkMsg[which] = { ok: false, text: e.message };
+        this.checkMsg[which] = { ok: false, text: errorMessage(e) };
       }
       this.checkBusy = "";
     },
@@ -338,7 +350,7 @@ export default defineComponent({
       await this.srcSave();
       await this.aiSave();
     },
-    fmtBytes(n) {
+    fmtBytes(n: number): string {
       n = Number(n || 0);
       if (n < 1024) return n + " Б";
       if (n < 1048576) return (n / 1024).toFixed(1).replace(".", ",") + " КБ";
@@ -346,14 +358,14 @@ export default defineComponent({
         return (n / 1048576).toFixed(1).replace(".", ",") + " МБ";
       return (n / 1073741824).toFixed(1).replace(".", ",") + " ГБ";
     },
-    fmtInterval(min) {
+    fmtInterval(min: number): string {
       min = Number(min || 0);
       if (!min) return "выключено";
       if (min % 1440 === 0) return "каждые " + min / 1440 + " сут";
       if (min % 60 === 0) return "каждые " + min / 60 + " ч";
       return "каждые " + min + " мин";
     },
-    dlUrl(name) {
+    dlUrl(name: string): string {
       return api.backupDownloadUrl(name);
     },
     async bkReload() {
@@ -367,7 +379,7 @@ export default defineComponent({
         this.bkUsed = d.usedBytes;
         this.bkEstimate = d.estimatedBytes;
       } catch (e) {
-        this.bkError = e.message;
+        this.bkError = errorMessage(e);
       }
     },
     async bkCreate() {
@@ -379,11 +391,11 @@ export default defineComponent({
         await this.bkReload();
         this.bkSaved = "Резервная копия создана";
       } catch (e) {
-        this.bkError = e.message;
+        this.bkError = errorMessage(e);
       }
       this.bkBusy = false;
     },
-    async bkSaveRetention(quiet) {
+    async bkSaveRetention(quiet: boolean): Promise<void> {
       this.bkError = "";
       this.bkSaved = "";
       const sent = parseInt(this.bkInput, 10);
@@ -399,7 +411,7 @@ export default defineComponent({
         this.bkEstimate = d.estimatedBytes;
         if (!quiet) this.bkSaved = "Сохранено — перезапуск не нужен";
       } catch (e) {
-        this.bkError = e.message;
+        this.bkError = errorMessage(e);
       }
     },
     async bkSaveAuto() {
@@ -420,7 +432,7 @@ export default defineComponent({
         this.bkEstimate = d.estimatedBytes;
         this.bkSaved = "Сохранено — перезапуск не нужен";
       } catch (e) {
-        this.bkError = e.message;
+        this.bkError = errorMessage(e);
       }
     },
     async bkOpenFolder() {
@@ -428,7 +440,7 @@ export default defineComponent({
       try {
         await api.openBackupFolder();
       } catch (e) {
-        this.bkError = e.message;
+        this.bkError = errorMessage(e);
       }
     },
     async copyLog() {
@@ -443,11 +455,11 @@ export default defineComponent({
         await navigator.clipboard.writeText(text);
         this.logSaved = "Журнал скопирован";
       } catch (e) {
-        this.logError = e.message;
+        this.logError = errorMessage(e);
       }
       this.logBusy = false;
     },
-    async bkDelete(name) {
+    async bkDelete(name: string): Promise<void> {
       if (!confirm("Удалить резервную копию " + name + "?")) return;
       this.bkError = "";
       this.bkSaved = "";
@@ -455,7 +467,7 @@ export default defineComponent({
         await api.deleteBackup(name);
         await this.bkReload();
       } catch (e) {
-        this.bkError = e.message;
+        this.bkError = errorMessage(e);
       }
     },
     async ok() {

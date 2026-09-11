@@ -1,8 +1,8 @@
-import { computed, nextTick, ref, type Ref } from "vue";
+import { computed, nextTick, onUnmounted, ref } from "vue";
 
 export type LayoutZone = "left" | "right" | "bottom";
-type LayoutMap = Record<LayoutZone, string[]>;
-type ActiveMap = Record<LayoutZone, string | null>;
+export type DockLayoutMap = Record<LayoutZone, string[]>;
+export type DockActiveMap = Record<LayoutZone, string | null>;
 
 export interface DockView {
   title: string;
@@ -32,9 +32,41 @@ interface DragView {
   from: LayoutZone;
 }
 
-interface DropPosition {
+export interface DockDropPosition {
   zone: LayoutZone;
   index: number;
+}
+
+export function getDropIndicatorClass(
+  dropPos: DockDropPosition | null,
+  zone: LayoutZone,
+  index: number,
+): "" | "drop-before" {
+  return dropPos?.zone === zone && dropPos.index === index ? "drop-before" : "";
+}
+
+export function moveDockView(
+  layout: DockLayoutMap,
+  active: DockActiveMap,
+  view: string,
+  from: LayoutZone,
+  zone: LayoutZone,
+  index: number | null,
+): void {
+  const source = layout[from];
+  const sourceIndex = source.indexOf(view);
+  if (sourceIndex >= 0) source.splice(sourceIndex, 1);
+  const destination = layout[zone];
+  let targetIndex =
+    index == null
+      ? destination.length
+      : Math.max(0, Math.min(index, destination.length));
+  if (from === zone && sourceIndex >= 0 && sourceIndex < targetIndex)
+    targetIndex -= 1;
+  destination.splice(targetIndex, 0, view);
+  active[zone] = view;
+  if (from !== zone && !destination.includes(active[from] || ""))
+    active[from] = layout[from][0] || null;
 }
 
 export function useDockLayout(
@@ -45,8 +77,8 @@ export function useDockLayout(
   const zones: LayoutZone[] = ["left", "right", "bottom"];
   const defaults = defaultZones();
   const saved = readLayout();
-  const layout = ref<LayoutMap>(defaults.layout);
-  const active = ref<ActiveMap>(defaults.active);
+  const layout = ref<DockLayoutMap>(defaults.layout);
+  const active = ref<DockActiveMap>(defaults.active);
   const zoneVisible = ref<Record<LayoutZone, boolean>>({
     left: true,
     right: true,
@@ -60,10 +92,10 @@ export function useDockLayout(
   const sideW = ref(300);
   const ctxW = ref(360);
   const bottomH = ref(190);
-  const narrow = ref(window.matchMedia("(max-width:1000px)").matches);
+  const narrow = ref(false);
   const ctxZone = ref<ContextZone | null>(null);
   const dragView = ref<DragView | null>(null);
-  const dropPos = ref<DropPosition | null>(null);
+  const dropPos = ref<DockDropPosition | null>(null);
   const menuFor = ref<string | null>(null);
   const addMenu = ref<AddMenu | null>(null);
   const hosts = ref<Record<string, HTMLElement>>({});
@@ -76,15 +108,31 @@ export function useDockLayout(
     }
   }
 
+  let mediaQuery: MediaQueryList | null = null;
+  let mediaChange: ((event: MediaQueryListEvent) => void) | null = null;
   try {
-    window
-      .matchMedia("(max-width:1000px)")
-      .addEventListener("change", (event) => {
-        narrow.value = event.matches;
-      });
+    mediaQuery = window.matchMedia("(max-width:1000px)");
+    narrow.value = mediaQuery.matches;
+    mediaChange = (event: MediaQueryListEvent): void => {
+      narrow.value = event.matches;
+    };
+    if (typeof mediaQuery.addEventListener === "function")
+      mediaQuery.addEventListener("change", mediaChange);
+    else mediaQuery.addListener(mediaChange);
   } catch {
     // Older embedded browsers may not support MediaQueryList listeners.
   }
+
+  onUnmounted(() => {
+    if (!mediaQuery || !mediaChange) return;
+    try {
+      if (typeof mediaQuery.removeEventListener === "function")
+        mediaQuery.removeEventListener("change", mediaChange);
+      else mediaQuery.removeListener(mediaChange);
+    } catch {
+      // Listener cleanup is best effort in older embedded browsers.
+    }
+  });
 
   const hiddenViews = computed(() =>
     viewIds.filter(
@@ -313,28 +361,13 @@ export function useDockLayout(
     zone: LayoutZone,
     index: number | null,
   ): void {
-    const source = layout.value[from];
-    const sourceIndex = source.indexOf(view);
-    if (sourceIndex >= 0) source.splice(sourceIndex, 1);
-    const destination = layout.value[zone];
-    let targetIndex =
-      index == null
-        ? destination.length
-        : Math.max(0, Math.min(index, destination.length));
-    if (from === zone && sourceIndex >= 0 && sourceIndex < targetIndex)
-      targetIndex -= 1;
-    destination.splice(targetIndex, 0, view);
-    active.value[zone] = view;
-    if (from !== zone && !destination.includes(active.value[from] || ""))
-      active.value[from] = layout.value[from][0] || null;
+    moveDockView(layout.value, active.value, view, from, zone, index);
     layoutRev.value += 1;
     persistLayout();
   }
 
   function dropClass(zone: LayoutZone, index: number): string {
-    return dropPos.value?.zone === zone && dropPos.value.index === index
-      ? "drop"
-      : "";
+    return getDropIndicatorClass(dropPos.value, zone, index);
   }
 
   function setHost(view: string, value: unknown): void {
@@ -512,7 +545,7 @@ export function useDockLayout(
   };
 }
 
-function defaultZones(): { layout: LayoutMap; active: ActiveMap } {
+function defaultZones(): { layout: DockLayoutMap; active: DockActiveMap } {
   return {
     layout: {
       left: ["project", "delta"],

@@ -20,6 +20,7 @@ import {
   highlightTags,
   renderGamePreview,
 } from "./tags";
+import type { TagSpan } from "./tags";
 
 const assert = {
   deepEqual: (actual: unknown, expected: unknown) =>
@@ -30,7 +31,7 @@ const assert = {
   match: (value: string, pattern: RegExp) => expect(value).toMatch(pattern),
 };
 
-const texts = (list) => list.map((t) => t.text);
+const texts = (list: TagSpan[]): string[] => list.map((t) => t.text);
 
 describe("parse", () => {
   it("извлекает простые теги по порядку", () => {
@@ -160,7 +161,7 @@ describe("kinds", () => {
 describe("render", () => {
   it("подсветка без вложенных mark", () => {
     const h = highlightTags("A<br>B<br>".repeat(20));
-    assert.equal(h.match(/<mark/g).length, 40);
+    assert.equal(h.match(/<mark/g)?.length ?? 0, 40);
     assert.ok(!h.includes('<mark class="ptoken"><mark'));
   });
   it("классы категорий и тултипы", () => {

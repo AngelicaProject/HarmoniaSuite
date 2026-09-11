@@ -31,8 +31,10 @@ import type {
   FileStats,
   Job,
   PackMeta,
+  PackResponse,
   Summary,
   SourceSettings,
+  DeltaConflict,
 } from "./api/types";
 
 interface ProjectDocument {
@@ -48,6 +50,7 @@ interface DisplayRowGroup {
   section?: number;
   cells: Entry[];
   un: number;
+  pos?: number;
 }
 
 interface FileRowState {
@@ -75,6 +78,49 @@ interface SearchMatch {
   translation: string;
 }
 
+interface ContextItem {
+  t: string;
+  sel?: boolean;
+  run: () => void | Promise<void>;
+}
+
+interface ContextMenuState {
+  x: number;
+  y: number;
+  items: ContextItem[];
+}
+
+interface SavedEntry {
+  previous: Entry | null;
+  entry: Entry;
+  fileStats: FileStats | null;
+}
+
+interface EditorHandle {
+  current?: Entry | null;
+  insertTag?: (text: string) => void;
+  openConflictTab?: (conflict: DeltaConflict) => void;
+  closeConflictTab?: (id: string) => void;
+  noteChanged?: () => void;
+}
+
+interface DeltaHandle {
+  doPreview?: () => void;
+}
+
+interface ConflictResolution {
+  id: string;
+  mode: string;
+  translation?: string;
+  status: string;
+}
+
+type Timer = ReturnType<typeof setTimeout>;
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 const App = defineComponent({
   components: {
     Picker,
@@ -100,7 +146,7 @@ const App = defineComponent({
     const cacheRev = ref(0);
     const statsRev = ref(0);
     const exportRev = ref(0);
-    const savedEntry = shallowRef(null);
+    const savedEntry = shallowRef<SavedEntry | null>(null);
     const fileTreeState = useFileTree(projectId, () => {
       cacheRev.value++;
       statsRev.value++;
@@ -137,8 +183,8 @@ const App = defineComponent({
       { rows: Entry[]; total: number }
     >();
     let rowRequest = 0;
-    let phraseSearchTimer = null;
-    let trPendingTimer = null;
+    let phraseSearchTimer: Timer | null = null;
+    let trPendingTimer: Timer | null = null;
     const summary = ref<Summary | null>(null);
     const projectLoading = ref(false);
     const sourceFiles = ref<string[]>([]);
@@ -157,12 +203,12 @@ const App = defineComponent({
         const d = await api.pendingByFile(projectId.value);
         trPendingMap.value = (d && d.files) || {};
         trPendingReady.value = true;
-      } catch (e) {
+      } catch {
         /* карта некритична — список покажем целиком */
       }
     }
     watch(statsRev, () => {
-      clearTimeout(trPendingTimer);
+      if (trPendingTimer) clearTimeout(trPendingTimer);
       trPendingTimer = setTimeout(fetchTrPending, 300);
     });
     const trEstimate = computed(() => {
@@ -291,7 +337,7 @@ const App = defineComponent({
         if (s.activeRoot) root.value = s.activeRoot;
         if (!s.configured) openSettings("sources");
       } catch (e) {
-        logText.value += "\nИсточники: " + e.message;
+        logText.value += "\nИсточники: " + errorMessage(e);
       }
     }
     const sourceLabel = computed(() => {
@@ -310,7 +356,7 @@ const App = defineComponent({
     );
 
     // ---- IDE docking: state and interactions live in a dedicated composable ----
-    const VIEWS = {
+    const VIEWS: Record<string, { title: string; icon: string }> = {
       project: {
         title: "Проект",
         icon: '<svg class="icon" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h3l2 2h9a2 2 0 0 1 2 2v8a2 2 0 0 1 2 2H5a2 2 0 0 1-2-2V7z"/></svg>',
@@ -406,26 +452,26 @@ const App = defineComponent({
       hidePanel,
     } = dock;
 
-    function closeMenusOnDocClick(e) {
+    function closeMenusOnDocClick(e: MouseEvent): void {
+      const target = e.target instanceof Element ? e.target : null;
       const inside =
-        e.target.closest &&
-        (e.target.closest(".dz-menu") ||
-          e.target.closest(".top-menu-wrap") ||
-          e.target.closest(".dz-gearbtn") ||
-          e.target.closest(".dz-xbtn") ||
-          e.target.closest(".dz-ribtn"));
+        target?.closest(".dz-menu") ||
+        target?.closest(".top-menu-wrap") ||
+        target?.closest(".dz-gearbtn") ||
+        target?.closest(".dz-xbtn") ||
+        target?.closest(".dz-ribtn");
       if (inside) return;
       if (menuFor.value) menuFor.value = null;
       if (addMenu.value) addMenu.value = null;
       if (ctxMenu.value) ctxMenu.value = null;
     }
 
-    const ctxMenu = ref(null);
-    async function copyText(t) {
+    const ctxMenu = ref<ContextMenuState | null>(null);
+    async function copyText(t: unknown): Promise<void> {
       const s = String(t ?? "");
       try {
         await navigator.clipboard.writeText(s);
-      } catch (e) {
+      } catch {
         try {
           const ta = document.createElement("textarea");
           ta.value = s;
@@ -435,14 +481,14 @@ const App = defineComponent({
           ta.select();
           document.execCommand("copy");
           ta.remove();
-        } catch (e2) {
+        } catch {
           showToast("Не скопировалось");
           return;
         }
       }
       showToast("Скопировано");
     }
-    function ctxItems(el) {
+    function ctxItems(el: HTMLElement): ContextItem[] | null {
       const kind = el.dataset.ctx;
       if (kind === "file") {
         const p = el.dataset.path || "";
@@ -468,7 +514,7 @@ const App = defineComponent({
       if (kind === "phrase") {
         const id = el.dataset.id || "";
         const e = entryById.value.get(id) || null;
-        const items = [
+        const items: ContextItem[] = [
           { t: "Открыть в редакторе", run: () => focusPhrase(id) },
         ];
         if (e) {
@@ -488,16 +534,12 @@ const App = defineComponent({
         return [{ t: "Копировать журнал", run: () => copyText(logText.value) }];
       return null;
     }
-    function onGlobalCtx(e) {
-      if (!e || e.defaultPrevented) return;
-      const t = e.target;
-      if (
-        t &&
-        t.closest &&
-        t.closest('input,textarea,select,[contenteditable="true"]')
-      )
+    function onGlobalCtx(e: MouseEvent): void {
+      if (e.defaultPrevented) return;
+      const target = e.target instanceof Element ? e.target : null;
+      if (target?.closest('input,textarea,select,[contenteditable="true"]'))
         return;
-      const el = t && t.closest ? t.closest("[data-ctx]") : null;
+      const el = target?.closest("[data-ctx]") as HTMLElement | null;
       e.preventDefault();
       if (menuFor.value) menuFor.value = null;
       if (addMenu.value) addMenu.value = null;
@@ -516,7 +558,7 @@ const App = defineComponent({
         items,
       };
     }
-    function runCtx(it) {
+    function runCtx(it: ContextItem): void {
       ctxMenu.value = null;
       if (it && it.run) it.run();
     }
@@ -527,7 +569,7 @@ const App = defineComponent({
       document.documentElement.setAttribute("data-theme", theme.value);
     }
 
-    function mergeEntries(items) {
+    function mergeEntries(items: Entry[]): void {
       if (!items || !items.length) return;
       const entries = new Map((doc.value?.entries || []).map((e) => [e.id, e]));
       for (const entry of items)
@@ -540,11 +582,11 @@ const App = defineComponent({
       cacheRev.value++;
     }
 
-    function isCountedAsTranslated(entry) {
+    function isCountedAsTranslated(entry: Entry): boolean {
       return isEntryTranslated(entry);
     }
 
-    function isPendingForTranslation(entry) {
+    function isPendingForTranslation(entry: Entry): boolean {
       return (
         !!entry &&
         String(entry.translation || "").trim() === "" &&
@@ -552,7 +594,7 @@ const App = defineComponent({
       );
     }
 
-    function localEntry(id) {
+    function localEntry(id: string): Entry | null {
       const known = (doc.value?.entries || []).find((entry) => entry.id === id);
       if (known) return known;
       for (const group of fileRows.value.groups || []) {
@@ -566,7 +608,7 @@ const App = defineComponent({
       return null;
     }
 
-    function replaceEntryInRows(entry) {
+    function replaceEntryInRows(entry: Entry): void {
       const state = fileRows.value;
       if (!entry || state.file !== entry.file) return;
       let changed = false;
@@ -586,7 +628,7 @@ const App = defineComponent({
       if (changed) fileRows.value = { ...state, groups };
     }
 
-    function replaceEntryInPreview(entry) {
+    function replaceEntryInPreview(entry: Entry): void {
       if (!entry) return;
       const preview = filePreviewCache.get(entry.file);
       if (!preview) return;
@@ -601,7 +643,7 @@ const App = defineComponent({
       }
     }
 
-    function updateLocalStats(previous, entry) {
+    function updateLocalStats(previous: Entry | null, entry: Entry): void {
       if (!entry || !previous || previous.file !== entry.file) return;
       const delta =
         Number(isCountedAsTranslated(entry)) -
@@ -614,7 +656,7 @@ const App = defineComponent({
       );
     }
 
-    function updateLocalPending(previous, entry) {
+    function updateLocalPending(previous: Entry | null, entry: Entry): void {
       if (
         !entry ||
         !previous ||
@@ -633,7 +675,7 @@ const App = defineComponent({
       trPendingMap.value = map;
     }
 
-    function syncSavedEntry(previous, entry) {
+    function syncSavedEntry(previous: Entry | null, entry: Entry): void {
       if (!entry || !entry.id) return;
       updateLocalStats(previous, entry);
       updateLocalPending(previous, entry);
@@ -642,14 +684,21 @@ const App = defineComponent({
       replaceEntryInPreview(entry);
     }
 
-    function decorateRowGroups(groups, page) {
+    function decorateRowGroups(
+      groups: DisplayRowGroup[],
+      page: number,
+    ): DisplayRowGroup[] {
       return (groups || []).map((group, i) => {
         const pos = page * rowGroupPageSize + i;
         return { ...group, pos, section: Math.floor(pos / 100) };
       });
     }
 
-    async function loadFileRows(file, page = 0, q = "") {
+    async function loadFileRows(
+      file: string,
+      page = 0,
+      q = "",
+    ): Promise<FileRowState | null> {
       if (!file || !projectId.value) return null;
       const cleanPage = Math.max(0, page | 0);
       const cleanQ = String(q || "").trim();
@@ -671,7 +720,7 @@ const App = defineComponent({
         if (request !== rowRequest) return null;
         const groups = decorateRowGroups(d.groups || [], cleanPage);
         const pageEntries = groups.flatMap((g) => g.cells || []);
-        const entries = new Map();
+        const entries = new Map<string, Entry>();
         for (const entry of doc.value?.entries || []) {
           if (
             entry &&
@@ -705,7 +754,7 @@ const App = defineComponent({
       }
     }
 
-    async function loadFilePreview(file) {
+    async function loadFilePreview(file: string): Promise<void> {
       if (!file || !projectId.value || filePreviewCache.has(file)) return;
       const d = await api.entries(projectId.value, { file }, { limit: 100 });
       filePreviewCache.set(file, {
@@ -715,7 +764,7 @@ const App = defineComponent({
       cacheRev.value++;
     }
 
-    async function ensureEntry(id) {
+    async function ensureEntry(id: string): Promise<Entry | null> {
       if (!id || !projectId.value) return null;
       const e = (doc.value?.entries || []).find((x) => x.id === id);
       if (e) return e;
@@ -763,7 +812,7 @@ const App = defineComponent({
           await loadFileRows(focusFileFilter.value, 0, phraseSearchQ.value);
         }
       } catch (e) {
-        logText.value += "\nОшибка: " + e.message;
+        logText.value += "\nОшибка: " + errorMessage(e);
       }
       projectLoading.value = false;
     }
@@ -784,33 +833,35 @@ const App = defineComponent({
           " мс)";
         rg.value = "активен";
       } catch (e) {
-        sourceError.value = e.message || "не удалось загрузить файлы";
-        logText.value += "\n" + e.message;
+        sourceError.value = errorMessage(e) || "не удалось загрузить файлы";
+        logText.value += "\n" + errorMessage(e);
       }
       sourceLoading.value = false;
     }
 
-    const entryById = computed(() => {
-      const m = new Map();
+    const entryById = computed<Map<string, Entry>>(() => {
+      const m = new Map<string, Entry>();
       for (const e of doc.value?.entries || []) m.set(e.id, e);
       return m;
     });
-    function scopeFile() {
+    function scopeFile(): string {
       return focusFileFilter.value || "";
     }
     const leftMode = ref("files");
-    function progPct(f) {
+    function progPct(f: FileStats | null | undefined): number {
       if (!f || !f.total) return 0;
       return Math.round((f.translated / f.total) * 100);
     }
-    function dirPct(d) {
+    function dirPct(
+      d: { total?: number; done?: number } | null | undefined,
+    ): number {
       if (!d || !d.total) return 0;
-      return Math.round((d.done / d.total) * 100);
+      return Math.round(((d.done ?? 0) / d.total) * 100);
     }
-    function fmtNum(n) {
+    function fmtNum(n: number): string {
       return Number(n || 0).toLocaleString("ru-RU");
     }
-    function pct1(done, total) {
+    function pct1(done: number, total: number): string {
       if (!total) return "0%";
       const p = (done / total) * 100;
       return (
@@ -818,31 +869,33 @@ const App = defineComponent({
         "%"
       );
     }
-    function baseName(p) {
+    function baseName(p: string): string {
       const s = String(p || "");
       const i = s.lastIndexOf("/");
       return i < 0 ? s : s.slice(i + 1);
     }
-    function fileUn(f) {
+    function fileUn(f: FileStats): number {
       return (f.total || 0) - (f.translated || 0);
     }
-    function needsWork(e) {
+    function needsWork(e: Entry): boolean {
       return entryNeedsWork(e);
     }
     const projTotal = computed(() => summary.value?.entries ?? 0);
     const projDone = computed(() => summary.value?.translated ?? 0);
     const staleStatus = ENTRY_STATUS.STALE;
-    const expandedFiles = ref({});
-    function expanded(f) {
+    const expandedFiles = ref<Record<string, boolean>>({});
+    function expanded(f: string): boolean {
       return !!expandedFiles.value[f];
     }
-    function toggleExpand(f) {
+    function toggleExpand(f: string): void {
       expandedFiles.value[f] = !expandedFiles.value[f];
       if (expandedFiles.value[f])
-        loadFilePreview(f).catch((e) => (logText.value += "\n" + e.message));
+        loadFilePreview(f).catch(
+          (e) => (logText.value += "\n" + errorMessage(e)),
+        );
     }
-    function filePhraseGroups(f) {
-      const groups = new Map();
+    function filePhraseGroups(f: string): DisplayRowGroup[] {
+      const groups = new Map<number, DisplayRowGroup>();
       for (const e of filePhrases(f).rows || []) {
         let g = groups.get(e.rowIndex);
         if (!g) {
@@ -856,12 +909,12 @@ const App = defineComponent({
       out.forEach((g) => g.cells.sort((a, b) => a.columnIndex - b.columnIndex));
       return out;
     }
-    function filePhrases(f) {
+    function filePhrases(f: string): { rows: Entry[]; total: number } {
       cacheRev.value;
       const preview = filePreviewCache.get(f);
       if (!preview) return { rows: [], total: 0 };
-      const un = [],
-        done = [];
+      const un: Entry[] = [],
+        done: Entry[] = [];
       for (const e of preview.rows || []) (needsWork(e) ? un : done).push(e);
       return { rows: un.concat(done).slice(0, 100), total: preview.total || 0 };
     }
@@ -883,37 +936,37 @@ const App = defineComponent({
       groups: fileRows.value.groups,
     }));
 
-    async function setRowGroupPage(page) {
+    async function setRowGroupPage(page: number): Promise<void> {
       const f = scopeFile();
       if (!f) return;
       phrasePage.value = Math.max(0, Math.min(rowGroupPages.value - 1, page));
       try {
         await loadFileRows(f, phrasePage.value, phraseSearchQ.value);
       } catch (e) {
-        logText.value += "\n" + e.message;
+        logText.value += "\n" + errorMessage(e);
       }
     }
 
-    function setPhraseSearch(value) {
+    function setPhraseSearch(value: string): void {
       phraseSearchQ.value = value || "";
       phrasePage.value = 0;
-      clearTimeout(phraseSearchTimer);
+      if (phraseSearchTimer) clearTimeout(phraseSearchTimer);
       phraseSearchTimer = setTimeout(() => {
         const f = scopeFile();
         if (!f) return;
         loadFileRows(f, 0, phraseSearchQ.value).catch(
-          (e) => (logText.value += "\n" + e.message),
+          (e) => (logText.value += "\n" + errorMessage(e)),
         );
       }, 250);
     }
 
-    async function openFile(f) {
+    async function openFile(f: string): Promise<void> {
       focusFileFilter.value = f;
       leftMode.value = "phrases";
       phrasePage.value = 0;
       phraseSearchQ.value = "";
       const page = await loadFileRows(f, 0, "");
-      let first = null;
+      let first: Entry | null = null;
       try {
         first = await api.rowsNext(projectId.value, {
           file: f,
@@ -922,21 +975,22 @@ const App = defineComponent({
         });
         if (first) mergeEntries([first]);
       } catch (e) {
-        logText.value += "\n" + e.message;
+        logText.value += "\n" + errorMessage(e);
       }
       const fallback =
         page && page.groups.length ? page.groups[0].cells[0] : null;
-      if (first || fallback) setFocusId((first || fallback).id);
+      const target = first || fallback;
+      if (target) setFocusId(target.id);
     }
 
-    function backToFiles() {
+    function backToFiles(): void {
       leftMode.value = "files";
       focusFileFilter.value = "";
       phraseSearchQ.value = "";
       followRowId.value = "";
     }
 
-    async function focusPhrase(id) {
+    async function focusPhrase(id: string): Promise<void> {
       try {
         const e = await ensureEntry(id);
         if (!e) return;
@@ -961,15 +1015,16 @@ const App = defineComponent({
           await loadFileRows(f, phrasePage.value, phraseSearchQ.value);
         }
       } catch (err) {
-        logText.value += "\n" + (err.message || "Не удалось открыть фразу");
+        logText.value +=
+          "\n" + (errorMessage(err) || "Не удалось открыть фразу");
       }
     }
 
     const tab = ref("translate");
     const focusId = ref("");
     const focusFileFilter = ref("");
-    const editorRef = ref(null);
-    const deltaRef = ref(null);
+    const editorRef = ref<EditorHandle | null>(null);
+    const deltaRef = ref<DeltaHandle | null>(null);
     const followFiles = ref(
       (() => {
         try {
@@ -991,7 +1046,7 @@ const App = defineComponent({
     const followRowId = ref("");
     const revealFile = ref("");
     let lastReveal = "";
-    let revealTimer = null;
+    let revealTimer: Timer | null = null;
     function toggleFollow() {
       followFiles.value = !followFiles.value;
       try {
@@ -1010,13 +1065,13 @@ const App = defineComponent({
         onEditorEntry(focusId.value, true);
       }
     }
-    function setFocusId(id) {
+    function setFocusId(id: string): void {
       focusId.value = id;
       if (followRow.value && leftMode.value === "phrases")
         followRowId.value = id;
     }
     let rowFollowRequest = 0;
-    async function onEditorEntry(id, force = false) {
+    async function onEditorEntry(id: string, force = false): Promise<void> {
       const request = ++rowFollowRequest;
       if (!id) return;
       const previousId = focusId.value;
@@ -1064,7 +1119,11 @@ const App = defineComponent({
         if (el && el.scrollIntoView) el.scrollIntoView({ block: "center" });
       } catch (e) {}
     }
-    async function revealInFiles(file, force, phraseId = "") {
+    async function revealInFiles(
+      file: string,
+      force: boolean,
+      phraseId = "",
+    ): Promise<void> {
       if (!file || !projectId.value) return;
       if (leftMode.value !== "files") {
         if (!force) return;
@@ -1084,7 +1143,7 @@ const App = defineComponent({
       if (!expanded(file)) toggleExpand(file);
       lastReveal = file;
       revealFile.value = file;
-      clearTimeout(revealTimer);
+      if (revealTimer) clearTimeout(revealTimer);
       revealTimer = setTimeout(() => {
         if (revealFile.value === file) revealFile.value = "";
       }, 4000);
@@ -1113,11 +1172,11 @@ const App = defineComponent({
         }
       } catch (e) {}
     }
-    function onEditorFile(file) {
+    function onEditorFile(file: string): void {
       if (!followFiles.value || !file || file === lastReveal) return;
       revealInFiles(file, false);
     }
-    async function onRevealFile(file) {
+    async function onRevealFile(file: string): Promise<void> {
       if (!file) {
         showToast("Нет активного файла");
         return;
@@ -1127,17 +1186,17 @@ const App = defineComponent({
     const tagFilter = ref("");
     const csvRequest = ref<{ file: string; n: number } | null>(null);
     const previewPinRequest = ref<{ file: string; n: number } | null>(null);
-    function openPreview(f) {
+    function openPreview(f: string): void {
       if (!f) return;
       previewPinRequest.value = { file: f, n: Date.now() };
     }
-    function insertTagToEditor(text) {
+    function insertTagToEditor(text: string): void {
       const ed = editorRef.value;
       if (!ed || !ed.current) {
         showToast("Сначала выберите фразу в редакторе");
         return;
       }
-      ed.insertTag(text);
+      ed.insertTag?.(text);
     }
 
     const palette = useCommandPalette(projectId, fileTree, VIEWS, VIEW_IDS, {
@@ -1160,7 +1219,7 @@ const App = defineComponent({
       onPaletteKey,
     } = palette;
 
-    async function focusFile(f) {
+    async function focusFile(f: string): Promise<void> {
       focusFileFilter.value = f || "";
       tab.value = "translate";
       if (f) {
@@ -1168,7 +1227,7 @@ const App = defineComponent({
         phrasePage.value = 0;
         phraseSearchQ.value = "";
         const page = await loadFileRows(f, 0, "");
-        let first = null;
+        let first: Entry | null = null;
         try {
           first = await api.rowsNext(projectId.value, {
             file: f,
@@ -1177,15 +1236,21 @@ const App = defineComponent({
           });
           if (first) mergeEntries([first]);
         } catch (e) {
-          logText.value += "\n" + e.message;
+          logText.value += "\n" + errorMessage(e);
         }
         const fallback =
           page && page.groups.length ? page.groups[0].cells[0] : null;
-        if (first || fallback) setFocusId((first || fallback).id);
+        const target = first || fallback;
+        if (target) setFocusId(target.id);
       }
     }
 
-    async function editorRowNext(file, afterRow, afterCol, q) {
+    async function editorRowNext(
+      file: string,
+      afterRow: number,
+      afterCol: number,
+      q: string,
+    ): Promise<Entry | null> {
       const entry = await api.rowsNext(projectId.value, {
         file,
         afterRow,
@@ -1212,11 +1277,15 @@ const App = defineComponent({
       return entry;
     }
 
-    async function editorLoadRowPage(file, page, q) {
+    async function editorLoadRowPage(
+      file: string,
+      page: number,
+      q: string,
+    ): Promise<FileRowState | null> {
       return loadFileRows(file, page, q);
     }
 
-    function onNavigate(f) {
+    function onNavigate(f: string): void {
       focusFile(f);
     }
 
@@ -1234,7 +1303,7 @@ const App = defineComponent({
           { q: searchQ.value.trim() },
           { limit: 50 },
         );
-        matches.value = (d.entries || []).map((e) => ({
+        matches.value = (d.entries || []).map((e: Entry) => ({
           id: e.id,
           file: e.file || "",
           rowKey: e.rowKey || "",
@@ -1242,12 +1311,12 @@ const App = defineComponent({
           translation: e.translation || "",
         }));
       } catch (e) {
-        logText.value += "\n" + e.message;
+        logText.value += "\n" + errorMessage(e);
       }
       searchLoading.value = false;
     }
 
-    async function openSearchResult(m) {
+    async function openSearchResult(m: SearchMatch): Promise<void> {
       if (!m || !m.id) {
         logText.value += "\nФраза не найдена";
         return;
@@ -1285,15 +1354,15 @@ const App = defineComponent({
               } catch (e2) {}
             }, 2400);
           }
-        } catch (e) {}
+        } catch {}
         logText.value += "\nПереход по поиску: " + (f ? f + ", " : "") + m.id;
       } catch (e) {
         logText.value +=
-          "\n" + (e.message || "Не удалось открыть результат поиска");
+          "\n" + (errorMessage(e) || "Не удалось открыть результат поиска");
       }
     }
 
-    async function openConflict(c) {
+    async function openConflict(c: DeltaConflict): Promise<void> {
       if (!c || !c.cellId) return;
       await ensureEntry(c.cellId);
       const ed = editorRef.value;
@@ -1305,7 +1374,12 @@ const App = defineComponent({
       logText.value += "\nКонфликт дельты: " + c.cellId;
     }
 
-    async function onResolveConflict({ id, mode, translation, status }) {
+    async function onResolveConflict({
+      id,
+      mode,
+      translation,
+      status,
+    }: ConflictResolution): Promise<void> {
       try {
         if (mode === "ours") {
           if (editorRef.value && editorRef.value.closeConflictTab)
@@ -1317,19 +1391,19 @@ const App = defineComponent({
         const uuid =
           (found && found.uuid) ||
           (await api.entryByCell(projectId.value, id)).uuid;
-        await onSave({ id, uuid, translation, status });
+        await onSave({ id, uuid, translation: translation ?? "", status });
         if (editorRef.value && editorRef.value.closeConflictTab)
           editorRef.value.closeConflictTab(id);
         showToast("Взято из дельты — применено");
         if (deltaRef.value && deltaRef.value.doPreview)
           deltaRef.value.doPreview();
       } catch (e) {
-        showToast(e.message);
+        showToast(errorMessage(e));
       }
     }
 
     // extract (right panel)
-    async function runExtract(force = false) {
+    async function runExtract(force = false): Promise<void> {
       try {
         const d = await api.startJob({
           action: "extract",
@@ -1343,12 +1417,12 @@ const App = defineComponent({
           (force ? " (все таблицы)" : " (только изменённые файлы)");
         startJob(d);
       } catch (e) {
-        logText.value += "\n" + e.message;
+        logText.value += "\n" + errorMessage(e);
       }
     }
 
     async function run(
-      action,
+      action: string,
       extra: { model?: string; reasoning?: string } = {},
     ) {
       if (action === "gemini" && !geminiStatus.value.configured) {
@@ -1391,7 +1465,7 @@ const App = defineComponent({
         startJob(d);
       } catch (e) {
         pendingPack.value = false;
-        logText.value += "\n" + e.message;
+        logText.value += "\n" + errorMessage(e);
       }
     }
 
@@ -1412,14 +1486,14 @@ const App = defineComponent({
       await run("merge");
     }
 
-    function toggleTranslate(f, v) {
+    function toggleTranslate(f: string, v: boolean): void {
       const s = new Set(selTranslate.value);
       v ? s.add(f) : s.delete(f);
       selTranslate.value = [...s];
       saveSelection();
     }
 
-    function selTranslateVisible(v, list) {
+    function selTranslateVisible(v: boolean, list?: string[]): void {
       const s = new Set(selTranslate.value);
       (list || sourceFiles.value).forEach((f) => (v ? s.add(f) : s.delete(f)));
       selTranslate.value = [...s];
@@ -1430,7 +1504,7 @@ const App = defineComponent({
       saveSelection();
     }
 
-    function toggleExport(f, v) {
+    function toggleExport(f: string, v: boolean): void {
       const s = new Set(selExport.value);
       v ? s.add(f) : s.delete(f);
       selExport.value = [...s];
@@ -1442,7 +1516,11 @@ const App = defineComponent({
       saveSelection();
     }
 
-    async function runTranslate(provider, model, reasoning) {
+    async function runTranslate(
+      provider: string,
+      model?: string,
+      reasoning?: string,
+    ): Promise<void> {
       if (jobActive()) {
         showToast("Дождитесь завершения текущей задачи");
         return;
@@ -1465,7 +1543,17 @@ const App = defineComponent({
       });
     }
 
-    async function onSave({ id, uuid, translation, status }) {
+    async function onSave({
+      id,
+      uuid,
+      translation,
+      status,
+    }: {
+      id: string;
+      uuid: string;
+      translation: string;
+      status: string;
+    }): Promise<void> {
       try {
         const previous = localEntry(id);
         const d = await api.patchEntry(
@@ -1489,12 +1577,12 @@ const App = defineComponent({
           editorRef.value.noteChanged();
         (d.warnings || []).forEach((w) => (logText.value += "\n[Тег] " + w));
       } catch (e) {
-        showToast(e.message);
-        logText.value += "\n" + e.message;
+        showToast(errorMessage(e));
+        logText.value += "\n" + errorMessage(e);
       }
     }
 
-    async function onConfirm(p) {
+    async function onConfirm(p: string): Promise<void> {
       projectId.value = p;
       showPicker.value = false;
       pack.value = null;
@@ -1508,7 +1596,7 @@ const App = defineComponent({
 
     const toast = ref("");
 
-    function showToast(m) {
+    function showToast(m: string): void {
       toast.value = m;
       setTimeout(() => (toast.value = ""), 3000);
     }
@@ -1521,7 +1609,7 @@ const App = defineComponent({
     const packCompat = ref("");
     const packLangs = ref("");
 
-    function blankPack() {
+    function blankPack(): PackMeta {
       return {
         packId: "",
         translationVersion: "",
@@ -1542,13 +1630,15 @@ const App = defineComponent({
       };
     }
 
-    function applyPack(d) {
+    function applyPack(d: PackResponse): void {
       pack.value = Object.assign(blankPack(), d.pack || {});
-      if (!pack.value.gameVersion && sourceStatus.value.gameVersion)
-        pack.value.gameVersion = sourceStatus.value.gameVersion;
-      if (!Array.isArray(pack.value.authors)) pack.value.authors = [];
-      packCompat.value = (pack.value.compatibleGameVersions || []).join(", ");
-      packLangs.value = (pack.value.languages || []).join(", ");
+      const currentPack = pack.value;
+      if (!currentPack) return;
+      if (!currentPack.gameVersion && sourceStatus.value.gameVersion)
+        currentPack.gameVersion = sourceStatus.value.gameVersion;
+      if (!Array.isArray(currentPack.authors)) currentPack.authors = [];
+      packCompat.value = (currentPack.compatibleGameVersions || []).join(", ");
+      packLangs.value = (currentPack.languages || []).join(", ");
       packErrors.value = d.errors || [];
       packManifest.value = d.manifest || null;
     }
@@ -1557,18 +1647,19 @@ const App = defineComponent({
       try {
         applyPack(await api.getPack(projectId.value));
       } catch (e) {
-        packMsg.value = e.message;
+        packMsg.value = errorMessage(e);
       }
     }
 
     function packAddAuthor() {
       if (!pack.value) return;
-      pack.value.authors.push({ name: "", role: "" });
+      const authors = pack.value.authors || (pack.value.authors = []);
+      authors.push({ name: "", role: "" });
     }
 
-    function packDelAuthor(i) {
+    function packDelAuthor(i: number): void {
       if (!pack.value) return;
-      pack.value.authors.splice(i, 1);
+      pack.value.authors?.splice(i, 1);
     }
 
     async function savePack() {
@@ -1577,11 +1668,11 @@ const App = defineComponent({
       const p = Object.assign({}, pack.value, {
         compatibleGameVersions: packCompat.value
           .split(",")
-          .map((s) => s.trim())
+          .map((s: string) => s.trim())
           .filter(Boolean),
         languages: packLangs.value
           .split(",")
-          .map((s) => s.trim())
+          .map((s: string) => s.trim())
           .filter(Boolean),
         authors: (pack.value.authors || [])
           .filter((a) => a && (a.name || "").trim())
@@ -1599,14 +1690,20 @@ const App = defineComponent({
             : "Сохранено";
         logText.value += "\nНастройки пака сохранены";
       } catch (e) {
-        packMsg.value = e.message;
+        packMsg.value = errorMessage(e);
       }
     }
 
-    function esc(s) {
+    function esc(s: unknown): string {
       return String(s).replace(
         /[&<>]/g,
-        (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c],
+        (c) =>
+          (
+            ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }) as Record<
+              string,
+              string
+            >
+          )[c],
       );
     }
 
@@ -2438,12 +2535,13 @@ export default App;
               <template v-for="(g, gi) in rowGroupsPaged" :key="g.row">
                 <div
                   v-if="
-                    gi === 0 || g.section !== rowGroupsPaged[gi - 1].section
+                    gi === 0 ||
+                    (g.section ?? 0) !== (rowGroupsPaged[gi - 1].section ?? 0)
                   "
                   class="ft-section"
                 >
-                  Строки {{ g.section * 100 + 1 }}–{{
-                    Math.min((g.section + 1) * 100, fileRows.totalGroups)
+                  Строки {{ (g.section ?? 0) * 100 + 1 }}–{{
+                    Math.min(((g.section ?? 0) + 1) * 100, fileRows.totalGroups)
                   }}
                 </div>
                 <div

@@ -1,11 +1,83 @@
 <script lang="ts">
-import { defineComponent } from "vue";
+import { defineComponent, type PropType } from "vue";
 import { api } from "../api/client";
+import type {
+  DeltaConflict,
+  DeltaExport,
+  DeltaHeader,
+  DeltaImportResult,
+  DeltaRow,
+  DeltaSkipped,
+  DeltaWarning,
+} from "../api/types";
 import { ENTRY_STATUS } from "../domain/translationStatus";
+
+type BoolMap = Record<string, boolean>;
+type ExportFile = { path: string; translated: number; total: number };
+
+interface ParsedDelta {
+  header: DeltaHeader;
+  rows: DeltaRow[];
+}
+
+interface DeltaDirNode {
+  name: string;
+  path: string;
+  dirs: Map<string, DeltaDirNode>;
+  files: string[];
+}
+
+interface DeltaDirRow {
+  t: "d";
+  key: string;
+  path: string;
+  name: string;
+  depth: number;
+  open: boolean;
+  files: string[];
+  dir: DeltaDirNode;
+}
+
+interface DeltaFileRow {
+  t: "f";
+  key: string;
+  path: string;
+  depth: number;
+}
+
+type DeltaTreeRow = DeltaDirRow | DeltaFileRow;
+
+interface DeltaData {
+  author: string;
+  authorBad: boolean;
+  expTimer: ReturnType<typeof setTimeout> | null;
+  fileQ: string;
+  fileList: ExportFile[];
+  fileLoading: boolean;
+  checked: BoolMap;
+  expOpen: BoolMap;
+  expBusy: boolean;
+  expInfo: string;
+  checkedImp: BoolMap;
+  impOpen: BoolMap;
+  impFileName: string;
+  impParsed: ParsedDelta | null;
+  impBusy: boolean;
+  result: DeltaImportResult | null;
+  resultMode: "" | "preview" | "import";
+  error: string;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 export default defineComponent({
-  props: ["projectId"],
+  props: {
+    projectId: { type: String as PropType<string>, default: "" },
+  },
   emits: ["toast", "refresh", "open-conflict"],
-  data() {
+  data(): DeltaData {
     return {
       author: "",
       authorBad: false,
@@ -31,11 +103,11 @@ export default defineComponent({
     untranslatedStatus() {
       return ENTRY_STATUS.UNTRANSLATED;
     },
-    visibleChecked() {
+    visibleChecked(): ExportFile[] {
       return this.fileList.filter((f) => this.checked[f.path]);
     },
-    impFiles() {
-      const m = new Map();
+    impFiles(): Array<{ path: string; n: number }> {
+      const m = new Map<string, number>();
       for (const r of (this.impParsed || {}).rows || []) {
         const p = (r && r.filePath) || "";
         m.set(p, (m.get(p) || 0) + 1);
@@ -44,35 +116,35 @@ export default defineComponent({
         .map(([path, n]) => ({ path, n }))
         .sort((a, b) => (a.path < b.path ? -1 : 1));
     },
-    expRows() {
+    expRows(): DeltaTreeRow[] {
       return this.flatRows(
         this.treeRoot(this.fileList.map((f) => f.path)),
         this.expOpen,
         (this.fileQ || "").trim(),
       );
     },
-    impRows() {
+    impRows(): DeltaTreeRow[] {
       return this.flatRows(
         this.treeRoot(this.impFiles.map((f) => f.path)),
         this.impOpen,
         "",
       );
     },
-    expVisibleFiles() {
-      const out = [];
+    expVisibleFiles(): string[] {
+      const out: string[] = [];
       for (const r of this.expRows) {
         if (r.t === "d") out.push(...r.files);
         else out.push(r.path);
       }
       return out;
     },
-    expStats() {
-      const m = {};
+    expStats(): Record<string, ExportFile> {
+      const m: Record<string, ExportFile> = {};
       for (const f of this.fileList || []) m[f.path] = f;
       return m;
     },
-    impCounts() {
-      const m = {};
+    impCounts(): Record<string, number> {
+      const m: Record<string, number> = {};
       for (const f of this.impFiles || []) m[f.path] = f.n;
       return m;
     },
@@ -110,28 +182,28 @@ export default defineComponent({
     this.loadExportFiles();
   },
   methods: {
-    loadAuthor() {
+    loadAuthor(): string {
       try {
         return localStorage.getItem("hs-delta-author") || "";
       } catch (e) {
         return "";
       }
     },
-    saveAuthor() {
+    saveAuthor(): void {
       try {
         localStorage.setItem("hs-delta-author", this.author.trim());
       } catch (e) {}
     },
-    scheduleExpSearch() {
-      clearTimeout(this.expTimer);
+    scheduleExpSearch(): void {
+      if (this.expTimer) clearTimeout(this.expTimer);
       this.expTimer = setTimeout(() => this.loadExportFiles(), 300);
     },
-    async loadExportFiles() {
+    async loadExportFiles(): Promise<void> {
       if (!this.projectId) return;
       this.fileLoading = true;
       this.error = "";
       try {
-        const all = [];
+        const all: ExportFile[] = [];
         let offset = 0;
         const limit = 500;
         for (;;) {
@@ -151,28 +223,33 @@ export default defineComponent({
         }
         this.fileList = all;
       } catch (e) {
-        this.error = e.message;
+        this.error = errorMessage(e);
       }
       this.fileLoading = false;
     },
-    toggleFile(path) {
-      const c = Object.assign({}, this.checked);
+    toggleFile(path: string): void {
+      const c: BoolMap = Object.assign({}, this.checked);
       if (c[path]) delete c[path];
       else c[path] = true;
       this.checked = c;
     },
-    toggleAllVisible() {
+    toggleAllVisible(): void {
       const vis = this.expVisibleFiles;
       const all = vis.length > 0 && vis.every((p) => this.checked[p]);
-      const c = Object.assign({}, this.checked);
+      const c: BoolMap = Object.assign({}, this.checked);
       for (const p of vis) {
         if (all) delete c[p];
         else c[p] = true;
       }
       this.checked = c;
     },
-    treeRoot(paths) {
-      const root = { dirs: new Map(), files: [] };
+    treeRoot(paths: string[]): DeltaDirNode {
+      const root: DeltaDirNode = {
+        name: "",
+        path: "",
+        dirs: new Map(),
+        files: [],
+      };
       for (const f of paths || []) {
         const parts = (f || "").split("/");
         let node = root;
@@ -193,15 +270,19 @@ export default defineComponent({
       }
       return root;
     },
-    flatRows(root, open, forceOpen) {
-      const rows = [];
-      const collect = (n) => {
+    flatRows(
+      root: DeltaDirNode,
+      open: BoolMap,
+      forceOpen: string,
+    ): DeltaTreeRow[] {
+      const rows: DeltaTreeRow[] = [];
+      const collect = (n: DeltaDirNode): string[] => {
         const all = [...n.files];
         for (const c of n.dirs.values()) all.push(...collect(c));
         return all;
       };
-      const emit = (node, depth) => {
-        const kids = [];
+      const emit = (node: DeltaDirNode, depth: number): void => {
+        const kids: DeltaTreeRow[] = [];
         for (const d of node.dirs.values()) {
           kids.push({
             t: "d",
@@ -229,26 +310,28 @@ export default defineComponent({
       emit(root, 0);
       return rows;
     },
-    toggleDir(openKey, path) {
-      this[openKey] = Object.assign({}, this[openKey], {
-        [path]: !this[openKey][path],
-      });
+    toggleDir(openKey: "expOpen" | "impOpen", path: string): void {
+      const open = openKey === "expOpen" ? this.expOpen : this.impOpen;
+      const next = Object.assign({}, open, { [path]: !open[path] });
+      if (openKey === "expOpen") this.expOpen = next;
+      else this.impOpen = next;
     },
-    dirChecked(store, files) {
-      const s = this[store] || {};
+    dirChecked(store: "checked" | "checkedImp", files: string[]): boolean {
+      const s = store === "checked" ? this.checked : this.checkedImp;
       return files.length > 0 && files.every((f) => s[f]);
     },
-    toggleDirSel(store, files) {
-      const s = this[store] || {};
+    toggleDirSel(store: "checked" | "checkedImp", files: string[]): void {
+      const s = store === "checked" ? this.checked : this.checkedImp;
       const all = files.length > 0 && files.every((f) => s[f]);
-      const c = Object.assign({}, s);
+      const c: BoolMap = Object.assign({}, s);
       for (const f of files) {
         if (all) delete c[f];
         else c[f] = true;
       }
-      this[store] = c;
+      if (store === "checked") this.checked = c;
+      else this.checkedImp = c;
     },
-    download(name, obj) {
+    download(name: string, obj: unknown): void {
       const b = new Blob([JSON.stringify(obj)], { type: "application/json" });
       const u = URL.createObjectURL(b);
       const a = document.createElement("a");
@@ -257,7 +340,7 @@ export default defineComponent({
       a.click();
       URL.revokeObjectURL(u);
     },
-    async exportDelta() {
+    async exportDelta(): Promise<void> {
       if (!this.projectId || this.expBusy) return;
       const files = Object.keys(this.checked);
       if (!files.length) {
@@ -289,8 +372,8 @@ export default defineComponent({
       this.expInfo = "";
       this.expBusy = true;
       try {
-        const rows = [];
-        let header = null;
+        const rows: DeltaRow[] = [];
+        let header: DeltaHeader | null = null;
         for (const file of files) {
           let su = "",
             sc = "",
@@ -333,14 +416,15 @@ export default defineComponent({
           " · sources_fp: " +
           ((header && header.sourcesFp) || "—").slice(0, 12);
       } catch (e) {
-        this.error = e.message;
+        this.error = errorMessage(e);
       }
       this.expBusy = false;
     },
-    onFile(e) {
+    onFile(e: Event): void {
       this.error = "";
       this.result = null;
-      const f = e.target.files && e.target.files[0];
+      const input = e.target as HTMLInputElement | null;
+      const f = input?.files?.[0];
       this.impParsed = null;
       this.impFileName = "";
       this.checkedImp = {};
@@ -353,45 +437,50 @@ export default defineComponent({
           const d = JSON.parse(rd.result);
           if (!d || !Array.isArray(d.rows))
             throw Error("В файле нет массива rows");
-          const rows = d.rows.map((r) => ({
-            cellId: r.cellId ?? r.cellId,
-            filePath: r.filePath ?? r.filePath,
+          const rows: DeltaRow[] = d.rows.map((r: DeltaRow) => ({
+            cellId: r.cellId,
+            filePath: r.filePath,
             source: r.source,
             translation: r.translation,
             status: r.status,
           }));
-          const checkedImp = {};
+          const checkedImp: BoolMap = {};
           for (const r of rows) checkedImp[r.filePath || ""] = true;
           this.checkedImp = checkedImp;
           this.impParsed = { header: d.header || {}, rows };
           this.impFileName = f.name;
         } catch (err) {
-          this.error = "Не читается дельта: " + err.message;
+          this.error = "Не читается дельта: " + errorMessage(err);
         }
       };
       rd.onerror = () => {
         this.error = "Не читается файл";
       };
       rd.readAsText(f);
-      e.target.value = "";
+      if (input) input.value = "";
     },
-    toggleImpFile(path) {
-      const c = Object.assign({}, this.checkedImp);
+    toggleImpFile(path: string): void {
+      const c: BoolMap = Object.assign({}, this.checkedImp);
       if (c[path]) delete c[path];
       else c[path] = true;
       this.checkedImp = c;
     },
-    impSelected() {
+    impSelected(): string[] {
       return Object.keys(this.checkedImp);
     },
-    impAuthor() {
-      const p = this.impParsed || { header: {} };
-      return (
-        this.author.trim() || String((p.header && p.header.author) || "").trim()
-      );
+    impAuthor(): string {
+      const p = this.impParsed;
+      return this.author.trim() || String(p?.header.author || "").trim();
     },
-    buildBody() {
-      const p = this.impParsed || { header: {}, rows: [] };
+    buildBody(): {
+      author: string;
+      filesAllowlist: string[];
+      maxStatus: undefined;
+      sourcesFp?: string;
+      gameVersion?: string;
+      rows: DeltaRow[];
+    } {
+      const p = this.impParsed;
       const sel = new Set(this.impSelected());
       return {
         author: this.impAuthor(),
@@ -399,12 +488,12 @@ export default defineComponent({
           .filter((f) => sel.has(f.path))
           .map((f) => f.path),
         maxStatus: undefined,
-        sourcesFp: p.header.sourcesFp,
-        gameVersion: p.header.gameVersion,
-        rows: p.rows,
+        sourcesFp: p?.header.sourcesFp,
+        gameVersion: p?.header.gameVersion,
+        rows: p?.rows || [],
       };
     },
-    async doPreview() {
+    async doPreview(): Promise<void> {
       if (!this.projectId || !this.impParsed || this.impBusy) return;
       if (!this.impSelected().length) {
         this.$emit("toast", "Отметьте хотя бы один файл дельты");
@@ -423,11 +512,11 @@ export default defineComponent({
         this.result = await api.deltaPreview(this.projectId, this.buildBody());
         this.resultMode = "preview";
       } catch (e) {
-        this.error = e.message;
+        this.error = errorMessage(e);
       }
       this.impBusy = false;
     },
-    async doImport() {
+    async doImport(): Promise<void> {
       if (!this.projectId || !this.impParsed || this.impBusy) return;
       if (!this.impSelected().length) {
         this.$emit("toast", "Отметьте хотя бы один файл дельты");
@@ -473,21 +562,21 @@ export default defineComponent({
         this.$emit("refresh");
         this.$emit("toast", "Дельта влита: " + (res.applied ?? 0));
       } catch (e) {
-        this.error = e.message;
+        this.error = errorMessage(e);
       } finally {
         this.impBusy = false;
       }
     },
-    cap(list) {
+    cap<T>(list: T[] | undefined): T[] {
       return (list || []).slice(0, 50);
     },
-    cappedNote(list) {
+    cappedNote(list: unknown[] | undefined): string {
       return (list || []).length > 50
         ? "…и ещё " + ((list || []).length - 50)
         : "";
     },
-    skipReason(s) {
-      const map = {
+    skipReason(s: DeltaSkipped): string {
+      const map: Record<string, string> = {
         bad_cellId: "битая строка: нет cell id",
         not_assigned: "файл не назначен вам",
         unknown_cell: "такой ячейки нет в проекте",
@@ -498,7 +587,7 @@ export default defineComponent({
       };
       return map[s.reason] || s.reason;
     },
-    openDeltaFile() {
+    openDeltaFile(): void {
       const input = this.$refs.deltaFile as HTMLInputElement | undefined;
       input?.click();
     },
@@ -815,7 +904,7 @@ export default defineComponent({
         :disabled="
           impBusy ||
           !impParsed ||
-          (result &&
+          (!!result &&
             resultMode === 'preview' &&
             !(result.applied > 0) &&
             !(result.conflicts || []).length)

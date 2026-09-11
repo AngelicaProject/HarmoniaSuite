@@ -26,6 +26,18 @@ export function useJobs(options: JobOptions) {
   let jobTimer: ReturnType<typeof setInterval> | null = null;
   let updWatch: ReturnType<typeof setInterval> | null = null;
 
+  function stopJobTimer(): void {
+    const timer = jobTimer;
+    if (timer) clearInterval(timer);
+    jobTimer = null;
+  }
+
+  function stopUpdateWatch(): void {
+    const timer = updWatch;
+    if (timer) clearInterval(timer);
+    updWatch = null;
+  }
+
   const jobMainOutput = computed(() =>
     ((job.value && job.value.output) || "")
       .split("\n")
@@ -89,13 +101,11 @@ export function useJobs(options: JobOptions) {
     updWatch = setInterval(async () => {
       try {
         await api.version();
-        clearInterval(updWatch);
-        updWatch = null;
+        stopUpdateWatch();
         location.reload();
       } catch {
         if (++failures >= 40) {
-          clearInterval(updWatch);
-          updWatch = null;
+          stopUpdateWatch();
           options.updRestartDead.value = true;
         }
       }
@@ -125,15 +135,13 @@ export function useJobs(options: JobOptions) {
           }
         }
         if (current.status !== "running" && current.status !== "queued") {
-          clearInterval(jobTimer);
-          jobTimer = null;
+          stopJobTimer();
           await finishJob(current);
         }
       } catch {
         if (job.value?.action === "update") onUpdateGone();
         if (++failures >= 10) {
-          clearInterval(jobTimer);
-          jobTimer = null;
+          stopJobTimer();
           if (job.value) {
             job.value = {
               ...job.value,
@@ -197,8 +205,7 @@ export function useJobs(options: JobOptions) {
     options.updRestarting.value = false;
     options.updRestartDead.value = false;
     if (updWatch) {
-      clearInterval(updWatch);
-      updWatch = null;
+      stopUpdateWatch();
     }
     job.value = {
       id: details.id,
@@ -220,8 +227,8 @@ export function useJobs(options: JobOptions) {
   }
 
   onUnmounted(() => {
-    if (jobTimer) clearInterval(jobTimer);
-    if (updWatch) clearInterval(updWatch);
+    stopJobTimer();
+    stopUpdateWatch();
   });
 
   return {

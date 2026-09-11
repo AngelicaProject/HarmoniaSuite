@@ -1,15 +1,48 @@
 import { UI_COLORS } from "./uiColors";
 
+export interface TagSpan {
+  text: string;
+  start: number;
+  end: number;
+  anon?: boolean;
+  inner?: string;
+  skip?: boolean;
+}
+
+export interface AnonSpan extends TagSpan {
+  inner: string;
+}
+
+export interface ValidationIssue {
+  pos: number;
+  len: number;
+  message: string;
+}
+
+type TagKind =
+  "break" | "color" | "fmt" | "logic" | "value" | "media" | "misc" | "anon";
+
+interface ColorState {
+  fg: string | null;
+  edge: string | null;
+  shadow: string | null;
+}
+
+interface FormatState extends ColorState {
+  italic: boolean;
+  bold: boolean;
+}
+
 // Tag parser mirror of TagSupport.java. FFXIV Lumina macros as emitted by
 // ReadOnlySeString.ToMacroString() (<br>, <colortype(504)>, <if(cond,a,b)>
 // nestable, <payload: ...> for unknown codes). Names are MacroCode
 // GetEncodeName() values, matched case-sensitively like Lumina's
 // MacroStringParser. Backslash escapes the next char: \< is literal text.
-function isNameChar(ch) {
+function isNameChar(ch: string): boolean {
   return /[A-Za-z0-9_]/.test(ch);
 }
 
-function parseTagEnd(s, start) {
+function parseTagEnd(s: string, start: number): number {
   const n = s.length;
   let i = start + 1;
   const nameStart = i;
@@ -25,7 +58,7 @@ function parseTagEnd(s, start) {
   return i < n && s[i] === ">" ? i + 1 : -1;
 }
 
-function parseLogicArgs(s, start) {
+function parseLogicArgs(s: string, start: number): number {
   const n = s.length;
   let depth = 0,
     seenParen = false,
@@ -57,7 +90,7 @@ function parseLogicArgs(s, start) {
   return -1;
 }
 
-function parseBalanced(s, start) {
+function parseBalanced(s: string, start: number): number {
   const n = s.length;
   let depth = 0,
     i = start;
@@ -86,8 +119,8 @@ function parseBalanced(s, start) {
   return -1;
 }
 
-export function parseTags(value) {
-  const tags = [];
+export function parseTags(value: string): TagSpan[] {
+  const tags: TagSpan[] = [];
   if (!value) return tags;
   const n = value.length;
   let i = 0;
@@ -112,7 +145,7 @@ export function parseTags(value) {
 }
 
 // Lumina emits `<payload: XX>` for unknown macro codes; opaque tag.
-function parsePayloadEnd(s, start) {
+function parsePayloadEnd(s: string, start: number): number {
   if (!s.startsWith("<payload:", start)) return -1;
   const close = s.indexOf(">", start + 9);
   return close < 0 ? -1 : close + 1;
@@ -126,8 +159,8 @@ function parsePayloadEnd(s, start) {
 const ANON_TEXT = /[\p{L}\p{N}?？]/u;
 const ANON_OPEN_NEXT = /[\p{L}\p{N}?？<"'"“”]/u;
 
-export function parseAnon(value) {
-  const out = [];
+export function parseAnon(value: string): AnonSpan[] {
+  const out: AnonSpan[] = [];
   if (!value) return out;
   const n = value.length;
   let i = 0;
@@ -157,7 +190,7 @@ export function parseAnon(value) {
 
 // End (exclusive) of the (-...-) token starting at `start`, or -1. The first
 // -) closes; the inner must be single-line and carry real text.
-function anonEnd(s, start) {
+function anonEnd(s: string, start: number): number {
   const n = s.length;
   let i = start + 2;
   while (i + 1 < n) {
@@ -175,9 +208,9 @@ function anonEnd(s, start) {
   return -1;
 }
 
-export function distinctAnon(value) {
-  const seen = new Set(),
-    out = [];
+export function distinctAnon(value: string): string[] {
+  const seen = new Set<string>(),
+    out: string[] = [];
   for (const t of parseAnon(value)) {
     if (!seen.has(t.text)) {
       seen.add(t.text);
@@ -190,8 +223,8 @@ export function distinctAnon(value) {
 // Hard errors for broken anonymizers (unclosed (-...-)). A bare (- is never
 // enough: the opener must be followed by text-like input, so prose like
 // (-: or (- ... stays quiet.
-export function validateAnon(translation) {
-  const errors = [];
+export function validateAnon(translation: string): ValidationIssue[] {
+  const errors: ValidationIssue[] = [];
   if (!translation || !translation.trim()) return errors;
   const starts = new Set(parseAnon(translation).map((t) => t.start));
   for (let i = 0; i + 1 < translation.length; i++) {
@@ -226,8 +259,8 @@ export function validateAnon(translation) {
 
 // Soft presence warnings: the inner is translated, so only the construct
 // itself is compared — never its text.
-export function warnAnon(source, translation) {
-  const warnings = [];
+export function warnAnon(source: string, translation: string): string[] {
+  const warnings: string[] = [];
   if (!translation || !translation.trim()) return warnings;
   const want = parseAnon(source || "");
   const got = parseAnon(translation);
@@ -242,19 +275,19 @@ export function warnAnon(source, translation) {
   return warnings;
 }
 
-export function tagSequence(value) {
+export function tagSequence(value: string): string[] {
   return parseDeep(value).map((t) => t.text);
 }
 
-export function distinctTags(value) {
+export function distinctTags(value: string): string[] {
   return [...new Set(parseDeep(value).map((t) => t.text))];
 }
 
 // All tags including nested ones (for validation); parseTags stays top-level
 // for highlighting and span replacement.
-export function parseDeep(value) {
-  const out = [];
-  const walk = (s, base) => {
+export function parseDeep(value: string): TagSpan[] {
+  const out: TagSpan[] = [];
+  const walk = (s: string, base: number): void => {
     for (const t of parseTags(s)) {
       out.push({ text: t.text, start: t.start + base, end: t.end + base });
       if (t.end - t.start > 3)
@@ -276,7 +309,7 @@ const LOGIC_TAGS = new Set([
 
 // Logic macros carry translated display text in branches: only name +
 // condition (first argument) participate in set comparison.
-export function normalizedTag(text) {
+export function normalizedTag(text: string): string {
   const paren = text.indexOf("(");
   const name = paren < 0 ? tagNameOf(text) : text.slice(1, paren);
   if (!LOGIC_TAGS.has(name) || paren < 0 || !text.endsWith(">")) return text;
@@ -309,7 +342,11 @@ export function normalizedTag(text) {
 
 // Fallback when no top-level comma splits head from branches (composite
 // conditions like <if(g1),if(g2),branches...>): leading balanced groups.
-function logicConditionGroups(text, name, paren) {
+function logicConditionGroups(
+  text: string,
+  name: string,
+  paren: number,
+): string {
   let groups = "",
     i = paren;
   const n = text.length - 1;
@@ -328,7 +365,7 @@ function logicConditionGroups(text, name, paren) {
   return groups ? "<" + name + groups + ">" : text;
 }
 
-function scanConditionGroup(text, i, n) {
+function scanConditionGroup(text: string, i: number, n: number): number {
   let j = i;
   while (j < n && /[A-Za-z0-9_]/.test(text[j])) j++;
   if (j >= n || text[j] !== "(") return -1;
@@ -351,18 +388,21 @@ function scanConditionGroup(text, i, n) {
   return -1;
 }
 
-function shortTag(text) {
+function shortTag(text: string): string {
   return text.length > 80 ? text.slice(0, 80) + "..." : text;
 }
 
-function escapedAt(s, pos) {
+function escapedAt(s: string, pos: number): boolean {
   let bs = 0;
   for (let i = pos - 1; i >= 0 && s[i] === "\\"; i--) bs++;
   return bs % 2 === 1;
 }
 
-export function validateTags(source, translation) {
-  const errors = [];
+export function validateTags(
+  source: string,
+  translation: string | null | undefined,
+): ValidationIssue[] {
+  const errors: ValidationIssue[] = [];
   if (!translation || !translation.trim()) return errors;
   const starts = new Set(parseDeep(translation).map((t) => t.start));
   for (let i = 0; i + 1 < translation.length; i++) {
@@ -393,15 +433,15 @@ export function validateTags(source, translation) {
 }
 
 // Normalized keys of source tags missing in translation (for UI marking).
-export function findMissingTags(source, translation) {
+export function findMissingTags(source: string, translation: string): string[] {
   if (!translation || !translation.trim()) return [];
   const want = tagSequence(source || "").map(normalizedTag);
-  const have = new Map();
+  const have = new Map<string, number>();
   tagSequence(translation)
     .map(normalizedTag)
     .forEach((t) => have.set(t, (have.get(t) || 0) + 1));
-  const missing = [];
-  const seen = new Set();
+  const missing: string[] = [];
+  const seen = new Set<string>();
   for (const t of want) {
     if (seen.has(t)) continue;
     seen.add(t);
@@ -418,20 +458,20 @@ export function findMissingTags(source, translation) {
 
 // Soft warnings: missing original tags or newly added ones. Never block saving:
 // translators may add tags the game understands, order may follow target grammar.
-export function warnTags(source, translation) {
-  const warnings = [];
+export function warnTags(source: string, translation: string): string[] {
+  const warnings: string[] = [];
   if (!translation || !translation.trim()) return warnings;
   const want = tagSequence(source || "").map(normalizedTag);
   const got = tagSequence(translation).map(normalizedTag);
   if (want.join("\0") === got.join("\0")) return warnAnon(source, translation);
-  const count = (list) => {
-    const m = new Map();
+  const count = (list: string[]): Map<string, number> => {
+    const m = new Map<string, number>();
     list.forEach((t) => m.set(t, (m.get(t) || 0) + 1));
     return m;
   };
   const w = count(want),
     g = count(got);
-  const times = (c) => (c > 1 ? " (x" + c + ")" : "");
+  const times = (c: number): string => (c > 1 ? " (x" + c + ")" : "");
   for (const [t, c] of w) {
     const missing = c - (g.get(t) || 0);
     if (missing > 0)
@@ -448,7 +488,7 @@ export function warnTags(source, translation) {
 
 // Tag kinds follow Lumina's MacroCode (src/Lumina/Text/Payloads/MacroCode.cs):
 // names below are MacroCode.GetEncodeName() values.
-const TAG_KINDS = {
+const TAG_KINDS: Record<Exclude<TagKind, "misc" | "anon">, string[]> = {
   break: ["br"],
   color: [
     "colortype",
@@ -492,7 +532,7 @@ const TAG_KINDS = {
   media: ["icon", "icon2", "sound", "settime", "setresettime"],
 };
 // Undocumented MacroCodes (key, link, split, fixed, scale, wait) fall into misc.
-const KIND_LABELS = {
+const KIND_LABELS: Record<TagKind, string> = {
   break: "Перенос строки",
   color: "Цвет",
   fmt: "Форматирование",
@@ -503,22 +543,22 @@ const KIND_LABELS = {
   anon: "Скрытое имя",
 };
 
-export function tagNameOf(text) {
+export function tagNameOf(text: string): string {
   const m = /^<([A-Za-z][A-Za-z0-9_]*)/.exec(text || "");
   return m ? m[1].toLowerCase() : "";
 }
 
-export function tagKindOf(text) {
+export function tagKindOf(text: string): TagKind {
   if (isAnonToken(text)) return "anon";
   const name = tagNameOf(text);
-  for (const kind in TAG_KINDS) {
+  for (const kind of Object.keys(TAG_KINDS) as Array<keyof typeof TAG_KINDS>) {
     if (TAG_KINDS[kind].includes(name)) return kind;
   }
   return "misc";
 }
 
 // Whole-string (-...-) token, parsed — never matched loosely.
-function isAnonToken(text) {
+function isAnonToken(text: string): boolean {
   if (!text || !text.startsWith("(-") || !text.endsWith("-)")) return false;
   const found = parseAnon(text);
   return (
@@ -526,14 +566,14 @@ function isAnonToken(text) {
   );
 }
 
-export function tagKindLabel(kind) {
+export function tagKindLabel(kind: TagKind): string {
   return KIND_LABELS[kind] || KIND_LABELS.misc;
 }
 
 // Tracks color state for the in-game preview. colortype/edgecolortype take a
 // UIColor sheet row (0 and stackcolor reset); color/edgecolor/shadowcolor take
 // a raw 0xAARRGGBB value or stackcolor. Unknown ids keep the current state.
-function decodeArgb(n) {
+function decodeArgb(n: number): string {
   const a = (n >>> 24) & 255,
     r = (n >>> 16) & 255,
     g = (n >>> 8) & 255,
@@ -543,48 +583,56 @@ function decodeArgb(n) {
     : "rgba(" + r + "," + g + "," + b + "," + (a / 255).toFixed(3) + ")";
 }
 
-function trackColor(tag, state) {
-  let m = /^<(edge)?colortype\(([^)]*)\)>$/.exec(tag);
-  if (m) {
-    const set = (v) => {
-      if (m[1]) state.edge = v;
+function trackColor(tag: string, state: ColorState): void {
+  const colorTypeMatch = /^<(edge)?colortype\(([^)]*)\)>$/.exec(tag);
+  if (colorTypeMatch) {
+    const set = (v: string | null): void => {
+      if (colorTypeMatch[1]) state.edge = v;
       else state.fg = v;
     };
-    if (m[2] === "0" || m[2] === "stackcolor") {
+    if (colorTypeMatch[2] === "0" || colorTypeMatch[2] === "stackcolor") {
       set(null);
       return;
     }
-    if (/^\d+$/.test(m[2]) && UI_COLORS[m[2]] != null) set(UI_COLORS[m[2]]);
+    if (
+      /^\d+$/.test(colorTypeMatch[2]) &&
+      (UI_COLORS as Record<string, string>)[colorTypeMatch[2]] != null
+    )
+      set((UI_COLORS as Record<string, string>)[colorTypeMatch[2]]);
     return;
   }
-  m = /^<(edge|shadow)?color\(([^)]*)\)>$/.exec(tag);
-  if (m) {
-    const set = (v) => {
-      if (m[1] === "edge") state.edge = v;
-      else if (m[1] === "shadow") state.shadow = v;
+  const rawColorMatch = /^<(edge|shadow)?color\(([^)]*)\)>$/.exec(tag);
+  if (rawColorMatch) {
+    const set = (v: string | null): void => {
+      if (rawColorMatch[1] === "edge") state.edge = v;
+      else if (rawColorMatch[1] === "shadow") state.shadow = v;
       else state.fg = v;
     };
-    if (m[2] === "0" || m[2] === "stackcolor") {
+    if (rawColorMatch[2] === "0" || rawColorMatch[2] === "stackcolor") {
       set(null);
       return;
     }
-    if (/^\d+$/.test(m[2])) set(decodeArgb(Number(m[2])));
+    if (/^\d+$/.test(rawColorMatch[2]))
+      set(decodeArgb(Number(rawColorMatch[2])));
   }
 }
 
-function escAttr(s) {
+function escAttr(s: string): string {
   return String(s).replace(/&/g, "&amp;").replace(/"/g, "&quot;");
 }
-function escHtml(s) {
+function escHtml(s: string): string {
   return String(s).replace(
     /[&<>]/g,
-    (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c],
+    (c) =>
+      (({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }) as Record<string, string>)[
+        c
+      ],
   );
 }
 
-function coloredText(state, html) {
+function coloredText(state: ColorState, html: string): string {
   if (!state.fg && !state.edge && !state.shadow) return html;
-  const shadows = [];
+  const shadows: string[] = [];
   if (state.edge)
     shadows.push(
       "1px 0 0 " + state.edge,
@@ -600,7 +648,7 @@ function coloredText(state, html) {
   return '<span style="' + style + '">' + html + "</span>";
 }
 
-function styledText(state, html) {
+function styledText(state: FormatState, html: string): string {
   let out = coloredText(state, html);
   if (state.bold) out = "<b>" + out + "</b>";
   if (state.italic) out = "<i>" + out + "</i>";
@@ -608,15 +656,16 @@ function styledText(state, html) {
 }
 
 // italic/bold are on/off toggles consumed by the preview, not markers.
-function trackFmt(tag, state) {
+function trackFmt(tag: string, state: FormatState): boolean {
   const m = /^<(italic|bold)\(([^)]*)\)>$/.exec(tag);
   if (!m) return false;
-  state[m[1]] = m[2].trim() !== "0";
+  const key = m[1] as "italic" | "bold";
+  state[key] = m[2].trim() !== "0";
   return true;
 }
 
-function splitArgs(inner) {
-  const parts = [];
+function splitArgs(inner: string): string[] {
+  const parts: string[] = [];
   let depth = 0,
     cur = "";
   for (let i = 0; i < inner.length; i++) {
@@ -645,7 +694,7 @@ function splitArgs(inner) {
   return parts;
 }
 
-function parseRuby(text) {
+function parseRuby(text: string): { base: string; reading: string } | null {
   if (!/^<ruby\(/.test(text) || !text.endsWith(")>")) return null;
   const parts = splitArgs(text.slice(6, -2));
   if (parts.length < 2) return null;
@@ -654,7 +703,7 @@ function parseRuby(text) {
 
 // Top-level spans for highlighting: tags and (-...-) anonymizers merged,
 // nested ones left for the recursive render (anonymizer inners may carry tags).
-function topSpans(str) {
+function topSpans(str: string): TagSpan[] {
   const spans = parseTags(str).map((t) => ({
     text: t.text,
     start: t.start,
@@ -664,7 +713,7 @@ function topSpans(str) {
   for (const t of parseAnon(str))
     spans.push({ text: t.text, start: t.start, end: t.end, anon: true });
   spans.sort((a, b) => a.start - b.start || b.end - a.end);
-  const out = [];
+  const out: TagSpan[] = [];
   let lastEnd = -1;
   for (const t of spans) {
     if (t.start < lastEnd) continue;
@@ -678,12 +727,15 @@ function topSpans(str) {
 // tags wrapped in pills. Logic macros (if/switch/...) nest: the wrapper pill
 // holds branch text and nested pills. missingKeys (normalized) get flagged.
 // Validation and repair keep the whole tag.
-export function highlightTags(value, missingKeys = []) {
+export function highlightTags(
+  value: string,
+  missingKeys: string[] = [],
+): string {
   if (!value) return "";
   const missing = new Set(missingKeys || []);
-  const state = { fg: null, edge: null, shadow: null };
+  const state: ColorState = { fg: null, edge: null, shadow: null };
   let idx = 0;
-  const renderSlice = (str) => {
+  const renderSlice = (str: string): string => {
     let out = "",
       pos = 0;
     for (const t of topSpans(str)) {
@@ -738,7 +790,7 @@ export function highlightTags(value, missingKeys = []) {
 // End offset (in tag coords) just past a logic head `<name(conds),` or the
 // leading balanced condition groups of a composite `<if(g1),if(g2),...>`;
 // -1 when the head shape is unknown (caller keeps old zero-width ghost).
-function logicHeadEnd(text) {
+function logicHeadEnd(text: string): number {
   const m = /^<([A-Za-z][A-Za-z0-9_]*)\(/.exec(text);
   if (!m || !LOGIC_TAGS.has(m[1]) || !text.endsWith(">")) return -1;
   const paren = m[0].length - 1;
@@ -787,7 +839,7 @@ function logicHeadEnd(text) {
 
 // Start offset (in tag coords) of trailing closer syntax (`,,)>`); branch
 // text before it is kept. -1 when the tail carries anything else.
-function logicTailStart(text) {
+function logicTailStart(text: string): number {
   if (!text.endsWith(">")) return -1;
   let i = text.length - 2;
   while (
@@ -805,8 +857,8 @@ function logicTailStart(text) {
 // consuming the head (`<if(cond),`), nested tags flow through normally, and
 // a skip entry consumes the tail closers (`,,)>`). Heads/tails are macro
 // syntax, never game text; branch text stays visible between them.
-function previewTags(value, tags) {
-  const out = [];
+function previewTags(value: string, tags: TagSpan[]): TagSpan[] {
+  const out: TagSpan[] = [];
   for (const t of tags) {
     if (LOGIC_TAGS.has(tagNameOf(t.text))) {
       const inner = parseTags(value.slice(t.start + 1, t.end)).map((x) => ({
@@ -815,7 +867,7 @@ function previewTags(value, tags) {
         end: x.end + t.start + 1,
       }));
       if (inner.length) {
-        const expanded = [];
+        const expanded: TagSpan[] = [];
         for (const nt of previewTags(value, inner)) expanded.push(nt);
         const head = logicHeadEnd(t.text);
         const headAbs = head > 0 ? t.start + head : t.start;
@@ -839,7 +891,7 @@ function previewTags(value, tags) {
 }
 
 // Plate label: anonymizer inner without macro syntax (view-only).
-function stripTopTags(s) {
+function stripTopTags(s: string): string {
   let out = "",
     pos = 0;
   for (const t of parseTags(s)) {
@@ -849,11 +901,15 @@ function stripTopTags(s) {
   return out + s.slice(pos);
 }
 
-export function renderGamePreview(value, marks = []) {
+export function renderGamePreview(
+  value: string,
+  marks: Array<{ pos: number; len: number }> = [],
+): string {
   if (!value) return "";
   const anons = parseAnon(value);
-  const inAnon = (s, e) => anons.some((a) => s >= a.start && e <= a.end);
-  const tags = previewTags(
+  const inAnon = (s: number, e: number): boolean =>
+    anons.some((a) => s >= a.start && e <= a.end);
+  const tags: TagSpan[] = previewTags(
     value,
     parseTags(value).filter((t) => !inAnon(t.start, t.end)),
   );
@@ -866,7 +922,7 @@ export function renderGamePreview(value, marks = []) {
       inner: a.inner,
     });
   tags.sort((a, b) => a.start - b.start);
-  const state = {
+  const state: FormatState = {
     fg: null,
     edge: null,
     shadow: null,
@@ -878,9 +934,9 @@ export function renderGamePreview(value, marks = []) {
     .sort((a, b) => a.from - b.from);
   let out = "",
     pos = 0;
-  const pushText = (chunk, base) => {
+  const pushText = (chunk: string, base: number): void => {
     if (!chunk) return;
-    const segs = [];
+    const segs: Array<{ t: string; bad: boolean; at: number }> = [];
     let p = 0;
     for (const r of ranges) {
       const s = Math.max(r.from, base) - base,
@@ -911,9 +967,10 @@ export function renderGamePreview(value, marks = []) {
       return;
     }
     if (t.anon) {
+      const inner = t.inner || "";
       const label =
-        stripTopTags(t.inner).replace(/\\(.)/g, "$1") ||
-        t.inner.replace(/\\(.)/g, "$1");
+        stripTopTags(inner).replace(/\\(.)/g, "$1") ||
+        inner.replace(/\\(.)/g, "$1");
       out +=
         '<span class="anplate" title="' +
         escHtml("Скрытое имя: " + t.text) +

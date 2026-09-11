@@ -5,8 +5,8 @@ export interface FileTreeDirectory {
   path: string;
   dirs: Map<string, FileTreeDirectory>;
   files: FileStats[];
-  total?: number;
-  done?: number;
+  total: number;
+  done: number;
 }
 
 export type FileTreeRow =
@@ -67,6 +67,8 @@ export function buildFileTree(
           path: parts.slice(0, i + 1).join("/"),
           dirs: new Map(),
           files: [],
+          total: 0,
+          done: 0,
         };
         node.dirs.set(parts[i], directory);
       }
