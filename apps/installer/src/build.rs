@@ -480,7 +480,7 @@ impl<D: DownloadClient, P: ProcessRunner> BuildPipeline<D, P> {
                 &PathBuf::from(system_root).join("System32").join("cmd.exe"),
                 &command_args,
                 current_dir,
-            );
+            )
         }
         #[cfg(not(windows))]
         {

@@ -93,13 +93,19 @@ fn report_result(json: bool, result: BootstrapResult) -> ExitCode {
                 version_dir,
                 ..
             } => {
-                println!("HarmoniaSuite installed at {version_dir} (commit {commit})");
+                println!(
+                    "HarmoniaSuite installed at {} (commit {commit})",
+                    version_dir.display()
+                );
             }
             BootstrapStatus::AlreadyInstalled {
                 commit,
                 version_dir,
             } => {
-                eprintln!("HarmoniaSuite is already installed at {version_dir} (commit {commit})");
+                eprintln!(
+                    "HarmoniaSuite is already installed at {} (commit {commit})",
+                    version_dir.display()
+                );
             }
             BootstrapStatus::RepairRequired { reason, .. }
             | BootstrapStatus::ReviewRequired { reason }
