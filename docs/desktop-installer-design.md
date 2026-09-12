@@ -81,7 +81,7 @@ artifact URLs:
 ```json
 {
   "schemaVersion": 1,
-  "channel": "rolling-main",
+  "channel": "rolling",
   "targetCommit": "<full Git object id / commit SHA>",
   "productVersion": "1.2.0",
   "components": {"desktop": "1", "gateway": "1", "installer": "1", "extractor": "1"},

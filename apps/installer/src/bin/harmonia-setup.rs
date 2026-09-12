@@ -2,9 +2,9 @@ use std::env;
 use std::process::ExitCode;
 
 use harmonia_installer::{
-    BootstrapInstaller, BootstrapOptions, BootstrapResult, BootstrapStatus, DiagnosticLogger,
-    HttpDownloader, HttpManifestFetcher, InstallationPaths, LocalBackendHealthChecker,
-    ManifestVerifier, NoopActivationHooks, SystemDetachedLauncher, SystemProcessRunner,
+    BootstrapInstaller, BootstrapOptions, BootstrapResult, BootstrapStatus, DesktopShutdownHooks,
+    DiagnosticLogger, HttpDownloader, HttpManifestFetcher, InstallationPaths,
+    LocalBackendHealthChecker, ManifestVerifier, SystemDetachedLauncher, SystemProcessRunner,
     UpdateEngine, UpdateResult, UpdateStatus,
 };
 
@@ -15,6 +15,7 @@ const EXIT_REVIEW_REQUIRED: u8 = 21;
 const EXIT_BUILD_FAILED: u8 = 30;
 const EXIT_ACTIVATION_FAILED: u8 = 40;
 const EXIT_LAUNCH_FAILED: u8 = 41;
+const EXIT_UPGRADE_REQUIRED: u8 = 42;
 const EXIT_USAGE: u8 = 64;
 const EXIT_INTERNAL: u8 = 70;
 
@@ -42,7 +43,7 @@ fn main() -> ExitCode {
     };
     if matches!(cli.command, Command::Update | Command::Check) {
         let updater = UpdateEngine::new(
-            paths,
+            paths.clone(),
             HttpDownloader::default(),
             SystemProcessRunner::default(),
             logger,
@@ -60,7 +61,10 @@ fn main() -> ExitCode {
                 Err(error) => report_error(cli.json, EXIT_INTERNAL, &error.to_string()),
             };
         }
-        let mut hooks = NoopActivationHooks;
+        let mut hooks = DesktopShutdownHooks::new(
+            paths,
+            env::var("HARMONIA_UPDATE_FROM_DESKTOP").as_deref() == Ok("1"),
+        );
         let checker = LocalBackendHealthChecker::new(SystemProcessRunner::default());
         return match updater.update(&mut hooks, &checker, &SystemDetachedLauncher) {
             Ok(result) => report_update_result(cli.json, result),
@@ -158,6 +162,7 @@ fn report_update_result(json: bool, result: UpdateResult) -> ExitCode {
         UpdateStatus::UpdateAvailable { .. } => EXIT_ALREADY_INSTALLED,
         UpdateStatus::LaunchFailed { .. } => EXIT_LAUNCH_FAILED,
         UpdateStatus::ReviewRequired { .. } => EXIT_REVIEW_REQUIRED,
+        UpdateStatus::UpdaterUpgradeRequired { .. } => EXIT_UPGRADE_REQUIRED,
         UpdateStatus::TrustFailure { .. } => EXIT_USAGE,
         UpdateStatus::UpdateBuildFailed { .. } => EXIT_BUILD_FAILED,
         UpdateStatus::ActivationFailed { .. } | UpdateStatus::RollbackCompleted { .. } => {

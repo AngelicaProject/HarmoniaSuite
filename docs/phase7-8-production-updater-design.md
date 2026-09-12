@@ -13,7 +13,7 @@ build, activation and relaunch. `BuildPipeline::run_with_lock` and
 update journal is persisted at the installation state root:
 
 ```text
-Recovering → Checking → ResolvingTarget → Preparing → Activating → Restarting → Completed
+Recovering → Checking → ResolvingTarget → Preparing → WaitingForShutdown → Activating → Restarting → Completed
                                       └──────────────────────────→ Failed/ReviewRequired
 ```
 
@@ -31,10 +31,12 @@ Production fetches use product-controlled HTTPS URLs only:
 ```
 
 The signature covers the exact raw manifest bytes. The detached signature document contains
-`schemaVersion`, `keyId` and `signatureHex`; the installer verifies Ed25519 using the pinned
-public-key map. Unknown keys, invalid signatures, credentials in URLs, HTTP, redirects to HTTP,
-oversized documents and malformed schema are rejected. `keyId` permits a reviewed binary to
-carry a rotation map; an unknown key is a `TrustFailure`.
+`schemaVersion`, `keyId` and `signatureHex`; the installer verifies Ed25519 using the reviewed
+production public-key map. The corresponding private key is release-secret material and is never
+stored in the repository or accepted as runtime input. The manifest must contain
+`channel: "rolling"`. Unknown keys, invalid signatures, malformed SemVer minimums, credentials
+in URLs, HTTP, redirects to HTTP, oversized documents and malformed schema are rejected.
+`keyId` permits a reviewed binary to carry a rotation map; an unknown key is a `TrustFailure`.
 
 Manifest v1 can select only `target_commit`, product version, and the known JDK/Node descriptor
 shape. Descriptor validation still enforces HTTPS, SHA-256, platform/architecture, safe relative
@@ -54,12 +56,23 @@ persistent npm/Maven caches, immutable candidate and activation verification rem
 
 ## Runtime handoff
 
-Activation completes before relaunch. The updater uses the existing detached launcher contract,
-with a fresh operation id/nonce and acknowledgement file under installer-owned state. Desktop is
-started only from `RuntimePaths.desktop_executable`, with managed Java, active version, exact user
-data/workspace paths and launch identity in a bounded environment. Startup failure and missing
-acknowledgement are reported as `LaunchFailed`; a healthy active version is not removed for that
-failure.
+Activation completes before relaunch. The desktop starts the helper and waits for its durable
+startup acceptance record. The helper coordinates shutdown with the installed desktop before
+database snapshot/activation; a direct CLI update fails closed when a live desktop session is
+detected. The updater uses the existing detached launcher contract, with a fresh operation
+id/nonce and acknowledgement file under installer-owned state. Desktop is started only from
+`RuntimePaths.desktop_executable`, with managed Java, active version, exact user data/workspace
+paths and launch identity in a bounded environment.
+
+If the new desktop cannot be handed off, the updater restores the exact pre-activation
+installation state and database snapshot, health-checks the previous backend, relaunches the
+previous desktop and waits for its acknowledgement. A failed rollback or previous launch becomes
+durable `ReviewRequired` and blocks later updates/GC. Recovery compares the active commit with the
+journal target and never reports an already-rolled-back operation as `Updated`.
+
+Fresh install durably publishes the setup helper under the immutable per-user `bin` root with
+size/SHA-256 sidecar metadata and Unix executable-bit validation. Existing helpers are never
+replaced while running; replacement is a later self-update boundary.
 
 The Electron integration is intentionally narrow: future renderer code receives only update
 status/check/install operations through the main-process boundary. Renderer code does not read

@@ -67,6 +67,12 @@ pub enum DetachedLaunchError {
 
 pub trait DetachedLauncher {
     fn launch(&self, spec: &DetachedLaunchSpec) -> Result<DetachedLaunch, DetachedLaunchError>;
+
+    /// Stop a child that failed the startup/acknowledgement contract. Successful handoff never
+    /// calls this method, so detached desktop processes remain independent of setup lifetime.
+    fn terminate(&self, _launch: &DetachedLaunch) -> Result<(), DetachedLaunchError> {
+        Ok(())
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -124,6 +130,43 @@ impl DetachedLauncher for SystemDetachedLauncher {
         // containment object and all standard handles are detached/null.
         drop(child);
         Ok(DetachedLaunch { process_id })
+    }
+
+    fn terminate(&self, launch: &DetachedLaunch) -> Result<(), DetachedLaunchError> {
+        #[cfg(unix)]
+        {
+            let pid = launch.process_id as libc::pid_t;
+            unsafe {
+                libc::kill(-pid, libc::SIGTERM);
+            }
+            std::thread::sleep(Duration::from_millis(250));
+            unsafe {
+                libc::kill(-pid, libc::SIGKILL);
+            }
+            return Ok(());
+        }
+        #[cfg(windows)]
+        {
+            use windows_sys::Win32::Foundation::CloseHandle;
+            use windows_sys::Win32::System::Threading::{
+                OpenProcess, TerminateProcess, PROCESS_TERMINATE,
+            };
+            let handle = unsafe { OpenProcess(PROCESS_TERMINATE, 0, launch.process_id) };
+            if handle == 0 {
+                return Ok(());
+            }
+            let result = unsafe { TerminateProcess(handle, 1) };
+            unsafe { CloseHandle(handle) };
+            if result == 0 {
+                return Err(DetachedLaunchError::Spawn {
+                    program: "desktop".to_owned(),
+                    source: io::Error::last_os_error(),
+                });
+            }
+            return Ok(());
+        }
+        #[allow(unreachable_code)]
+        Ok(())
     }
 }
 

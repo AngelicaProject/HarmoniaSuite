@@ -945,6 +945,44 @@ pub(crate) fn durable_promote_directory(
     Ok(())
 }
 
+/// Publish a file without replacing an existing destination. This is used for the immutable
+/// setup helper: replacing a helper while it is executing is deliberately not supported.
+pub(crate) fn durable_promote_file(staging: &Path, destination: &Path) -> Result<(), StateError> {
+    if destination.exists() {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            format!("immutable file already exists: {}", destination.display()),
+        )
+        .into());
+    }
+    #[cfg(not(windows))]
+    {
+        fs::rename(staging, destination)?;
+        if let Some(parent) = destination.parent() {
+            File::open(parent)?.sync_all()?;
+        }
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::Storage::FileSystem::{MoveFileExW, MOVEFILE_WRITE_THROUGH};
+        let source: Vec<u16> = staging
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        let target: Vec<u16> = destination
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        if unsafe { MoveFileExW(source.as_ptr(), target.as_ptr(), MOVEFILE_WRITE_THROUGH) } == 0 {
+            return Err(io::Error::last_os_error().into());
+        }
+    }
+    Ok(())
+}
+
 #[cfg(not(windows))]
 fn replace_file(temporary: &Path, destination: &Path) -> io::Result<()> {
     fs::rename(temporary, destination)

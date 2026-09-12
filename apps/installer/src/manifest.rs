@@ -12,6 +12,7 @@ use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use reqwest::blocking::Client;
 use reqwest::redirect::Policy;
 use reqwest::Url;
+use semver::Version;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -25,16 +26,17 @@ pub const DEFAULT_MANIFEST_URL: &str =
 pub const DEFAULT_MANIFEST_SIGNATURE_URL: &str =
     "https://github.com/AngelicaProject/HarmoniaSuite/releases/latest/download/harmonia-manifest.json.sig";
 
-// Release infrastructure owns the corresponding private key.  The public key is intentionally
-// pinned in the binary; replacing it requires a reviewed installer release.  This is the
-// well-known RFC 8032 test public key and is a valid Ed25519 key, not a signing fallback.
+// Release infrastructure owns the corresponding private key outside this repository. Replacing
+// this trust root requires a reviewed installer release. The private key is never accepted from
+// runtime input and is provisioned only through the release secret/file contract.
 const PRIMARY_PUBLIC_KEY_HEX: &str =
-    "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a";
+    "ee7809268d92d5a832ae8fb03f7d090123073a4833cb7f1f725babfe74ff1925";
 const MAX_MANIFEST_BYTES: usize = 1024 * 1024;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct RollingManifest {
     pub schema_version: u32,
+    pub channel: String,
     pub generation: u64,
     pub product_version: String,
     pub target_commit: String,
@@ -86,6 +88,10 @@ pub enum ManifestError {
     UnsupportedSchema(u32),
     #[error("manifest requires a newer installer: {0}")]
     UpdaterUpgradeRequired(String),
+    #[error("manifest minimum installer version is malformed: {0}")]
+    InvalidMinimumInstallerVersion(String),
+    #[error("manifest channel is unsupported")]
+    UnsupportedChannel,
     #[error("manifest target commit is invalid")]
     InvalidCommit,
     #[error("manifest product version is empty")]
@@ -96,6 +102,28 @@ pub enum ManifestError {
     InvalidToolchainKind,
     #[error("manifest toolchain platform or architecture does not match the installer")]
     WrongTarget,
+}
+
+impl ManifestError {
+    pub fn is_trust_failure(&self) -> bool {
+        matches!(
+            self,
+            Self::InvalidUrl(_)
+                | Self::Json(_)
+                | Self::UnsupportedSignatureSchema
+                | Self::InvalidSignature
+                | Self::UnknownKey(_)
+                | Self::SignatureVerification
+                | Self::UnsupportedSchema(_)
+                | Self::InvalidMinimumInstallerVersion(_)
+                | Self::UnsupportedChannel
+                | Self::InvalidCommit
+                | Self::EmptyProductVersion
+                | Self::Toolchain(_)
+                | Self::InvalidToolchainKind
+                | Self::WrongTarget
+        )
+    }
 }
 
 pub trait ManifestFetcher: Send + Sync {
@@ -226,8 +254,15 @@ fn validate_manifest(
     if manifest.schema_version != MANIFEST_SCHEMA_VERSION {
         return Err(ManifestError::UnsupportedSchema(manifest.schema_version));
     }
+    if manifest.channel != "rolling" {
+        return Err(ManifestError::UnsupportedChannel);
+    }
     if manifest.product_version.trim().is_empty() {
         return Err(ManifestError::EmptyProductVersion);
+    }
+    if let Some(minimum) = manifest.min_installer_version.as_deref() {
+        Version::parse(minimum)
+            .map_err(|_| ManifestError::InvalidMinimumInstallerVersion(minimum.to_owned()))?;
     }
     if manifest.target_commit.len() != 40
         || !manifest
@@ -315,6 +350,7 @@ mod tests {
         };
         RollingManifest {
             schema_version: 1,
+            channel: "rolling".to_owned(),
             generation: 4,
             product_version: "1.2.3".to_owned(),
             target_commit: "0123456789abcdef0123456789abcdef01234567".to_owned(),
@@ -381,5 +417,65 @@ mod tests {
             verifier.verify(b"{}", &signature, Platform::Linux, &TargetArchitecture::X64),
             Err(ManifestError::UnknownKey(_))
         ));
+    }
+
+    #[test]
+    fn rejects_wrong_channel_and_malformed_minimum_version() {
+        let signing = SigningKey::from_bytes(&[8u8; 32]);
+        let verifier = ManifestVerifier::with_keys(BTreeMap::from([(
+            "test".to_owned(),
+            signing.verifying_key().to_bytes(),
+        )]));
+        for (channel, minimum, expected) in [
+            ("stable", None, ManifestError::UnsupportedChannel),
+            (
+                "rolling",
+                Some("1.bad.0"),
+                ManifestError::InvalidMinimumInstallerVersion("1.bad.0".to_owned()),
+            ),
+        ] {
+            let mut value = manifest();
+            value.channel = channel.to_owned();
+            value.min_installer_version = minimum.map(str::to_owned);
+            let bytes = serde_json::to_vec(&value).unwrap();
+            let signature = signing.sign(&bytes);
+            let envelope = serde_json::to_vec(&ManifestSignature {
+                schema_version: 1,
+                key_id: "test".to_owned(),
+                signature_hex: signature
+                    .to_bytes()
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect(),
+            })
+            .unwrap();
+            let error = verifier
+                .verify(&bytes, &envelope, Platform::Linux, &TargetArchitecture::X64)
+                .unwrap_err();
+            match (error, expected) {
+                (ManifestError::UnsupportedChannel, ManifestError::UnsupportedChannel) => {}
+                (
+                    ManifestError::InvalidMinimumInstallerVersion(actual),
+                    ManifestError::InvalidMinimumInstallerVersion(expected),
+                ) => assert_eq!(actual, expected),
+                (actual, expected) => panic!("unexpected errors: {actual:?} vs {expected:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn accepts_valid_minimum_version_and_serializes_required_channel() {
+        let mut value = manifest();
+        value.min_installer_version = Some("0.1.0".to_owned());
+        let document = serde_json::to_value(value).unwrap();
+        assert_eq!(document["channel"], "rolling");
+    }
+
+    #[test]
+    fn production_trust_root_is_not_the_public_rfc_test_vector() {
+        assert_ne!(
+            PRIMARY_PUBLIC_KEY_HEX,
+            "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"
+        );
     }
 }

@@ -1,11 +1,13 @@
 import { spawn } from "node:child_process";
-import { isAbsolute } from "node:path";
+import { existsSync, rmSync, readFileSync } from "node:fs";
+import { isAbsolute, join } from "node:path";
 
 import { app, ipcMain } from "electron";
 
 export type UpdateStatus =
   | { state: "idle" }
   | { state: "checking" }
+  | { state: "up-to-date"; result: unknown }
   | { state: "available"; result: unknown }
   | { state: "installing" }
   | { state: "error"; error: string };
@@ -18,7 +20,7 @@ export function registerUpdaterIpc(): void {
     status = { state: "checking" };
     try {
       const result = await runInstaller(["check", "--json"]);
-      status = { state: "available", result };
+      status = { state: updateResultState(result), result };
       return result;
     } catch (error) {
       status = { state: "error", error: error instanceof Error ? error.message : String(error) };
@@ -26,20 +28,31 @@ export function registerUpdaterIpc(): void {
     }
   });
   ipcMain.handle("harmonia:update:installUpdate", async () => {
-    const installer = installerBinary();
-    // The updater is an independent process. It owns the build/activation lock and the desktop
-    // exits immediately after handoff, so it is never placed in the desktop's containment group.
-    const child = spawn(installer, ["update"], {
-      detached: true,
-      shell: false,
-      windowsHide: true,
-      stdio: "ignore",
-      env: updaterEnvironment(),
-    });
-    child.unref();
-    status = { state: "installing" };
-    app.quit();
-    return { accepted: true };
+    try {
+      const installer = installerBinary();
+      const acceptancePath = updateAcceptancePath();
+      rmSync(acceptancePath, { force: true });
+      // The updater is an independent process. It owns the build/activation lock and the desktop
+      // exits only after the helper has acknowledged startup.
+      const child = spawn(installer, ["update"], {
+        detached: true,
+        shell: false,
+        windowsHide: true,
+        stdio: "ignore",
+        env: updaterEnvironment({
+          HARMONIA_UPDATE_ACCEPT_PATH: acceptancePath,
+          HARMONIA_UPDATE_FROM_DESKTOP: "1",
+        }),
+      });
+      await waitForUpdaterAcceptance(child, acceptancePath);
+      child.unref();
+      status = { state: "installing" };
+      app.quit();
+      return { accepted: true };
+    } catch (error) {
+      status = { state: "error", error: error instanceof Error ? error.message : String(error) };
+      throw error;
+    }
   });
 }
 
@@ -51,7 +64,12 @@ function installerBinary(): string {
   return value;
 }
 
-function updaterEnvironment(): NodeJS.ProcessEnv {
+function updaterEnvironment(overrides: Record<string, string> = {}): NodeJS.ProcessEnv {
+  const environment = updaterEnvironmentBase();
+  return { ...environment, ...overrides };
+}
+
+function updaterEnvironmentBase(): NodeJS.ProcessEnv {
   const allowed = [
     "SystemRoot",
     "SystemDrive",
@@ -76,10 +94,60 @@ function updaterEnvironment(): NodeJS.ProcessEnv {
     "HARMONIA_WORKSPACE",
     "HARMONIA_INSTALL_STATE_ROOT",
     "HARMONIA_INSTALLER_BINARY",
+    "HARMONIA_UPDATE_FROM_DESKTOP",
   ]) {
     if (process.env[name]) environment[name] = process.env[name];
   }
   return environment;
+}
+
+function updateAcceptancePath(): string {
+  const stateRoot = process.env.HARMONIA_INSTALL_STATE_ROOT;
+  if (!stateRoot || !isAbsolute(stateRoot)) {
+    throw new Error("installed runtime requires an absolute HARMONIA_INSTALL_STATE_ROOT");
+  }
+  return join(stateRoot, "update-accepted.json");
+}
+
+async function waitForUpdaterAcceptance(
+  child: ReturnType<typeof spawn>,
+  path: string,
+): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  let spawnError: Error | undefined;
+  child.once("error", (error) => {
+    spawnError = error;
+  });
+  let exited: number | null | undefined;
+  child.once("exit", (code) => {
+    exited = code;
+  });
+  while (Date.now() < deadline) {
+    if (spawnError) throw spawnError;
+    if (exited !== undefined) {
+      throw new Error(`updater helper exited before startup acceptance (status ${exited ?? "unknown"})`);
+    }
+    if (existsSync(path)) {
+      try {
+        const value = JSON.parse(readFileSync(path, "utf8")) as { accepted?: boolean };
+        if (value.accepted === true) return;
+      } catch {
+        // The helper is still atomically writing its acceptance record.
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error("updater helper did not accept the operation during startup grace");
+}
+
+function updateResultState(result: unknown): "up-to-date" | "available" {
+  if (result && typeof result === "object" && "status" in result) {
+    const statusValue = (result as { status?: unknown }).status;
+    if (statusValue && typeof statusValue === "object" && "UpToDate" in statusValue) {
+      return "up-to-date";
+    }
+  }
+  return "available";
 }
 
 async function runInstaller(args: string[]): Promise<unknown> {

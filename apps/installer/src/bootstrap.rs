@@ -17,6 +17,7 @@ use crate::catalog::production_descriptors;
 use crate::detached::{DetachedLaunchSpec, DetachedLauncher};
 use crate::diagnostics::{DiagnosticError, DiagnosticLogger};
 use crate::download::DownloadClient;
+use crate::helper::publish_installer_helper;
 use crate::lock::{InstallationLock, LockError};
 use crate::paths::InstallationPaths;
 use crate::process::{ProcessRunner, SystemProcessRunner};
@@ -424,6 +425,26 @@ fn reconcile_running_activation<L: DetachedLauncher>(
     }
     if journal.toolchains.is_empty() {
         journal.toolchains = runtime.metadata.toolchains.clone();
+    }
+    if let Err(error) = publish_installer_helper(paths) {
+        let reason = format!("installer helper publication failed: {error}");
+        journal.failure = Some(reason.clone());
+        return finish_result(
+            paths,
+            logger,
+            &operation_id,
+            options,
+            started_at_ms,
+            journal,
+            BootstrapStatus::LaunchFailed {
+                reason,
+                version_dir: runtime.version_dir,
+            },
+            Some(runtime.metadata.target_commit),
+            runtime.metadata.toolchains,
+            true,
+            false,
+        );
     }
     journal.phase = BootstrapJournalPhase::Launching;
     persist_bootstrap_journal(paths, &journal)?;
@@ -845,6 +866,26 @@ impl<D: DownloadClient, P: ProcessRunner, L: DetachedLauncher> BootstrapInstalle
         };
 
         journal.activation_completed = true;
+        if let Err(error) = publish_installer_helper(&paths) {
+            let reason = format!("installer helper publication failed: {error}");
+            journal.failure = Some(reason.clone());
+            return finish_result(
+                &paths,
+                logger.as_ref(),
+                &operation_id,
+                &options,
+                started_at_ms,
+                journal,
+                BootstrapStatus::LaunchFailed {
+                    reason,
+                    version_dir: runtime.version_dir,
+                },
+                Some(build.target_commit),
+                toolchain_ids,
+                true,
+                false,
+            );
+        }
         journal.phase = BootstrapJournalPhase::Launching;
         persist_bootstrap_journal(&paths, &journal)?;
         if read_matching_launch_ack(&paths, &journal, &build.target_commit)? {
@@ -1657,6 +1698,12 @@ mod tests {
         assert!(launch.environment.contains_key("HARMONIA_LAUNCH_COMMIT"));
         assert!(launch.environment.contains_key("HARMONIA_LAUNCH_NONCE"));
         assert!(launch.program.is_file());
+        let helper = paths.installer_binary_path();
+        assert!(helper.is_file());
+        assert_eq!(
+            launch.environment.get("HARMONIA_INSTALLER_BINARY"),
+            Some(&helper.display().to_string())
+        );
         assert_eq!(fs::read(&legacy_file).unwrap(), b"preserve");
 
         let journal_path = paths.bootstrap_operation_path();
