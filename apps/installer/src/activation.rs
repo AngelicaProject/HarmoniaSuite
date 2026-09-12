@@ -281,6 +281,21 @@ impl ActivationEngine {
         checker: &H,
         lock: &InstallationLock,
     ) -> Result<RuntimePaths, ActivationError> {
+        self.activate_with_lock_for_operation(result_path, config, hooks, checker, lock, None)
+    }
+
+    /// Activate while a caller-owned operation identity is recorded in the low-level journal.
+    /// Updater recovery uses this correlation id to distinguish a completed activation from an
+    /// unrelated version that happened to become current before a crash.
+    pub fn activate_with_lock_for_operation<H: HealthChecker>(
+        &self,
+        result_path: impl AsRef<Path>,
+        config: &ActivationConfig,
+        hooks: &mut dyn ActivationHooks,
+        checker: &H,
+        lock: &InstallationLock,
+        external_operation_id: Option<&str>,
+    ) -> Result<RuntimePaths, ActivationError> {
         if lock.path() != self.paths.lock_path() {
             return Err(ActivationError::InvalidInput(
                 "caller lock does not belong to this installation".to_owned(),
@@ -305,6 +320,9 @@ impl ActivationEngine {
             Some(result.target_commit.clone()),
             Vec::new(),
         )?;
+        if let Some(operation_id) = external_operation_id {
+            transaction.set_external_operation_id(operation_id)?;
+        }
         transaction.set_pre_activation_state(installation.clone())?;
         transaction.set_workspace_path(workspace)?;
         transaction.set_database_path(database_path)?;
@@ -358,6 +376,62 @@ impl ActivationEngine {
                 Err(error)
             }
         }
+    }
+
+    /// Roll back the most recently completed activation while the caller-owned lock is held.
+    /// This is used when the immutable version passed backend health but its desktop handoff
+    /// failed. The transaction journal retains the exact pre-activation state and database
+    /// pre-state, so this path is the same rollback primitive used by crash recovery.
+    pub fn rollback_completed_with_lock<H: HealthChecker>(
+        &self,
+        config: &ActivationConfig,
+        checker: &H,
+        lock: &InstallationLock,
+    ) -> Result<Option<RuntimePaths>, ActivationError> {
+        if lock.path() != self.paths.lock_path() {
+            return Err(ActivationError::InvalidInput(
+                "caller lock does not belong to this installation".to_owned(),
+            ));
+        }
+        let store = StateStore::new(self.paths.clone());
+        let record = store.load_transaction()?.ok_or_else(|| {
+            ActivationError::ReviewRequired(
+                "completed activation transaction is missing".to_owned(),
+            )
+        })?;
+        if !record.activation_started || !record.current_switched {
+            return Err(ActivationError::InvalidInput(
+                "last transaction did not cross the activation boundary".to_owned(),
+            ));
+        }
+        if record.status == TransactionStatus::ReviewRequired {
+            return Err(ActivationError::ReviewRequired(
+                record
+                    .failure
+                    .unwrap_or_else(|| "transaction requires review".to_owned()),
+            ));
+        }
+        let mut transaction = Transaction::resume_existing(store, record);
+        let mut rollback_config = config.clone();
+        if let Some(workspace) = transaction.record().workspace_path.clone() {
+            rollback_config.workspace =
+                validate_activation_path_value(&self.paths.user_data_root, &workspace)?;
+        }
+        if let Some(database_path) = transaction.record().database_path.clone() {
+            rollback_config.database_path =
+                validate_activation_path_value(&self.paths.user_data_root, &database_path)?;
+        }
+        if !transaction.record().rollback_completed {
+            if let Err(error) =
+                self.rollback_transaction(&mut transaction, &rollback_config, checker)
+            {
+                let reason = error.to_string();
+                let _ = transaction.mark_review_required(reason.clone());
+                return Err(ActivationError::ReviewRequired(reason));
+            }
+        }
+        transaction.fail("explicit post-activation rollback completed")?;
+        self.resolve_current()
     }
 
     fn activate_transaction<H: HealthChecker>(

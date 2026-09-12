@@ -132,6 +132,16 @@ pub trait ProcessRunner {
     }
 }
 
+impl<T: ProcessRunner + ?Sized> ProcessRunner for &T {
+    fn run(&self, command: &CommandSpec) -> Result<ProcessOutput, ProcessError> {
+        (**self).run(command)
+    }
+
+    fn spawn(&self, command: &CommandSpec) -> Result<ManagedProcess, ProcessError> {
+        (**self).spawn(command)
+    }
+}
+
 pub struct ManagedProcess {
     child: Child,
     containment: ProcessContainment,

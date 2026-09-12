@@ -16,6 +16,7 @@ path = "src/bin/harmonia-setup.rs"
 
 [dependencies]
 fs2 = "0.4"
+ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
 flate2 = "1"
 git2 = { version = "0.20", default-features = false, features = [
     "https",
@@ -26,6 +27,7 @@ libc = "0.2"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+semver = "1"
 sha2 = "0.10"
 tar = "0.4"
 thiserror = "2"

@@ -170,6 +170,22 @@ impl InstallationPaths {
         self.app_root.join("bin")
     }
 
+    pub fn installer_binary_path(&self) -> PathBuf {
+        self.bin_dir().join(if self.platform == Platform::Windows {
+            "HarmoniaSetup.exe"
+        } else {
+            "harmonia-setup"
+        })
+    }
+
+    pub fn installer_binary_metadata_path(&self) -> PathBuf {
+        self.bin_dir().join(if self.platform == Platform::Windows {
+            "HarmoniaSetup.exe.json"
+        } else {
+            "harmonia-setup.json"
+        })
+    }
+
     pub fn versions_dir(&self) -> PathBuf {
         self.app_root.join("versions")
     }
@@ -217,6 +233,36 @@ impl InstallationPaths {
     pub fn bootstrap_ack_path(&self, operation_id: &str, nonce: &str) -> PathBuf {
         self.bootstrap_ack_dir()
             .join(format!("{operation_id}-{nonce}.json"))
+    }
+
+    pub fn desktop_session_path(&self) -> PathBuf {
+        self.state_root.join("desktop-session.json")
+    }
+
+    pub fn desktop_shutdown_request_path(&self) -> PathBuf {
+        self.state_root.join("desktop-shutdown-request.json")
+    }
+
+    pub fn desktop_shutdown_ack_path(&self) -> PathBuf {
+        self.state_root.join("desktop-shutdown-ack.json")
+    }
+
+    pub fn update_operation_path(&self) -> PathBuf {
+        self.state_root.join("update-operation.json")
+    }
+
+    pub fn update_acceptance_path(&self) -> PathBuf {
+        self.state_root.join("update-accepted.json")
+    }
+
+    pub fn update_manifest_cache_path(&self) -> PathBuf {
+        self.cache_root.join("manifests").join("rolling-main.json")
+    }
+
+    pub fn update_manifest_signature_cache_path(&self) -> PathBuf {
+        self.cache_root
+            .join("manifests")
+            .join("rolling-main.json.sig")
     }
 
     pub fn toolchain_state_path(&self) -> PathBuf {
