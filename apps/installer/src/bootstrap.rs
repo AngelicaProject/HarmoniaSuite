@@ -401,6 +401,8 @@ impl<D: DownloadClient, P: ProcessRunner, L: DetachedLauncher> BootstrapInstalle
             let journal = previous_journal.unwrap_or_else(|| {
                 new_bootstrap_journal(&options, Uuid::new_v4().simple().to_string())
             });
+            let operation_id = journal.operation_id.clone();
+            let started_at_ms = journal.started_at_ms;
             let status = if matches!(&error, ActivationError::ReviewRequired(_)) {
                 BootstrapStatus::ReviewRequired {
                     reason: error.to_string(),
