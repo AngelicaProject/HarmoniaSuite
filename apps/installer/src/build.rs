@@ -29,6 +29,8 @@ pub struct BuildConfig {
     pub product_version: String,
     pub jdk: ToolchainDescriptor,
     pub node: ToolchainDescriptor,
+    /// When present, the build is bound to this exact object. No moving ref is read again.
+    pub target_commit: Option<String>,
 }
 
 impl BuildConfig {
@@ -43,7 +45,13 @@ impl BuildConfig {
             product_version: product_version.into(),
             jdk,
             node,
+            target_commit: None,
         }
+    }
+
+    pub fn with_target_commit(mut self, target_commit: impl Into<String>) -> Self {
+        self.target_commit = Some(target_commit.into());
+        self
     }
 }
 
@@ -247,7 +255,10 @@ impl<D: DownloadClient, P: ProcessRunner> BuildPipeline<D, P> {
     ) -> Result<BuildResult, BuildError> {
         let result = (|| -> Result<BuildResult, BuildError> {
             transaction.transition(TransactionPhase::ResolvingTarget)?;
-            let target = git.fetch_origin_main()?.sha;
+            let target = match config.target_commit.as_deref() {
+                Some(target) => git.fetch_exact_commit(target)?.sha,
+                None => git.fetch_origin_main()?.sha,
+            };
             transaction.set_target_commit(target.clone())?;
             self.log_phase(
                 &target,
@@ -643,6 +654,13 @@ fn validate_config(config: &BuildConfig) -> Result<(), BuildError> {
         return Err(BuildError::InvalidConfig(
             "product_version must not be empty".to_owned(),
         ));
+    }
+    if let Some(target) = &config.target_commit {
+        if target.len() != 40 || !target.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err(BuildError::InvalidConfig(
+                "target_commit must be a full 40-character commit SHA".to_owned(),
+            ));
+        }
     }
     Ok(())
 }

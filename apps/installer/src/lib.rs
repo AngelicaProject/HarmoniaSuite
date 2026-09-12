@@ -9,10 +9,12 @@ pub mod download;
 pub mod extract;
 pub mod git;
 pub mod lock;
+pub mod manifest;
 pub mod paths;
 pub mod process;
 pub mod state;
 pub mod toolchain;
+pub mod updater;
 
 pub use activation::{
     ActivationConfig, ActivationEngine, ActivationError, ActivationHooks, HealthChecker,
@@ -37,6 +39,10 @@ pub use download::{
 pub use extract::ExtractionError;
 pub use git::{GitError, ManagedCheckout, ManagedGitRepository, ResolvedCommit};
 pub use lock::{InstallationLock, LockError};
+pub use manifest::{
+    HttpManifestFetcher, ManifestError, ManifestFetcher, ManifestSignature, ManifestVerifier,
+    RollingManifest, SignedManifest,
+};
 pub use paths::{InstallationPaths, PathEnvironment, PathError, Platform, TargetArchitecture};
 pub use process::{
     CommandSpec, ManagedProcess, ProcessError, ProcessOutput, ProcessRunner, SystemProcessRunner,
@@ -50,3 +56,4 @@ pub use toolchain::{
     ResolvedToolchain, ToolchainDescriptor, ToolchainError, ToolchainKind, ToolchainManager,
     ToolchainRecord, ToolchainState, ToolchainStateStore,
 };
+pub use updater::{UpdateEngine, UpdateError, UpdateResult, UpdateStatus};

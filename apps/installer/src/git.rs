@@ -113,6 +113,23 @@ impl ManagedGitRepository {
         resolve_main(&repository)
     }
 
+    /// Fetch one already-selected object without consulting the moving main ref.  The caller
+    /// must have obtained the SHA from a trusted source (for example a verified manifest).
+    pub fn fetch_exact_commit(&self, target_sha: &str) -> Result<ResolvedCommit, GitError> {
+        validate_commit_sha(target_sha)?;
+        let repository = self.open_or_initialize_source()?;
+        ensure_origin(&repository, &self.remote_url)?;
+        let mut remote = repository.find_remote("origin")?;
+        let mut fetch_options = FetchOptions::new();
+        remote.fetch(&[target_sha], Some(&mut fetch_options), None)?;
+        let target = Oid::from_str(target_sha)
+            .map_err(|_| GitError::InvalidCommit(target_sha.to_owned()))?;
+        repository.find_commit(target)?;
+        Ok(ResolvedCommit {
+            sha: target_sha.to_owned(),
+        })
+    }
+
     pub fn resolve_main(&self) -> Result<ResolvedCommit, GitError> {
         let repository = Repository::open_bare(&self.source_dir)?;
         resolve_main(&repository)
@@ -461,6 +478,24 @@ mod tests {
         let second = commit_in_remote(&remote, b"second");
         assert_eq!(source.fetch_origin_main().unwrap().sha, second);
         assert_ne!(first, second);
+    }
+
+    #[test]
+    fn exact_fetch_does_not_re_resolve_moving_main() {
+        let root = tempdir().unwrap();
+        let remote_path = root.path().join("remote.git");
+        let remote = Repository::init_bare(&remote_path).unwrap();
+        let first = commit_in_remote(&remote, b"first");
+        let source = ManagedGitRepository::new_for_test(
+            root.path().join("app/source"),
+            Url::from_file_path(&remote_path).unwrap().to_string(),
+        )
+        .unwrap();
+        source.fetch_origin_main().unwrap();
+        let second = commit_in_remote(&remote, b"second");
+        assert_eq!(source.fetch_exact_commit(&first).unwrap().sha, first);
+        assert_eq!(source.resolve_main().unwrap().sha, second);
+        source.verify_commit(&first).unwrap();
     }
 
     #[test]

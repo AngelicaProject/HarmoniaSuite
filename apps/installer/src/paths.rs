@@ -219,6 +219,20 @@ impl InstallationPaths {
             .join(format!("{operation_id}-{nonce}.json"))
     }
 
+    pub fn update_operation_path(&self) -> PathBuf {
+        self.state_root.join("update-operation.json")
+    }
+
+    pub fn update_manifest_cache_path(&self) -> PathBuf {
+        self.cache_root.join("manifests").join("rolling-main.json")
+    }
+
+    pub fn update_manifest_signature_cache_path(&self) -> PathBuf {
+        self.cache_root
+            .join("manifests")
+            .join("rolling-main.json.sig")
+    }
+
     pub fn toolchain_state_path(&self) -> PathBuf {
         self.state_root.join("toolchains.json")
     }

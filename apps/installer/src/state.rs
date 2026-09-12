@@ -44,6 +44,8 @@ pub enum StateError {
     ActiveTransaction(String),
     #[error("transaction {0} requires explicit review before another operation")]
     ReviewRequiredTransaction(String),
+    #[error("updater journal is invalid: {0}")]
+    InvalidUpdaterJournal(String),
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -113,6 +115,12 @@ pub struct InstallationState {
     pub pending_commit: Option<String>,
     #[serde(default)]
     pub activation_at_ms: Option<u128>,
+    #[serde(default)]
+    pub accepted_manifest_generation: Option<u64>,
+    #[serde(default)]
+    pub accepted_manifest_sha256: Option<String>,
+    #[serde(default)]
+    pub accepted_manifest_key_id: Option<String>,
 }
 
 impl InstallationState {
@@ -131,6 +139,9 @@ impl InstallationState {
             staged_commit: None,
             pending_commit: None,
             activation_at_ms: None,
+            accepted_manifest_generation: None,
+            accepted_manifest_sha256: None,
+            accepted_manifest_key_id: None,
         }
     }
 }
@@ -273,6 +284,36 @@ impl StateStore {
                 if let Some(pre_activation) = transaction.pre_activation_state {
                     protected.extend(pre_activation.current_toolchains.values().cloned());
                     protected.extend(pre_activation.previous_toolchains.values().cloned());
+                }
+            }
+        }
+        // The high-level updater journal exists before the Phase 4 transaction is created and
+        // remains durable through ReviewRequired. Keep its manifest-selected toolchains pinned
+        // during that small hand-off window as well.
+        let update_path = self.paths.update_operation_path();
+        if update_path.is_file() {
+            let document = serde_json::from_slice::<serde_json::Value>(&fs::read(update_path)?)
+                .map_err(|error| StateError::InvalidUpdaterJournal(error.to_string()))?;
+            let status = document.get("status").and_then(serde_json::Value::as_str);
+            if matches!(status, Some("Running") | Some("ReviewRequired")) {
+                let Some(toolchains) = document
+                    .get("toolchains")
+                    .and_then(serde_json::Value::as_object)
+                else {
+                    return Err(StateError::InvalidUpdaterJournal(
+                        "running updater journal has no toolchains object".to_owned(),
+                    ));
+                };
+                protected.extend(
+                    toolchains
+                        .values()
+                        .filter_map(serde_json::Value::as_str)
+                        .map(str::to_owned),
+                );
+                if toolchains.values().any(|value| !value.is_string()) {
+                    return Err(StateError::InvalidUpdaterJournal(
+                        "updater journal contains a non-string toolchain ID".to_owned(),
+                    ));
                 }
             }
         }
@@ -820,6 +861,29 @@ pub(crate) fn atomic_write_json<T: Serialize>(path: &Path, value: &T) -> Result<
             .open(&temporary)?;
         file.write_all(&encoded)?;
         file.write_all(b"\n")?;
+        file.sync_all()?;
+    }
+    replace_file(&temporary, path)?;
+    sync_parent(parent);
+    Ok(())
+}
+
+pub(crate) fn atomic_write_bytes(path: &Path, encoded: &[u8]) -> Result<(), StateError> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "state path has no parent"))?;
+    fs::create_dir_all(parent)?;
+    let temporary = parent.join(format!(
+        ".{}.{}.tmp",
+        path.file_name().unwrap().to_string_lossy(),
+        Uuid::new_v4()
+    ));
+    {
+        let mut file = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&temporary)?;
+        file.write_all(encoded)?;
         file.sync_all()?;
     }
     replace_file(&temporary, path)?;

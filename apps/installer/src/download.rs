@@ -94,6 +94,12 @@ pub trait DownloadClient {
     fn download(&self, request: &DownloadRequest) -> Result<DownloadReceipt, DownloadError>;
 }
 
+impl<T: DownloadClient + ?Sized> DownloadClient for &T {
+    fn download(&self, request: &DownloadRequest) -> Result<DownloadReceipt, DownloadError> {
+        (**self).download(request)
+    }
+}
+
 pub struct ResumableDownloader<T> {
     transport: T,
     retry_delay: Duration,
