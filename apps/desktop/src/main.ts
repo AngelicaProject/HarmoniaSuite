@@ -19,6 +19,7 @@ import {
 } from "./launch-ack.js";
 import { userDataRoot } from "./paths.js";
 import { registerHarmoniaProtocol } from "./protocol.js";
+import { registerUpdaterIpc } from "./updater-ipc.js";
 import type { ActiveGateway } from "./types.js";
 
 protocol.registerSchemesAsPrivileged([
@@ -36,6 +37,7 @@ if (!hasLock) {
   app.quit();
 } else {
   app.setPath("userData", userDataRoot());
+  registerUpdaterIpc();
 
   let window: BrowserWindow | undefined;
   let localGateway: LocalGateway | undefined;
@@ -128,6 +130,7 @@ if (!hasLock) {
         contextIsolation: true,
         sandbox: true,
         webviewTag: false,
+        preload: resolve(__dirname, "preload.js"),
       },
     });
     created.webContents.setWindowOpenHandler(({ url }) => {

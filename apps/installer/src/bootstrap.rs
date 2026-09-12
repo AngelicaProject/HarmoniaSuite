@@ -263,10 +263,12 @@ fn wait_for_launch_ack(
     }
 }
 
-fn desktop_launch_spec(
+pub fn runtime_launch_spec(
     paths: &InstallationPaths,
     runtime: &crate::activation::RuntimePaths,
-    journal: &BootstrapJournal,
+    operation_id: &str,
+    ack_path: &Path,
+    nonce: &str,
 ) -> DetachedLaunchSpec {
     let mut spec = DetachedLaunchSpec::new(runtime.desktop_executable.clone())
         .current_dir(runtime.version_dir.clone())
@@ -295,17 +297,71 @@ fn desktop_launch_spec(
             "HARMONIA_INSTALL_STATE_ROOT",
             paths.state_root.display().to_string(),
         );
-    if let (Some(ack_path), Some(nonce)) = (&journal.launch_ack_path, &journal.launch_nonce) {
-        spec = spec
-            .env("HARMONIA_LAUNCH_ACK", ack_path.display().to_string())
-            .env("HARMONIA_LAUNCH_OPERATION_ID", journal.operation_id.clone())
-            .env(
-                "HARMONIA_LAUNCH_COMMIT",
-                runtime.metadata.target_commit.clone(),
-            )
-            .env("HARMONIA_LAUNCH_NONCE", nonce.clone());
+    let installer_name = if paths.platform.as_str() == "windows" {
+        "HarmoniaSetup.exe"
+    } else {
+        "harmonia-setup"
+    };
+    spec = spec.env(
+        "HARMONIA_INSTALLER_BINARY",
+        paths.bin_dir().join(installer_name).display().to_string(),
+    );
+    spec.env("HARMONIA_LAUNCH_ACK", ack_path.display().to_string())
+        .env("HARMONIA_LAUNCH_OPERATION_ID", operation_id.to_owned())
+        .env(
+            "HARMONIA_LAUNCH_COMMIT",
+            runtime.metadata.target_commit.clone(),
+        )
+        .env("HARMONIA_LAUNCH_NONCE", nonce.to_owned())
+}
+
+fn desktop_launch_spec(
+    paths: &InstallationPaths,
+    runtime: &crate::activation::RuntimePaths,
+    journal: &BootstrapJournal,
+) -> DetachedLaunchSpec {
+    let ack_path = journal
+        .launch_ack_path
+        .as_ref()
+        .expect("bootstrap launch ack path initialized");
+    let nonce = journal
+        .launch_nonce
+        .as_ref()
+        .expect("bootstrap launch nonce initialized");
+    runtime_launch_spec(paths, runtime, &journal.operation_id, ack_path, nonce)
+}
+
+pub fn wait_for_runtime_launch_ack(
+    paths: &InstallationPaths,
+    ack_path: &Path,
+    operation_id: &str,
+    target_commit: &str,
+    nonce: &str,
+    timeout: Duration,
+) -> Result<(), BootstrapError> {
+    validate_managed_path(&paths.state_root, ack_path)?;
+    let deadline = Instant::now() + timeout;
+    loop {
+        if ack_path.is_file() {
+            if let Ok(bytes) = fs::read(ack_path) {
+                if let Ok(ack) = serde_json::from_slice::<LaunchAcknowledgement>(&bytes) {
+                    if ack.schema_version == LAUNCH_ACK_SCHEMA_VERSION
+                        && ack.operation_id == operation_id
+                        && ack.target_commit == target_commit
+                        && ack.nonce == nonce
+                    {
+                        return Ok(());
+                    }
+                }
+            }
+        }
+        if Instant::now() >= deadline {
+            return Err(BootstrapError::LaunchHandshakeTimeout(
+                ack_path.to_path_buf(),
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(100));
     }
-    spec
 }
 
 fn reconcile_running_activation<L: DetachedLauncher>(
