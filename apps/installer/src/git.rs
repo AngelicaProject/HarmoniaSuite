@@ -125,6 +125,15 @@ impl ManagedGitRepository {
         let target = Oid::from_str(target_sha)
             .map_err(|_| GitError::InvalidCommit(target_sha.to_owned()))?;
         repository.find_commit(target)?;
+        // `prepare_checkout` uses this local ref as the bare mirror's checkout HEAD. For an
+        // exact manifest target it is a local immutable selection, not a second read of the
+        // moving remote main ref.
+        repository.reference(
+            ORIGIN_MAIN_REF,
+            target,
+            true,
+            "exact target selected by updater",
+        )?;
         Ok(ResolvedCommit {
             sha: target_sha.to_owned(),
         })

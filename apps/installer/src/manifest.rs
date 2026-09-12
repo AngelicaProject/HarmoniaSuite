@@ -47,6 +47,7 @@ pub struct RollingManifest {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ManifestSignature {
     pub schema_version: u32,
     #[serde(rename = "keyId")]
@@ -469,6 +470,75 @@ mod tests {
         value.min_installer_version = Some("0.1.0".to_owned());
         let document = serde_json::to_value(value).unwrap();
         assert_eq!(document["channel"], "rolling");
+    }
+
+    #[test]
+    fn verifies_signature_written_by_release_node_signer() {
+        use std::fs;
+        use std::path::PathBuf;
+        use std::process::Command;
+        use tempfile::tempdir;
+
+        let root = tempdir().unwrap();
+        let manifest_path = root.path().join("manifest.json");
+        let signature_path = root.path().join("manifest.json.sig");
+        let key_path = root.path().join("fixture-ed25519-key.pem");
+        let manifest_bytes = serde_json::to_vec(&manifest()).unwrap();
+        fs::write(&manifest_path, &manifest_bytes).unwrap();
+        fs::write(
+            &key_path,
+            "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIPTbj1QOnOfs/NEu9Bbd/aQxEBWtyXdzibqMIxJmyY7j\n-----END PRIVATE KEY-----\n",
+        )
+        .unwrap();
+
+        let signer =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tools/release/sign-manifest.mjs");
+        let output = Command::new("node")
+            .current_dir(env!("CARGO_MANIFEST_DIR"))
+            .env("HARMONIA_MANIFEST_SIGNING_KEY_FILE", &key_path)
+            .arg(&signer)
+            .arg(&manifest_path)
+            .arg(&signature_path)
+            .arg("cross-language")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "release signer failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let envelope = fs::read(&signature_path).unwrap();
+        let document: serde_json::Value = serde_json::from_slice(&envelope).unwrap();
+        assert_eq!(document["schemaVersion"], 1);
+        assert_eq!(document["keyId"], "cross-language");
+        assert!(document.get("schema_version").is_none());
+
+        let verifier = ManifestVerifier::with_keys(BTreeMap::from([(
+            "cross-language".to_owned(),
+            decode_hex_32("69b02488d9b687a23cb0918614519c97f1618f5d8c005437e82de9b997835192")
+                .unwrap(),
+        )]));
+        verifier
+            .verify(
+                &manifest_bytes,
+                &envelope,
+                Platform::Linux,
+                &TargetArchitecture::X64,
+            )
+            .unwrap();
+
+        let mut tampered = manifest_bytes;
+        tampered[0] = b'[';
+        assert!(matches!(
+            verifier.verify(
+                &tampered,
+                &envelope,
+                Platform::Linux,
+                &TargetArchitecture::X64
+            ),
+            Err(ManifestError::SignatureVerification)
+        ));
     }
 
     #[test]

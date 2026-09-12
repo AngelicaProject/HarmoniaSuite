@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { existsSync, rmSync, readFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 
-import { app, ipcMain } from "electron";
+import { ipcMain } from "electron";
 
 export type UpdateStatus =
   | { state: "idle" }
@@ -32,8 +32,9 @@ export function registerUpdaterIpc(): void {
       const installer = installerBinary();
       const acceptancePath = updateAcceptancePath();
       rmSync(acceptancePath, { force: true });
-      // The updater is an independent process. It owns the build/activation lock and the desktop
-      // exits only after the helper has acknowledged startup.
+      // The updater is an independent process. Acceptance confirms only that it owns the
+      // operation; the desktop remains alive until the updater reaches activation and requests
+      // an orderly shutdown through DesktopShutdownHooks.
       const child = spawn(installer, ["update"], {
         detached: true,
         shell: false,
@@ -47,7 +48,6 @@ export function registerUpdaterIpc(): void {
       await waitForUpdaterAcceptance(child, acceptancePath);
       child.unref();
       status = { state: "installing" };
-      app.quit();
       return { accepted: true };
     } catch (error) {
       status = { state: "error", error: error instanceof Error ? error.message : String(error) };
