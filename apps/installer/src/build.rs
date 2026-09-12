@@ -585,7 +585,7 @@ fn command_failed(
     }
 }
 
-fn hash_directory(path: &Path) -> Result<String, BuildError> {
+pub(crate) fn hash_directory(path: &Path) -> Result<String, BuildError> {
     if !path.is_dir() {
         return Err(BuildError::InvalidOutput(path.to_path_buf()));
     }

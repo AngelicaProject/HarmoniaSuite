@@ -42,6 +42,8 @@ pub enum StateError {
     },
     #[error("transaction {0} is still running")]
     ActiveTransaction(String),
+    #[error("transaction {0} requires explicit review before another operation")]
+    ReviewRequiredTransaction(String),
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -82,6 +84,13 @@ pub enum TransactionStatus {
     Running,
     Completed,
     Failed,
+    ReviewRequired,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum DatabasePreState {
+    Absent,
+    Snapshot(PathBuf),
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -98,6 +107,12 @@ pub struct InstallationState {
     pub current_toolchains: BTreeMap<String, String>,
     #[serde(default)]
     pub previous_toolchains: BTreeMap<String, String>,
+    #[serde(default)]
+    pub staged_commit: Option<String>,
+    #[serde(default)]
+    pub pending_commit: Option<String>,
+    #[serde(default)]
+    pub activation_at_ms: Option<u128>,
 }
 
 impl InstallationState {
@@ -113,6 +128,9 @@ impl InstallationState {
             components: BTreeMap::new(),
             current_toolchains: BTreeMap::new(),
             previous_toolchains: BTreeMap::new(),
+            staged_commit: None,
+            pending_commit: None,
+            activation_at_ms: None,
         }
     }
 }
@@ -133,6 +151,28 @@ pub struct TransactionRecord {
     pub failure: Option<String>,
     #[serde(default)]
     pub toolchain_refs: BTreeMap<String, String>,
+    #[serde(default)]
+    pub published_version: Option<String>,
+    #[serde(default)]
+    pub current_switched: bool,
+    #[serde(default)]
+    pub new_process_started: bool,
+    #[serde(default)]
+    pub health_check_passed: bool,
+    #[serde(default)]
+    pub db_backup_path: Option<PathBuf>,
+    #[serde(default)]
+    pub db_backup_required: bool,
+    #[serde(default)]
+    pub rollback_completed: bool,
+    #[serde(default)]
+    pub database_path: Option<PathBuf>,
+    #[serde(default)]
+    pub workspace_path: Option<PathBuf>,
+    #[serde(default)]
+    pub database_pre_state: Option<DatabasePreState>,
+    #[serde(default)]
+    pub pre_activation_state: Option<InstallationState>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -225,8 +265,15 @@ impl StateStore {
             .cloned()
             .collect::<BTreeSet<_>>();
         if let Some(transaction) = self.load_transaction()? {
-            if transaction.status == TransactionStatus::Running {
+            if matches!(
+                transaction.status,
+                TransactionStatus::Running | TransactionStatus::ReviewRequired
+            ) {
                 protected.extend(transaction.toolchain_refs.values().cloned());
+                if let Some(pre_activation) = transaction.pre_activation_state {
+                    protected.extend(pre_activation.current_toolchains.values().cloned());
+                    protected.extend(pre_activation.previous_toolchains.values().cloned());
+                }
             }
         }
         Ok(protected)
@@ -236,6 +283,12 @@ impl StateStore {
         let Some(transaction) = self.load_transaction()? else {
             return Ok(RecoveryAction::None);
         };
+        if transaction.status == TransactionStatus::ReviewRequired {
+            return Ok(RecoveryAction::ReviewRequired {
+                transaction_id: transaction.id,
+                phase: transaction.phase,
+            });
+        }
         if transaction.status != TransactionStatus::Running
             || matches!(
                 transaction.phase,
@@ -273,6 +326,9 @@ impl StateStore {
         let Some(mut transaction) = self.load_transaction()? else {
             return Ok(());
         };
+        if transaction.status == TransactionStatus::ReviewRequired {
+            return Err(StateError::ReviewRequiredTransaction(transaction.id));
+        }
         if transaction.status != TransactionStatus::Running
             || transaction.phase == TransactionPhase::Completed
             || transaction.phase == TransactionPhase::Failed
@@ -350,6 +406,27 @@ impl StateStore {
         Ok(())
     }
 
+    /// Explicit operator action to clear a durable review block after the caller has
+    /// repaired or otherwise verified the installation. Normal recovery never calls this.
+    pub fn resolve_review(&self, transaction_id: &str) -> Result<(), StateError> {
+        let Some(mut transaction) = self.load_transaction()? else {
+            return Err(StateError::ReviewRequiredTransaction(
+                transaction_id.to_owned(),
+            ));
+        };
+        if transaction.id != transaction_id
+            || transaction.status != TransactionStatus::ReviewRequired
+        {
+            return Err(StateError::ReviewRequiredTransaction(
+                transaction_id.to_owned(),
+            ));
+        }
+        transaction.status = TransactionStatus::Failed;
+        transaction.phase = TransactionPhase::Failed;
+        transaction.finished_at_ms = Some(now_ms());
+        self.write_transaction(&transaction)
+    }
+
     fn write_transaction(&self, transaction: &TransactionRecord) -> Result<(), StateError> {
         self.initialize()?;
         atomic_write_json(&self.paths.transaction_path(), transaction)?;
@@ -395,8 +472,14 @@ impl Transaction {
         owned_paths: Vec<PathBuf>,
     ) -> Result<Self, StateError> {
         if let Some(existing) = store.load_transaction()? {
-            if existing.status == TransactionStatus::Running {
-                return Err(StateError::ActiveTransaction(existing.id));
+            match existing.status {
+                TransactionStatus::Running => {
+                    return Err(StateError::ActiveTransaction(existing.id));
+                }
+                TransactionStatus::ReviewRequired => {
+                    return Err(StateError::ReviewRequiredTransaction(existing.id));
+                }
+                _ => {}
             }
         }
         let record = TransactionRecord {
@@ -416,9 +499,24 @@ impl Transaction {
             activation_started: false,
             failure: None,
             toolchain_refs: BTreeMap::new(),
+            published_version: None,
+            current_switched: false,
+            new_process_started: false,
+            health_check_passed: false,
+            db_backup_path: None,
+            db_backup_required: false,
+            rollback_completed: false,
+            database_path: None,
+            workspace_path: None,
+            database_pre_state: None,
+            pre_activation_state: None,
         };
         store.write_transaction(&record)?;
         Ok(Self { store, record })
+    }
+
+    pub(crate) fn resume_existing(store: StateStore, record: TransactionRecord) -> Self {
+        Self { store, record }
     }
 
     pub fn record(&self) -> &TransactionRecord {
@@ -453,6 +551,11 @@ impl Transaction {
         self.store.write_transaction(&self.record)
     }
 
+    pub fn set_pre_activation_state(&mut self, state: InstallationState) -> Result<(), StateError> {
+        self.record.pre_activation_state = Some(state);
+        self.store.write_transaction(&self.record)
+    }
+
     pub fn transition(&mut self, next: TransactionPhase) -> Result<(), StateError> {
         if !allowed_transition(&self.record.phase, &next) {
             return Err(StateError::InvalidTransition {
@@ -473,6 +576,77 @@ impl Transaction {
 
     pub fn mark_activation_started(&mut self) -> Result<(), StateError> {
         self.record.activation_started = true;
+        self.store.write_transaction(&self.record)
+    }
+
+    pub fn set_published_version(&mut self, version: impl Into<String>) -> Result<(), StateError> {
+        self.record.published_version = Some(version.into());
+        self.store.write_transaction(&self.record)
+    }
+
+    pub fn mark_current_switched(&mut self) -> Result<(), StateError> {
+        self.record.current_switched = true;
+        self.store.write_transaction(&self.record)
+    }
+
+    pub fn mark_process_started(&mut self) -> Result<(), StateError> {
+        self.record.new_process_started = true;
+        self.store.write_transaction(&self.record)
+    }
+
+    pub fn mark_health_check_passed(&mut self) -> Result<(), StateError> {
+        self.record.health_check_passed = true;
+        self.store.write_transaction(&self.record)
+    }
+
+    pub fn set_db_backup_path(&mut self, path: impl Into<PathBuf>) -> Result<(), StateError> {
+        self.record.db_backup_path = Some(path.into());
+        self.store.write_transaction(&self.record)
+    }
+
+    pub fn mark_db_backup_required(&mut self) -> Result<(), StateError> {
+        self.record.db_backup_required = true;
+        self.store.write_transaction(&self.record)
+    }
+
+    pub fn mark_rollback_completed(&mut self) -> Result<(), StateError> {
+        self.record.rollback_completed = true;
+        self.store.write_transaction(&self.record)
+    }
+
+    pub fn set_database_path(&mut self, path: impl Into<PathBuf>) -> Result<(), StateError> {
+        self.record.database_path = Some(path.into());
+        self.store.write_transaction(&self.record)
+    }
+
+    pub fn set_workspace_path(&mut self, path: impl Into<PathBuf>) -> Result<(), StateError> {
+        self.record.workspace_path = Some(path.into());
+        self.store.write_transaction(&self.record)
+    }
+
+    pub fn set_database_pre_state(&mut self, state: DatabasePreState) -> Result<(), StateError> {
+        self.record.database_pre_state = Some(state);
+        self.store.write_transaction(&self.record)
+    }
+
+    pub fn mark_review_required(&mut self, reason: impl Into<String>) -> Result<(), StateError> {
+        self.record.status = TransactionStatus::ReviewRequired;
+        self.record.failure = Some(reason.into());
+        self.record.finished_at_ms = Some(now_ms());
+        self.store.write_transaction(&self.record)
+    }
+
+    /// Clear a durable review block only after an explicit operator repair/recovery action.
+    pub fn resolve_review(&mut self) -> Result<(), StateError> {
+        if self.record.status != TransactionStatus::ReviewRequired {
+            return Err(StateError::InvalidTransition {
+                from: self.record.phase.clone(),
+                to: TransactionPhase::Failed,
+            });
+        }
+        self.record.status = TransactionStatus::Failed;
+        self.record.phase = TransactionPhase::Failed;
+        self.record.finished_at_ms = Some(now_ms());
         self.store.write_transaction(&self.record)
     }
 
@@ -553,6 +727,20 @@ fn normalize(path: &Path) -> Result<PathBuf, StateError> {
     Ok(std::env::current_dir()?.join(path))
 }
 
+/// Validate a path that the installer may create, read, replace, or remove.
+///
+/// This is deliberately shared by recovery and activation code. It rejects parent
+/// traversal, paths outside the declared root, and symlink/reparse ancestors all
+/// the way above that root.
+pub(crate) fn validate_managed_path(root: &Path, path: &Path) -> Result<PathBuf, StateError> {
+    let root = normalize(root)?;
+    let path = normalize(path)?;
+    if !path.starts_with(&root) || has_unsafe_ancestor(&root, &path)? {
+        return Err(StateError::UnsafeRecoveryPath(path));
+    }
+    Ok(path)
+}
+
 fn managed_root(paths: &InstallationPaths, candidate: &Path) -> Option<PathBuf> {
     [
         paths.app_root.clone(),
@@ -601,30 +789,17 @@ fn is_link_or_reparse(path: &Path) -> io::Result<bool> {
     if metadata.file_type().is_symlink() {
         return Ok(true);
     }
-    is_reparse_point(path)
-}
-
-#[cfg(not(windows))]
-fn is_reparse_point(_path: &Path) -> io::Result<bool> {
-    Ok(false)
-}
-
-#[cfg(windows)]
-fn is_reparse_point(path: &Path) -> io::Result<bool> {
-    use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::Storage::FileSystem::{
-        GetFileAttributesW, FILE_ATTRIBUTE_REPARSE_POINT, INVALID_FILE_ATTRIBUTES,
-    };
-    let wide: Vec<u16> = path
-        .as_os_str()
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect();
-    let attributes = unsafe { GetFileAttributesW(wide.as_ptr()) };
-    if attributes == INVALID_FILE_ATTRIBUTES {
-        return Err(io::Error::last_os_error());
+    #[cfg(not(windows))]
+    {
+        Ok(false)
     }
-    Ok(attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0)
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
+
+        Ok(metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0)
+    }
 }
 
 pub(crate) fn atomic_write_json<T: Serialize>(path: &Path, value: &T) -> Result<(), StateError> {
@@ -649,6 +824,60 @@ pub(crate) fn atomic_write_json<T: Serialize>(path: &Path, value: &T) -> Result<
     }
     replace_file(&temporary, path)?;
     sync_parent(parent);
+    Ok(())
+}
+
+pub(crate) fn durable_replace_file(temporary: &Path, destination: &Path) -> Result<(), StateError> {
+    replace_file(temporary, destination)?;
+    if let Some(parent) = destination.parent() {
+        sync_parent(parent);
+    }
+    Ok(())
+}
+
+/// Publish an immutable directory without replacing an existing destination.
+/// The caller must have validated both paths against its managed root.
+pub(crate) fn durable_promote_directory(
+    staging: &Path,
+    destination: &Path,
+) -> Result<(), StateError> {
+    if destination.exists() {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            format!(
+                "immutable directory already exists: {}",
+                destination.display()
+            ),
+        )
+        .into());
+    }
+    #[cfg(not(windows))]
+    {
+        fs::rename(staging, destination)?;
+        if let Some(parent) = destination.parent() {
+            File::open(parent)?.sync_all()?;
+        }
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::Storage::FileSystem::{MoveFileExW, MOVEFILE_WRITE_THROUGH};
+        let source: Vec<u16> = staging
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        let target: Vec<u16> = destination
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        let result =
+            unsafe { MoveFileExW(source.as_ptr(), target.as_ptr(), MOVEFILE_WRITE_THROUGH) };
+        if result == 0 {
+            return Err(io::Error::last_os_error().into());
+        }
+    }
     Ok(())
 }
 
@@ -809,6 +1038,99 @@ mod tests {
             TransactionStatus::Failed
         ));
         assert!(Transaction::begin(store, OperationKind::Update, None, None, Vec::new()).is_ok());
+    }
+
+    #[test]
+    fn review_required_transaction_protects_all_pinned_toolchains() {
+        let store = store();
+        let mut transaction = Transaction::begin(
+            store.clone(),
+            OperationKind::Update,
+            None,
+            Some("target".to_owned()),
+            Vec::new(),
+        )
+        .unwrap();
+        transaction.pin_toolchain("jdk", "jdk-target").unwrap();
+        transaction.pin_toolchain("node", "node-target").unwrap();
+        transaction
+            .mark_review_required("rollback needs operator review")
+            .unwrap();
+
+        let protected = store.protected_toolchain_ids().unwrap();
+        assert!(protected.contains("jdk-target"));
+        assert!(protected.contains("node-target"));
+        assert!(matches!(
+            Transaction::begin(store, OperationKind::Update, None, None, Vec::new()),
+            Err(StateError::ReviewRequiredTransaction(_))
+        ));
+    }
+
+    #[test]
+    fn review_required_transaction_protects_pre_activation_toolchains_after_switch() {
+        let store = store();
+        let mut pre_activation = InstallationState::for_paths(store.paths());
+        pre_activation.current_commit = Some("a".to_owned());
+        pre_activation.previous_commit = Some("p".to_owned());
+        pre_activation.current_toolchains = BTreeMap::from([
+            ("jdk".to_owned(), "jdk-a".to_owned()),
+            ("node".to_owned(), "node-a".to_owned()),
+        ]);
+        pre_activation.previous_toolchains = BTreeMap::from([
+            ("jdk".to_owned(), "jdk-p".to_owned()),
+            ("node".to_owned(), "node-p".to_owned()),
+        ]);
+
+        let mut after_switch = pre_activation.clone();
+        after_switch.current_commit = Some("b".to_owned());
+        after_switch.previous_commit = Some("a".to_owned());
+        after_switch.current_toolchains = BTreeMap::from([
+            ("jdk".to_owned(), "jdk-b".to_owned()),
+            ("node".to_owned(), "node-b".to_owned()),
+        ]);
+        store.save_installation(&after_switch).unwrap();
+
+        let mut transaction = Transaction::begin(
+            store.clone(),
+            OperationKind::Update,
+            Some("a".to_owned()),
+            Some("b".to_owned()),
+            Vec::new(),
+        )
+        .unwrap();
+        transaction
+            .set_pre_activation_state(pre_activation)
+            .unwrap();
+        transaction.pin_toolchain("jdk", "jdk-b").unwrap();
+        transaction.pin_toolchain("node", "node-b").unwrap();
+        transaction
+            .mark_review_required("database restore failed after pointer switch")
+            .unwrap();
+
+        let protected = store.protected_toolchain_ids().unwrap();
+        for id in ["jdk-p", "node-p", "jdk-a", "node-a", "jdk-b", "node-b"] {
+            assert!(protected.contains(id), "missing protected toolchain {id}");
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn durable_directory_promotion_does_not_replace_immutable_destination() {
+        let root = tempdir().unwrap();
+        let staging = root.path().join("staging");
+        let destination = root.path().join("versions/target");
+        fs::create_dir_all(&staging).unwrap();
+        fs::create_dir_all(destination.parent().unwrap()).unwrap();
+        fs::write(staging.join("payload"), b"payload").unwrap();
+        durable_promote_directory(&staging, &destination).unwrap();
+        assert_eq!(fs::read(destination.join("payload")).unwrap(), b"payload");
+
+        let second = root.path().join("second");
+        fs::create_dir_all(&second).unwrap();
+        assert!(matches!(
+            durable_promote_directory(&second, &destination),
+            Err(StateError::Io(error)) if error.kind() == io::ErrorKind::AlreadyExists
+        ));
     }
 
     #[test]

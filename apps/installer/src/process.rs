@@ -3,7 +3,7 @@ use std::env;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -120,10 +120,68 @@ pub enum ProcessError {
     Io(#[from] std::io::Error),
     #[error("process output reader failed")]
     Reader,
+    #[error("long-lived process spawning is not supported by this runner")]
+    Unsupported,
 }
 
 pub trait ProcessRunner {
     fn run(&self, command: &CommandSpec) -> Result<ProcessOutput, ProcessError>;
+
+    fn spawn(&self, _command: &CommandSpec) -> Result<ManagedProcess, ProcessError> {
+        Err(ProcessError::Unsupported)
+    }
+}
+
+pub struct ManagedProcess {
+    child: Child,
+    containment: ProcessContainment,
+    stdout: Arc<Mutex<Vec<u8>>>,
+    stderr: Arc<Mutex<Vec<u8>>>,
+    readers: Vec<thread::JoinHandle<Result<(), std::io::Error>>>,
+}
+
+impl ManagedProcess {
+    pub fn stdout_snapshot(&self) -> String {
+        self.stdout
+            .lock()
+            .map(|value| String::from_utf8_lossy(&value).into_owned())
+            .unwrap_or_default()
+    }
+
+    pub fn stderr_snapshot(&self) -> String {
+        self.stderr
+            .lock()
+            .map(|value| String::from_utf8_lossy(&value).into_owned())
+            .unwrap_or_default()
+    }
+
+    pub fn try_wait(&mut self) -> Result<Option<i32>, ProcessError> {
+        Ok(self
+            .child
+            .try_wait()?
+            .map(|status| status.code().unwrap_or(1)))
+    }
+
+    pub fn stop(&mut self) -> Result<(), ProcessError> {
+        if self.child.try_wait()?.is_none() {
+            self.containment.terminate(&mut self.child)?;
+        }
+        let _ = self.child.wait()?;
+        self.join_readers()
+    }
+
+    fn join_readers(&mut self) -> Result<(), ProcessError> {
+        for reader in self.readers.drain(..) {
+            reader.join().map_err(|_| ProcessError::Reader)??;
+        }
+        Ok(())
+    }
+}
+
+impl Drop for ManagedProcess {
+    fn drop(&mut self) {
+        let _ = self.stop();
+    }
 }
 
 #[derive(Clone, Default)]
@@ -166,6 +224,7 @@ impl ProcessRunner for SystemProcessRunner {
         }
         #[cfg(unix)]
         process.process_group(0);
+        configure_parent_death(&mut process);
         let mut containment = ProcessContainment::new().map_err(ProcessError::Io)?;
         let mut child = process.spawn().map_err(|source| ProcessError::Spawn {
             program: command.program.display().to_string(),
@@ -229,6 +288,86 @@ impl ProcessRunner for SystemProcessRunner {
         }
         Ok(result)
     }
+
+    fn spawn(&self, command: &CommandSpec) -> Result<ManagedProcess, ProcessError> {
+        if let Some(logger) = &self.logger {
+            let _ = logger.log(
+                "info",
+                "process.start",
+                [("command".to_owned(), json!(redacted_command(command)))],
+            );
+        }
+
+        let mut process = Command::new(&command.program);
+        process
+            .args(&command.args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        process.env_clear();
+        for name in &command.environment_allowlist {
+            if let Some(value) = env::var_os(name) {
+                process.env(name, value);
+            }
+        }
+        process.envs(&command.environment);
+        if let Some(current_dir) = &command.current_dir {
+            process.current_dir(current_dir);
+        }
+        #[cfg(unix)]
+        process.process_group(0);
+        configure_parent_death(&mut process);
+
+        let mut containment = ProcessContainment::new().map_err(ProcessError::Io)?;
+        let mut child = process.spawn().map_err(|source| ProcessError::Spawn {
+            program: command.program.display().to_string(),
+            source,
+        })?;
+        containment.attach(&child).map_err(|error| {
+            let _ = child.kill();
+            let _ = child.wait();
+            ProcessError::Io(error)
+        })?;
+        let stdout = child.stdout.take().ok_or(ProcessError::Reader)?;
+        let stderr = child.stderr.take().ok_or(ProcessError::Reader)?;
+        let stdout_buffer = Arc::new(Mutex::new(Vec::new()));
+        let stderr_buffer = Arc::new(Mutex::new(Vec::new()));
+        let readers = vec![
+            spawn_buffer_reader(stdout, stdout_buffer.clone()),
+            spawn_buffer_reader(stderr, stderr_buffer.clone()),
+        ];
+        Ok(ManagedProcess {
+            child,
+            containment,
+            stdout: stdout_buffer,
+            stderr: stderr_buffer,
+            readers,
+        })
+    }
+}
+
+fn spawn_buffer_reader<R: Read + Send + 'static>(
+    mut reader: R,
+    target: Arc<Mutex<Vec<u8>>>,
+) -> thread::JoinHandle<Result<(), std::io::Error>> {
+    thread::spawn(move || {
+        let mut buffer = [0_u8; 8192];
+        loop {
+            let read = reader.read(&mut buffer)?;
+            if read == 0 {
+                break;
+            }
+            let mut output = target
+                .lock()
+                .map_err(|_| std::io::Error::other("process output buffer poisoned"))?;
+            output.extend_from_slice(&buffer[..read]);
+            if output.len() > MAX_CAPTURE_BYTES {
+                let overflow = output.len() - MAX_CAPTURE_BYTES;
+                output.drain(..overflow);
+            }
+        }
+        Ok(())
+    })
 }
 
 fn read_output<R: Read>(mut reader: R) -> Result<Vec<u8>, std::io::Error> {
@@ -272,6 +411,35 @@ fn default_environment_allowlist() -> Vec<String> {
     let names = ["PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "LC_CTYPE"];
     names.into_iter().map(str::to_owned).collect()
 }
+
+#[cfg(target_os = "linux")]
+fn configure_parent_death(process: &mut Command) {
+    let owner_pid = std::process::id() as libc::pid_t;
+    unsafe {
+        process.pre_exec(move || {
+            if libc::getppid() != owner_pid {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Interrupted,
+                    "process owner exited before child setup",
+                ));
+            }
+            if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            if libc::getppid() != owner_pid {
+                libc::kill(libc::getpid(), libc::SIGKILL);
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Interrupted,
+                    "process owner exited during child setup",
+                ));
+            }
+            Ok(())
+        });
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn configure_parent_death(_process: &mut Command) {}
 
 struct ProcessContainment {
     #[cfg(unix)]
@@ -518,5 +686,42 @@ mod tests {
         let result = SystemProcessRunner::default().run(&command).unwrap();
         assert!(result.success());
         assert_eq!(result.stdout.len(), MAX_CAPTURE_BYTES);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn parent_death_kills_owned_health_child() {
+        if env::var_os("HARMONIA_PARENT_DEATH_HELPER").is_some() {
+            let command = CommandSpec::new("sh")
+                .args(["-c", "sleep 60"])
+                .timeout(None);
+            let process = SystemProcessRunner::default().spawn(&command).unwrap();
+            println!("{}", process.child.id());
+            std::mem::forget(process);
+            return;
+        }
+
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "process::tests::parent_death_kills_owned_health_child",
+                "--nocapture",
+            ])
+            .env("HARMONIA_PARENT_DEATH_HELPER", "1")
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "helper failed: {output:?}");
+        let child_pid = String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .find_map(|line| line.trim().parse::<libc::pid_t>().ok())
+            .expect("helper did not report child PID");
+        for _ in 0..20 {
+            let alive = unsafe { libc::kill(child_pid, 0) } == 0;
+            if !alive {
+                return;
+            }
+            thread::sleep(Duration::from_millis(25));
+        }
+        panic!("owned child {child_pid} survived owner process");
     }
 }

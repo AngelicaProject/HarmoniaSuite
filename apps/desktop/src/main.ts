@@ -71,6 +71,7 @@ if (!hasLock) {
 
   async function startLocalGateway(): Promise<string> {
     localGateway = new LocalGateway({
+      javaBinary: process.env.HARMONIA_JAVA_BINARY,
       workspace: process.env.HARMONIA_WORKSPACE || app.getPath("userData"),
       log: (message) => console.log(message),
     });
@@ -115,10 +116,17 @@ if (!hasLock) {
 
   function frontendDist(): string {
     const configured = process.env.HARMONIA_FRONTEND_DIST;
+    const activeVersion = process.env.HARMONIA_ACTIVE_VERSION_DIR;
+    const installed = process.env.HARMONIA_RUNTIME_MODE === "installed";
     const candidates = [
       configured,
-      resolve(__dirname, "../../../frontend/dist"),
-      resolve(process.cwd(), "frontend/dist"),
+      activeVersion ? join(activeVersion, "desktop", "frontend", "dist") : undefined,
+      ...(installed
+        ? []
+        : [
+            resolve(__dirname, "../../../frontend/dist"),
+            resolve(process.cwd(), "frontend/dist"),
+          ]),
     ].filter((candidate): candidate is string => Boolean(candidate));
     const dist = candidates.find((candidate) => existsSync(join(candidate, "index.html")));
     if (!dist) {

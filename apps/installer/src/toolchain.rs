@@ -313,6 +313,15 @@ impl ToolchainStateStore {
             state,
         )?)
     }
+
+    pub fn resolve(&self, id: &str) -> Result<ResolvedToolchain, ToolchainError> {
+        let state = self.load()?;
+        let record = state
+            .records
+            .get(id)
+            .ok_or_else(|| ToolchainError::InvalidState(format!("unknown toolchain ID {id:?}")))?;
+        resolve_record_at(&self.paths, record)
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -866,20 +875,7 @@ impl<D: DownloadClient> ToolchainManager<D> {
         &self,
         record: &ToolchainRecord,
     ) -> Result<ResolvedToolchain, ToolchainError> {
-        let root = self.record_root(record)?;
-        if !root.is_dir() {
-            return Err(ToolchainError::Incomplete(root));
-        }
-        let home_dir = resolve_home_dir(&root, &record.home_dir)?;
-        let executables = resolve_executable_paths(&root, &record.executables)?;
-        Ok(ResolvedToolchain {
-            id: record.id.clone(),
-            kind: record.kind,
-            version: record.version.clone(),
-            root,
-            home_dir,
-            executables,
-        })
+        resolve_record_at(&self.paths, record)
     }
 
     fn record_root(&self, record: &ToolchainRecord) -> Result<PathBuf, ToolchainError> {
@@ -895,6 +891,41 @@ impl<D: DownloadClient> ToolchainManager<D> {
         validate_managed_path(&root)?;
         Ok(root)
     }
+}
+
+fn resolve_record_at(
+    paths: &InstallationPaths,
+    record: &ToolchainRecord,
+) -> Result<ResolvedToolchain, ToolchainError> {
+    let root = record_root_at(paths, record)?;
+    if !root.is_dir() {
+        return Err(ToolchainError::Incomplete(root));
+    }
+    let home_dir = resolve_home_dir(&root, &record.home_dir)?;
+    let executables = resolve_executable_paths(&root, &record.executables)?;
+    Ok(ResolvedToolchain {
+        id: record.id.clone(),
+        kind: record.kind,
+        version: record.version.clone(),
+        root,
+        home_dir,
+        executables,
+    })
+}
+
+fn record_root_at(
+    paths: &InstallationPaths,
+    record: &ToolchainRecord,
+) -> Result<PathBuf, ToolchainError> {
+    if !is_safe_relative_path(&record.install_dir) {
+        return Err(ToolchainError::UnsafePath(record.install_dir.clone()));
+    }
+    let root = paths.app_root.join(&record.install_dir);
+    if !root.starts_with(paths.toolchain_dir()) || root.starts_with(paths.toolchain_trash_dir()) {
+        return Err(ToolchainError::UnsafePath(root));
+    }
+    validate_managed_path(&root)?;
+    Ok(root)
 }
 
 fn resolve_executable_paths(
