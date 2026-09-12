@@ -61,7 +61,11 @@ per-user `install` operation:
 - `--json` emits a machine-readable outcome and the stable exit codes are documented in
   `docs/phase6-fresh-bootstrap-design.md`;
 - the final desktop handoff uses a separate detached launcher, so the setup process's health-process
-  containment does not kill the installed desktop when setup exits.
+  containment does not kill the installed desktop when setup exits. It passes the exact
+  `HARMONIA_USER_DATA_ROOT` contract to Electron and performs a bounded early-exit check before
+  declaring handoff success;
+- production setup accepts no arbitrary source URL or product-version override. Custom repositories
+  and descriptors remain restricted to internal fixture seams.
 
 Run the checks from the repository root with:
 

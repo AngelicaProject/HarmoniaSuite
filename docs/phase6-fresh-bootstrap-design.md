@@ -22,12 +22,24 @@ The health checker uses the existing owned-process containment. The final
 desktop handoff uses a separate detached launcher: Windows does not attach the
 child to the installer Job Object, and Linux creates a new session and clears
 parent-death containment. The launcher passes only the desktop runtime
-allowlist plus explicit installed-runtime variables.
+allowlist plus explicit installed-runtime variables. Installed Electron receives
+`HARMONIA_USER_DATA_ROOT=<InstallationPaths.user_data_root>` and must use that
+absolute path exactly; `HARMONIA_WORKSPACE` remains a separate backend contract.
+Development mode retains the platform/XDG fallback.
 
 ## Fresh-install state machine
 
-`Recovering -> Detecting -> Initializing -> ResolvingTarget -> PreparingToolchain
--> Building -> Activating -> Launching -> Completed`.
+The durable bootstrap journal records:
+
+`Recovering -> Detecting -> Building -> Activating -> Launching -> Completed`.
+
+It also records the immutable target SHA, activation completion, launch attempt,
+and launch-handoff completion. Before creating a new operation, setup loads the
+previous journal under the global lock, runs Phase 5 recovery, and reconciles a
+running operation. If activation completed but setup crashed before launch,
+setup resolves the current immutable version and retries only the detached
+desktop handoff. A pre-activation interrupted operation is terminalized after
+low-level cleanup and may then be replaced by a new install operation.
 
 `AlreadyInstalled`, `RepairRequired`, `ReviewRequired`, build failure,
 activation failure, and launch failure are terminal outcomes for the operation.
@@ -57,8 +69,11 @@ are never cleanup targets.
 Successful activation yields `RuntimePaths` from `resolve_current()`. The
 desktop is launched from that immutable directory with `HARMONIA_RUNTIME_MODE=installed`,
 `HARMONIA_ACTIVE_VERSION_DIR`, `HARMONIA_BACKEND_JAR`,
-`HARMONIA_JAVA_BINARY`, and the exact workspace contract. A successful spawn is
-the launch handoff; the setup process does not wait for the desktop.
+`HARMONIA_JAVA_BINARY`, `HARMONIA_USER_DATA_ROOT`, and the exact workspace
+contract. The detached launcher uses a bounded startup grace: spawn failure or
+early child exit is `LaunchFailed`; a child still alive after the grace is a
+successful handoff. The setup process does not wait for the desktop after that
+boundary.
 
 ## Result contract
 
@@ -70,6 +85,9 @@ JSONL and contain no complete environment or credentials.
 The Rust package exposes `harmonia-setup` for Linux and a `HarmoniaSetup` bin
 alias for Windows packaging; both targets use the same source entrypoint.
 `install` is the implemented operation and `--json` emits the serialized
-result. Stable exit codes are: `0` installed, `10` already installed, `20`
-repair required, `21` review required, `30` build failed, `40` activation
-failed, and `41` launch failed.
+result. Production setup has no source URL or product-version override: it
+uses the product-controlled HTTPS repository and version constant. `repair` and
+`uninstall` return explicit `NotImplemented`; unknown commands/options and
+missing option values return usage. Stable exit codes are: `0` installed, `10`
+already installed, `20` repair required, `21` review required, `30` build
+failed, `40` activation failed, and `41` launch failed.
