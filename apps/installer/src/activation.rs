@@ -829,7 +829,7 @@ impl DatabaseSnapshot {
         let database_parent = database_path.parent().ok_or_else(|| {
             ActivationError::ReviewRequired("database backup path has no parent".to_owned())
         })?;
-        fs::create_dir_all(&database_parent)?;
+        fs::create_dir_all(database_parent)?;
         let database_name = database_path.file_name().ok_or_else(|| {
             ActivationError::ReviewRequired("database backup path has no filename".to_owned())
         })?;
@@ -865,7 +865,7 @@ impl DatabaseSnapshot {
                 }
             }
         }
-        sync_directory(&database_parent)?;
+        sync_directory(database_parent)?;
         Ok(())
     }
 }
