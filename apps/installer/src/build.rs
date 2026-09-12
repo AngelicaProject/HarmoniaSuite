@@ -644,7 +644,7 @@ mod tests {
     use crate::download::{DownloadError, DownloadReceipt, DownloadRequest};
     use crate::paths::{Platform, TargetArchitecture};
     use crate::process::{CommandSpec, ProcessOutput, SystemProcessRunner};
-    use crate::toolchain::{ArchiveFormat, ToolchainKind};
+    use crate::toolchain::{safe_os_utility_paths, ArchiveFormat, ToolchainKind};
     use flate2::write::GzEncoder;
     use flate2::Compression;
     use git2::{Oid, Repository, Signature};
@@ -1166,23 +1166,22 @@ mod tests {
         let wrapper = root.path().join("mvnw.cmd");
         fs::write(
             &wrapper,
-            "@echo off\r\nif not exist \"%JAVA_HOME%\\bin\\java.exe\" exit /b 1\r\nwhere cmd >NUL\r\nif errorlevel 1 exit /b 1\r\nexit /b 0\r\n",
+            "@echo off\r\nif not exist \"%JAVA_HOME%\\bin\\java.exe\" exit /b 1\r\npowershell -NoProfile -Command \"if ($env:JAVA_HOME) { exit 0 } else { exit 1 }\"\r\nexit /b %ERRORLEVEL%\r\n",
         )
         .unwrap();
-        let system_root = std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into());
+        let mut path = vec![java_home.join("bin")];
+        path.extend(safe_os_utility_paths(Platform::Windows));
+        let path_value = path
+            .iter()
+            .map(|entry| entry.display().to_string())
+            .collect::<Vec<_>>()
+            .join(";");
         let environment = ManagedEnvironment {
             variables: BTreeMap::from([
-                (
-                    "PATH".to_owned(),
-                    format!(
-                        "{};{}",
-                        java_home.join("bin").display(),
-                        PathBuf::from(system_root).join("System32").display()
-                    ),
-                ),
+                ("PATH".to_owned(), path_value),
                 ("JAVA_HOME".to_owned(), java_home.display().to_string()),
             ]),
-            path: vec![java_home.join("bin")],
+            path,
         };
         let command = environment.apply_to(CommandSpec::new("cmd.exe").args([
             "/D",

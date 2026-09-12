@@ -1020,14 +1020,18 @@ fn join_paths(paths: &[PathBuf]) -> String {
         .join(&separator.to_string())
 }
 
-fn safe_os_utility_paths(platform: Platform) -> Vec<PathBuf> {
+pub(crate) fn safe_os_utility_paths(platform: Platform) -> Vec<PathBuf> {
     match platform {
         Platform::Linux => [PathBuf::from("/usr/bin"), PathBuf::from("/bin")].to_vec(),
         Platform::Windows => {
             let Some(root) = std::env::var_os("SystemRoot").map(PathBuf::from) else {
                 return Vec::new();
             };
-            vec![root.join("System32"), root]
+            vec![
+                root.join("System32"),
+                root.join("System32").join("WindowsPowerShell").join("v1.0"),
+                root,
+            ]
         }
     }
 }
