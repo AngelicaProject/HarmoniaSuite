@@ -137,7 +137,7 @@ impl ManifestFetcher for HttpManifestFetcher {
             .user_agent("harmonia-suite-updater/1")
             .build()
             .map_err(|error| ManifestError::Transport(error.to_string()))?;
-        let mut response = client
+        let response = client
             .get(url)
             .send()
             .map_err(|error| ManifestError::Transport(error.to_string()))?;
@@ -190,18 +190,18 @@ impl ManifestVerifier {
         platform: Platform,
         architecture: &TargetArchitecture,
     ) -> Result<SignedManifest, ManifestError> {
-        let signature: ManifestSignature = serde_json::from_slice(signature_bytes)?;
-        if signature.schema_version != MANIFEST_SCHEMA_VERSION {
+        let envelope: ManifestSignature = serde_json::from_slice(signature_bytes)?;
+        if envelope.schema_version != MANIFEST_SCHEMA_VERSION {
             return Err(ManifestError::UnsupportedSignatureSchema);
         }
         let key_bytes = self
             .keys
-            .get(&signature.key_id)
-            .ok_or_else(|| ManifestError::UnknownKey(signature.key_id.clone()))?;
+            .get(&envelope.key_id)
+            .ok_or_else(|| ManifestError::UnknownKey(envelope.key_id.clone()))?;
         let key =
             VerifyingKey::from_bytes(key_bytes).map_err(|_| ManifestError::InvalidSignature)?;
         let signature_bytes =
-            decode_hex::<64>(&signature.signature_hex).ok_or(ManifestError::InvalidSignature)?;
+            decode_hex::<64>(&envelope.signature_hex).ok_or(ManifestError::InvalidSignature)?;
         let signature = Signature::from_bytes(&signature_bytes);
         key.verify(manifest_bytes, &signature)
             .map_err(|_| ManifestError::SignatureVerification)?;
@@ -212,7 +212,7 @@ impl ManifestVerifier {
         digest.update(manifest_bytes);
         Ok(SignedManifest {
             manifest,
-            key_id: signature.key_id,
+            key_id: envelope.key_id,
             manifest_sha256: hex_digest(&digest.finalize()),
         })
     }
