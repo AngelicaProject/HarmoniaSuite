@@ -282,6 +282,50 @@ fn report_error(json: bool, code: u8, message: &str) -> ExitCode {
     ExitCode::from(code)
 }
 
+fn report_repair_result(json: bool, result: RepairResult) -> ExitCode {
+    let code = match &result.status {
+        RepairStatus::Healthy { .. } | RepairStatus::Repaired { .. } => EXIT_INSTALLED,
+        RepairStatus::RepairRequired { .. } => EXIT_REPAIR_REQUIRED,
+        RepairStatus::ReviewRequired { .. } => EXIT_REVIEW_REQUIRED,
+        RepairStatus::BuildFailed { .. } => EXIT_BUILD_FAILED,
+        RepairStatus::ActivationFailed { .. } => EXIT_ACTIVATION_FAILED,
+    };
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&result).unwrap_or_else(|_| "{}".to_owned())
+        );
+    } else {
+        println!(
+            "{}",
+            serde_json::to_string(&result).unwrap_or_else(|_| "{}".to_owned())
+        );
+    }
+    ExitCode::from(code)
+}
+
+fn report_uninstall_result(json: bool, result: UninstallResult) -> ExitCode {
+    let code = match result.status {
+        UninstallStatus::Uninstalled { .. } | UninstallStatus::AlreadyUninstalled { .. } => {
+            EXIT_INSTALLED
+        }
+        UninstallStatus::ReviewRequired { .. } => EXIT_REVIEW_REQUIRED,
+        UninstallStatus::Failed { .. } => EXIT_INTERNAL,
+    };
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&result).unwrap_or_else(|_| "{}".to_owned())
+        );
+    } else {
+        println!(
+            "{}",
+            serde_json::to_string(&result).unwrap_or_else(|_| "{}".to_owned())
+        );
+    }
+    ExitCode::from(code)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -355,48 +399,4 @@ mod tests {
             })
         );
     }
-}
-
-fn report_repair_result(json: bool, result: RepairResult) -> ExitCode {
-    let code = match &result.status {
-        RepairStatus::Healthy { .. } | RepairStatus::Repaired { .. } => EXIT_INSTALLED,
-        RepairStatus::RepairRequired { .. } => EXIT_REPAIR_REQUIRED,
-        RepairStatus::ReviewRequired { .. } => EXIT_REVIEW_REQUIRED,
-        RepairStatus::BuildFailed { .. } => EXIT_BUILD_FAILED,
-        RepairStatus::ActivationFailed { .. } => EXIT_ACTIVATION_FAILED,
-    };
-    if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&result).unwrap_or_else(|_| "{}".to_owned())
-        );
-    } else {
-        println!(
-            "{}",
-            serde_json::to_string(&result).unwrap_or_else(|_| "{}".to_owned())
-        );
-    }
-    ExitCode::from(code)
-}
-
-fn report_uninstall_result(json: bool, result: UninstallResult) -> ExitCode {
-    let code = match result.status {
-        UninstallStatus::Uninstalled { .. } | UninstallStatus::AlreadyUninstalled { .. } => {
-            EXIT_INSTALLED
-        }
-        UninstallStatus::ReviewRequired { .. } => EXIT_REVIEW_REQUIRED,
-        UninstallStatus::Failed { .. } => EXIT_INTERNAL,
-    };
-    if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&result).unwrap_or_else(|_| "{}".to_owned())
-        );
-    } else {
-        println!(
-            "{}",
-            serde_json::to_string(&result).unwrap_or_else(|_| "{}".to_owned())
-        );
-    }
-    ExitCode::from(code)
 }
