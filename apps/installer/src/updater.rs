@@ -1931,7 +1931,11 @@ mod tests {
             &health,
             &blocked_launcher,
         );
-        assert!(matches!(review.status, UpdateStatus::ReviewRequired { .. }));
+        assert!(
+            matches!(review.status, UpdateStatus::ReviewRequired { .. }),
+            "unexpected review status: {:?}",
+            review.status
+        );
 
         let restart = ab_update(
             &fixture,
