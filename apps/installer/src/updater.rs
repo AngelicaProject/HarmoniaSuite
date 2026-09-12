@@ -226,6 +226,7 @@ impl<D: DownloadClient, P: ProcessRunner> UpdateEngine<D, P> {
 
     /// Controlled fixture seam used by integration tests. It is deliberately not exposed by the
     /// production CLI, so arbitrary repositories and keys cannot become a runtime override.
+    #[allow(clippy::too_many_arguments)]
     pub fn update_with_sources<
         F: ManifestFetcher,
         H: HealthChecker,
@@ -289,6 +290,7 @@ impl<D: DownloadClient, P: ProcessRunner> UpdateEngine<D, P> {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn update_locked<
         F: ManifestFetcher,
         H: HealthChecker,
