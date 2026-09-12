@@ -23,6 +23,13 @@ use crate::state::{OperationKind, StateError, StateStore};
 use crate::toolchain::{ToolchainError, ToolchainStateStore};
 
 pub const DEFAULT_REMOTE_URL: &str = "https://github.com/AngelicaProject/HarmoniaSuite.git";
+
+fn now_ms() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+}
 pub const DEFAULT_PRODUCT_VERSION: &str = "1.0.11-SNAPSHOT";
 
 #[derive(Clone, Debug)]
