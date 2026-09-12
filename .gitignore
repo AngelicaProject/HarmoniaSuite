@@ -20,5 +20,6 @@ node_modules/
 frontend/dist/
 frontend/coverage/
 apps/desktop/dist/
+apps/desktop/artifacts/
 apps/desktop/coverage/
 **/.hermes-tmp.*

@@ -194,6 +194,10 @@ impl InstallationPaths {
         self.state_root.join("diagnostics")
     }
 
+    pub fn build_results_dir(&self) -> PathBuf {
+        self.state_root.join("build-results")
+    }
+
     pub fn install_state_path(&self) -> PathBuf {
         self.state_root.join("install.json")
     }

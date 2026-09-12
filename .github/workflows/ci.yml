@@ -24,6 +24,7 @@ jobs:
       - run: cargo fmt --check --manifest-path apps/installer/Cargo.toml
       - run: cargo clippy --manifest-path apps/installer/Cargo.toml --all-targets -- -D warnings
       - run: cargo test --manifest-path apps/installer/Cargo.toml
+      - run: cargo test --manifest-path apps/installer/Cargo.toml --lib fetches_public_https_origin_main -- --ignored --nocapture
       - run: cargo build --release --manifest-path apps/installer/Cargo.toml
 
   desktop:
@@ -41,11 +42,38 @@ jobs:
         with:
           node-version-file: frontend/.node-version
           cache: npm
-          cache-dependency-path: apps/desktop/package-lock.json
+          cache-dependency-path: |
+            frontend/package-lock.json
+            apps/desktop/package-lock.json
+      - run: npm ci
+        working-directory: frontend
+      - run: npm run build
+        working-directory: frontend
       - run: npm ci
         working-directory: apps/desktop
       - run: npm run check
         working-directory: apps/desktop
+      - run: npm run build
+        working-directory: apps/desktop
+      - run: npm run package
+        working-directory: apps/desktop
+      - name: verify Linux desktop payload
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          test -x apps/desktop/artifacts/linux-x64/electron
+          test -f apps/desktop/artifacts/linux-x64/resources/app/package.json
+          test -f apps/desktop/artifacts/linux-x64/resources/app/dist/main.js
+          test -f apps/desktop/artifacts/linux-x64/frontend/dist/index.html
+      - name: verify Windows desktop payload
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $payload = 'apps/desktop/artifacts/windows-x64'
+          if (-not (Test-Path "$payload/electron.exe" -PathType Leaf)) { throw 'missing Electron runtime executable' }
+          if (-not (Test-Path "$payload/resources/app/package.json" -PathType Leaf)) { throw 'missing app package.json' }
+          if (-not (Test-Path "$payload/resources/app/dist/main.js" -PathType Leaf)) { throw 'missing compiled desktop main' }
+          if (-not (Test-Path "$payload/frontend/dist/index.html" -PathType Leaf)) { throw 'missing bundled frontend' }
 
   build:
     runs-on: ubuntu-latest
