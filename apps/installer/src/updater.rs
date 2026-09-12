@@ -16,7 +16,7 @@ use uuid::Uuid;
 use crate::activation::{
     ActivationConfig, ActivationEngine, ActivationError, ActivationHooks, HealthChecker,
 };
-use crate::bootstrap::{runtime_launch_spec, wait_for_runtime_launch_ack};
+use crate::bootstrap::{runtime_launch_spec, wait_for_runtime_launch_ack, DEFAULT_REMOTE_URL};
 use crate::build::{BuildConfig, BuildError, BuildPipeline};
 use crate::detached::{DetachedLaunch, DetachedLaunchError, DetachedLauncher};
 use crate::diagnostics::{DiagnosticError, DiagnosticLogger};
