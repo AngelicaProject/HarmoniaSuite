@@ -2,8 +2,10 @@ use std::env;
 use std::process::ExitCode;
 
 use harmonia_installer::{
-    BootstrapInstaller, BootstrapOptions, BootstrapResult, BootstrapStatus, DiagnosticLogger,
-    HttpDownloader, InstallationPaths, SystemDetachedLauncher, SystemProcessRunner,
+    BootstrapInstaller, BootstrapOptions, BootstrapResult, BootstrapStatus, DesktopShutdownHooks,
+    DiagnosticLogger, HttpDownloader, HttpManifestFetcher, InstallationPaths,
+    LocalBackendHealthChecker, ManifestVerifier, SystemDetachedLauncher, SystemProcessRunner,
+    UpdateEngine, UpdateResult, UpdateStatus,
 };
 
 const EXIT_INSTALLED: u8 = 0;
@@ -13,6 +15,7 @@ const EXIT_REVIEW_REQUIRED: u8 = 21;
 const EXIT_BUILD_FAILED: u8 = 30;
 const EXIT_ACTIVATION_FAILED: u8 = 40;
 const EXIT_LAUNCH_FAILED: u8 = 41;
+const EXIT_UPGRADE_REQUIRED: u8 = 42;
 const EXIT_USAGE: u8 = 64;
 const EXIT_INTERNAL: u8 = 70;
 
@@ -22,17 +25,52 @@ fn main() -> ExitCode {
         Ok(cli) => cli,
         Err(error) => return report_error(false, EXIT_USAGE, &error),
     };
-    if !matches!(cli.command, Command::Install) {
+    if matches!(cli.command, Command::Repair | Command::Uninstall) {
         return report_not_implemented(cli.json, cli.command.as_str());
     }
     let paths = match InstallationPaths::current() {
         Ok(paths) => paths,
         Err(error) => return report_error(cli.json, EXIT_INTERNAL, &error.to_string()),
     };
-    let logger = match DiagnosticLogger::open(paths.diagnostics_dir().join("bootstrap.jsonl")) {
+    let logger_name = if matches!(cli.command, Command::Update | Command::Check) {
+        "updater.jsonl"
+    } else {
+        "bootstrap.jsonl"
+    };
+    let logger = match DiagnosticLogger::open(paths.diagnostics_dir().join(logger_name)) {
         Ok(logger) => Some(logger),
         Err(error) => return report_error(cli.json, EXIT_INTERNAL, &error.to_string()),
     };
+    if matches!(cli.command, Command::Update | Command::Check) {
+        let updater = UpdateEngine::new(
+            paths.clone(),
+            HttpDownloader::default(),
+            SystemProcessRunner::default(),
+            logger,
+        );
+        if matches!(cli.command, Command::Check) {
+            let fetcher = HttpManifestFetcher::default();
+            let verifier = ManifestVerifier::production();
+            return match updater.check_for_update(
+                &fetcher,
+                &verifier,
+                harmonia_installer::manifest::DEFAULT_MANIFEST_URL,
+                harmonia_installer::manifest::DEFAULT_MANIFEST_SIGNATURE_URL,
+            ) {
+                Ok(result) => report_update_result(cli.json, result),
+                Err(error) => report_error(cli.json, EXIT_INTERNAL, &error.to_string()),
+            };
+        }
+        let mut hooks = DesktopShutdownHooks::new(
+            paths,
+            env::var("HARMONIA_UPDATE_FROM_DESKTOP").as_deref() == Ok("1"),
+        );
+        let checker = LocalBackendHealthChecker::new(SystemProcessRunner::default());
+        return match updater.update(&mut hooks, &checker, &SystemDetachedLauncher) {
+            Ok(result) => report_update_result(cli.json, result),
+            Err(error) => report_error(cli.json, EXIT_INTERNAL, &error.to_string()),
+        };
+    }
     let installer = BootstrapInstaller::new(
         paths,
         HttpDownloader::default(),
@@ -49,6 +87,8 @@ fn main() -> ExitCode {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Command {
     Install,
+    Check,
+    Update,
     Repair,
     Uninstall,
 }
@@ -57,6 +97,8 @@ impl Command {
     fn as_str(self) -> &'static str {
         match self {
             Self::Install => "install",
+            Self::Check => "check",
+            Self::Update => "update",
             Self::Repair => "repair",
             Self::Uninstall => "uninstall",
         }
@@ -76,6 +118,8 @@ fn parse_cli(arguments: &[String]) -> Result<Cli, String> {
         match argument.as_str() {
             "--json" => json = true,
             "install" => set_command(&mut command, Command::Install)?,
+            "check" => set_command(&mut command, Command::Check)?,
+            "update" => set_command(&mut command, Command::Update)?,
             "repair" => set_command(&mut command, Command::Repair)?,
             "uninstall" => set_command(&mut command, Command::Uninstall)?,
             value if value.starts_with('-') => {
@@ -110,6 +154,33 @@ fn report_not_implemented(json: bool, operation: &str) -> ExitCode {
         eprintln!("{operation} is not implemented in this installer phase");
     }
     ExitCode::from(EXIT_USAGE)
+}
+
+fn report_update_result(json: bool, result: UpdateResult) -> ExitCode {
+    let code = match &result.status {
+        UpdateStatus::UpToDate { .. } | UpdateStatus::Updated { .. } => EXIT_INSTALLED,
+        UpdateStatus::UpdateAvailable { .. } => EXIT_ALREADY_INSTALLED,
+        UpdateStatus::LaunchFailed { .. } => EXIT_LAUNCH_FAILED,
+        UpdateStatus::ReviewRequired { .. } => EXIT_REVIEW_REQUIRED,
+        UpdateStatus::UpdaterUpgradeRequired { .. } => EXIT_UPGRADE_REQUIRED,
+        UpdateStatus::TrustFailure { .. } => EXIT_USAGE,
+        UpdateStatus::UpdateBuildFailed { .. } => EXIT_BUILD_FAILED,
+        UpdateStatus::ActivationFailed { .. } | UpdateStatus::RollbackCompleted { .. } => {
+            EXIT_ACTIVATION_FAILED
+        }
+    };
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&result).unwrap_or_else(|_| "{}".to_owned())
+        );
+    } else {
+        println!(
+            "{}",
+            serde_json::to_string(&result).unwrap_or_else(|_| "{}".to_owned())
+        );
+    }
+    ExitCode::from(code)
 }
 
 fn report_result(json: bool, result: BootstrapResult) -> ExitCode {
@@ -204,6 +275,13 @@ mod tests {
             Ok(Cli {
                 command: Command::Install,
                 json: false,
+            })
+        );
+        assert_eq!(
+            parse_cli(&args(&["update", "--json"])),
+            Ok(Cli {
+                command: Command::Update,
+                json: true,
             })
         );
     }

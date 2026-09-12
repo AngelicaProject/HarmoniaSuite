@@ -44,6 +44,8 @@ pub enum StateError {
     ActiveTransaction(String),
     #[error("transaction {0} requires explicit review before another operation")]
     ReviewRequiredTransaction(String),
+    #[error("updater journal is invalid: {0}")]
+    InvalidUpdaterJournal(String),
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -113,6 +115,12 @@ pub struct InstallationState {
     pub pending_commit: Option<String>,
     #[serde(default)]
     pub activation_at_ms: Option<u128>,
+    #[serde(default)]
+    pub accepted_manifest_generation: Option<u64>,
+    #[serde(default)]
+    pub accepted_manifest_sha256: Option<String>,
+    #[serde(default)]
+    pub accepted_manifest_key_id: Option<String>,
 }
 
 impl InstallationState {
@@ -131,6 +139,9 @@ impl InstallationState {
             staged_commit: None,
             pending_commit: None,
             activation_at_ms: None,
+            accepted_manifest_generation: None,
+            accepted_manifest_sha256: None,
+            accepted_manifest_key_id: None,
         }
     }
 }
@@ -273,6 +284,36 @@ impl StateStore {
                 if let Some(pre_activation) = transaction.pre_activation_state {
                     protected.extend(pre_activation.current_toolchains.values().cloned());
                     protected.extend(pre_activation.previous_toolchains.values().cloned());
+                }
+            }
+        }
+        // The high-level updater journal exists before the Phase 4 transaction is created and
+        // remains durable through ReviewRequired. Keep its manifest-selected toolchains pinned
+        // during that small hand-off window as well.
+        let update_path = self.paths.update_operation_path();
+        if update_path.is_file() {
+            let document = serde_json::from_slice::<serde_json::Value>(&fs::read(update_path)?)
+                .map_err(|error| StateError::InvalidUpdaterJournal(error.to_string()))?;
+            let status = document.get("status").and_then(serde_json::Value::as_str);
+            if matches!(status, Some("Running") | Some("ReviewRequired")) {
+                let Some(toolchains) = document
+                    .get("toolchains")
+                    .and_then(serde_json::Value::as_object)
+                else {
+                    return Err(StateError::InvalidUpdaterJournal(
+                        "running updater journal has no toolchains object".to_owned(),
+                    ));
+                };
+                protected.extend(
+                    toolchains
+                        .values()
+                        .filter_map(serde_json::Value::as_str)
+                        .map(str::to_owned),
+                );
+                if toolchains.values().any(|value| !value.is_string()) {
+                    return Err(StateError::InvalidUpdaterJournal(
+                        "updater journal contains a non-string toolchain ID".to_owned(),
+                    ));
                 }
             }
         }
@@ -827,6 +868,29 @@ pub(crate) fn atomic_write_json<T: Serialize>(path: &Path, value: &T) -> Result<
     Ok(())
 }
 
+pub(crate) fn atomic_write_bytes(path: &Path, encoded: &[u8]) -> Result<(), StateError> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "state path has no parent"))?;
+    fs::create_dir_all(parent)?;
+    let temporary = parent.join(format!(
+        ".{}.{}.tmp",
+        path.file_name().unwrap().to_string_lossy(),
+        Uuid::new_v4()
+    ));
+    {
+        let mut file = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&temporary)?;
+        file.write_all(encoded)?;
+        file.sync_all()?;
+    }
+    replace_file(&temporary, path)?;
+    sync_parent(parent);
+    Ok(())
+}
+
 pub(crate) fn durable_replace_file(temporary: &Path, destination: &Path) -> Result<(), StateError> {
     replace_file(temporary, destination)?;
     if let Some(parent) = destination.parent() {
@@ -875,6 +939,44 @@ pub(crate) fn durable_promote_directory(
         let result =
             unsafe { MoveFileExW(source.as_ptr(), target.as_ptr(), MOVEFILE_WRITE_THROUGH) };
         if result == 0 {
+            return Err(io::Error::last_os_error().into());
+        }
+    }
+    Ok(())
+}
+
+/// Publish a file without replacing an existing destination. This is used for the immutable
+/// setup helper: replacing a helper while it is executing is deliberately not supported.
+pub(crate) fn durable_promote_file(staging: &Path, destination: &Path) -> Result<(), StateError> {
+    if destination.exists() {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            format!("immutable file already exists: {}", destination.display()),
+        )
+        .into());
+    }
+    #[cfg(not(windows))]
+    {
+        fs::rename(staging, destination)?;
+        if let Some(parent) = destination.parent() {
+            File::open(parent)?.sync_all()?;
+        }
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::Storage::FileSystem::{MoveFileExW, MOVEFILE_WRITE_THROUGH};
+        let source: Vec<u16> = staging
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        let target: Vec<u16> = destination
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        if unsafe { MoveFileExW(source.as_ptr(), target.as_ptr(), MOVEFILE_WRITE_THROUGH) } == 0 {
             return Err(io::Error::last_os_error().into());
         }
     }
@@ -1111,6 +1213,25 @@ mod tests {
         for id in ["jdk-p", "node-p", "jdk-a", "node-a", "jdk-b", "node-b"] {
             assert!(protected.contains(id), "missing protected toolchain {id}");
         }
+    }
+
+    #[test]
+    fn running_updater_journal_protects_manifest_toolchains_before_build_transaction() {
+        let store = store();
+        store.initialize().unwrap();
+        fs::write(
+            store.paths().update_operation_path(),
+            serde_json::json!({
+                "schema_version": 1,
+                "status": "Running",
+                "toolchains": {"jdk": "jdk-target", "node": "node-target"}
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let protected = store.protected_toolchain_ids().unwrap();
+        assert!(protected.contains("jdk-target"));
+        assert!(protected.contains("node-target"));
     }
 
     #[cfg(windows)]

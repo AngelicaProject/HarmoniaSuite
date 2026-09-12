@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 import {
@@ -19,6 +19,7 @@ import {
 } from "./launch-ack.js";
 import { userDataRoot } from "./paths.js";
 import { registerHarmoniaProtocol } from "./protocol.js";
+import { registerUpdaterIpc } from "./updater-ipc.js";
 import type { ActiveGateway } from "./types.js";
 
 protocol.registerSchemesAsPrivileged([
@@ -36,10 +37,12 @@ if (!hasLock) {
   app.quit();
 } else {
   app.setPath("userData", userDataRoot());
+  registerUpdaterIpc();
 
   let window: BrowserWindow | undefined;
   let localGateway: LocalGateway | undefined;
   let shuttingDown = false;
+  let shutdownWatcher: NodeJS.Timeout | undefined;
   let startupReady = false;
   const pendingLaunchRequests = new Map<string, LaunchRequest>();
 
@@ -70,6 +73,7 @@ if (!hasLock) {
 
   app.whenReady().then(async () => {
     try {
+      registerDesktopSession();
       const allowInsecureRemote = process.env.HARMONIA_ALLOW_INSECURE_REMOTE === "1";
       const config = await loadGatewayConfig(join(app.getPath("userData"), "desktop.json"), {
         allowInsecureRemote,
@@ -90,6 +94,7 @@ if (!hasLock) {
         void acknowledgeLaunchRequest(request);
       }
       pendingLaunchRequests.clear();
+      startShutdownWatcher();
     } catch (error) {
       console.error("Harmonia desktop startup failed", error);
       await shutdown(1);
@@ -128,6 +133,7 @@ if (!hasLock) {
         contextIsolation: true,
         sandbox: true,
         webviewTag: false,
+        preload: resolve(__dirname, "preload.js"),
       },
     });
     created.webContents.setWindowOpenHandler(({ url }) => {
@@ -175,12 +181,78 @@ if (!hasLock) {
   }
 
   async function shutdown(code: number): Promise<void> {
+    return shutdownForUpdate(code);
+  }
+
+  async function shutdownForUpdate(code: number, requestId?: string): Promise<void> {
     if (shuttingDown) return;
     shuttingDown = true;
+    if (shutdownWatcher) clearInterval(shutdownWatcher);
     try {
       await localGateway?.stop();
+      if (requestId) {
+        writeJsonAtomically(join(process.env.HARMONIA_INSTALL_STATE_ROOT || "", "desktop-shutdown-ack.json"), {
+          requestId,
+          acknowledgedAtMs: Date.now(),
+        });
+      }
     } finally {
+      clearDesktopSession();
       app.exit(code);
     }
+  }
+
+  function registerDesktopSession(): void {
+    if (process.env.HARMONIA_RUNTIME_MODE !== "installed") return;
+    const stateRoot = process.env.HARMONIA_INSTALL_STATE_ROOT;
+    if (!stateRoot || !isAbsolutePath(stateRoot)) {
+      throw new Error("installed runtime requires an absolute HARMONIA_INSTALL_STATE_ROOT");
+    }
+    writeJsonAtomically(join(stateRoot, "desktop-session.json"), {
+      pid: process.pid,
+      startedAtMs: Date.now(),
+    });
+  }
+
+  function clearDesktopSession(): void {
+    const stateRoot = process.env.HARMONIA_INSTALL_STATE_ROOT;
+    if (!stateRoot || !isAbsolutePath(stateRoot)) return;
+    try {
+      unlinkSync(join(stateRoot, "desktop-session.json"));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") console.warn(error);
+    }
+  }
+
+  function startShutdownWatcher(): void {
+    const stateRoot = process.env.HARMONIA_INSTALL_STATE_ROOT;
+    if (process.env.HARMONIA_RUNTIME_MODE !== "installed" || !stateRoot) return;
+    shutdownWatcher = setInterval(() => {
+      if (shuttingDown) return;
+      try {
+        const request = JSON.parse(
+          readFileSync(join(stateRoot, "desktop-shutdown-request.json"), "utf8"),
+        ) as { requestId?: string };
+        if (request.requestId) void shutdownForUpdate(0, request.requestId);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") console.warn(error);
+      }
+    }, 100);
+    shutdownWatcher.unref();
+  }
+
+  function writeJsonAtomically(path: string, value: unknown): void {
+    const temporary = `${path}.${process.pid}.tmp`;
+    writeFileSync(temporary, `${JSON.stringify(value)}\n`, { encoding: "utf8", flag: "w" });
+    try {
+      unlinkSync(path);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    renameSync(temporary, path);
+  }
+
+  function isAbsolutePath(path: string): boolean {
+    return path.startsWith("/") || /^[A-Za-z]:[\\/]/.test(path) || path.startsWith("\\\\");
   }
 }
