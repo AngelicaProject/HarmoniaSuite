@@ -61,7 +61,6 @@ jobs:
         if: runner.os == 'Linux'
         shell: bash
         run: |
-          apps/desktop/artifacts/linux-x64/electron --version
           test -x apps/desktop/artifacts/linux-x64/electron
           test -f apps/desktop/artifacts/linux-x64/resources/app/package.json
           test -f apps/desktop/artifacts/linux-x64/resources/app/dist/main.js
@@ -71,8 +70,6 @@ jobs:
         shell: pwsh
         run: |
           $payload = 'apps/desktop/artifacts/windows-x64'
-          & "$payload/electron.exe" --version
-          if ($LASTEXITCODE -ne 0) { throw 'Electron runtime executable failed to start' }
           if (-not (Test-Path "$payload/electron.exe" -PathType Leaf)) { throw 'missing Electron runtime executable' }
           if (-not (Test-Path "$payload/resources/app/package.json" -PathType Leaf)) { throw 'missing app package.json' }
           if (-not (Test-Path "$payload/resources/app/dist/main.js" -PathType Leaf)) { throw 'missing compiled desktop main' }

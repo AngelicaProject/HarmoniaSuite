@@ -9,7 +9,7 @@
     "build": "tsc -p tsconfig.json",
     "check": "npm run typecheck && npm test && npm run build",
     "dev": "npm run build && electron .",
-    "package": "node scripts/package-payload.mjs",
+    "package": "node node_modules/electron/install.js && node scripts/package-payload.mjs",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
