@@ -174,12 +174,10 @@ impl ActivationHooks for DesktopShutdownHooks {
             if live_desktop_session(&self.paths)
                 .map_err(|error| error.to_string())?
                 .is_none()
+                && (acknowledged || !self.paths.desktop_session_path().exists())
             {
-                if acknowledged || !self.paths.desktop_session_path().exists() {
-                    cleanup_shutdown_coordination(&self.paths)
-                        .map_err(|error| error.to_string())?;
-                    return Ok(());
-                }
+                cleanup_shutdown_coordination(&self.paths).map_err(|error| error.to_string())?;
+                return Ok(());
             }
             if std::time::Instant::now() >= deadline {
                 return Err(DesktopControlError::ShutdownTimeout.to_string());

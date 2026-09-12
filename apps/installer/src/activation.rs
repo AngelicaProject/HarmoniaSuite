@@ -303,7 +303,7 @@ impl ActivationEngine {
         }
         self.recover_locked(config, checker)?;
         let result = self.load_build_result(result_path.as_ref())?;
-        let candidate = self.validate_candidate(&result)?;
+        self.validate_candidate(&result)?;
         let store = StateStore::new(self.paths.clone());
         let installation = store.load_installation()?;
         let workspace =
