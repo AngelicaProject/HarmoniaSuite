@@ -72,7 +72,7 @@ pub trait DetachedLauncher {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct SystemDetachedLauncher;
 
-const STARTUP_GRACE: Duration = Duration::from_millis(150);
+const STARTUP_GRACE: Duration = Duration::from_millis(500);
 
 impl DetachedLauncher for SystemDetachedLauncher {
     fn launch(&self, spec: &DetachedLaunchSpec) -> Result<DetachedLaunch, DetachedLaunchError> {
@@ -194,12 +194,10 @@ mod tests {
         let command = DetachedLaunchSpec::new("/bin/sh").args(["-c", "exit 17"]);
         #[cfg(windows)]
         let command = {
-            let powershell = PathBuf::from(env::var_os("SystemRoot").unwrap())
+            let cmd = PathBuf::from(env::var_os("SystemRoot").unwrap())
                 .join("System32")
-                .join("WindowsPowerShell")
-                .join("v1.0")
-                .join("powershell.exe");
-            DetachedLaunchSpec::new(powershell).args(["-NoProfile", "-Command", "exit 17"])
+                .join("cmd.exe");
+            DetachedLaunchSpec::new(cmd).args(["/D", "/S", "/C", "exit 17"])
         };
 
         match SystemDetachedLauncher.launch(&command) {
