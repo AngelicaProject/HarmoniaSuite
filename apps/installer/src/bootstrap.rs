@@ -23,6 +23,7 @@ use crate::state::{OperationKind, StateError, StateStore};
 use crate::toolchain::{ToolchainError, ToolchainStateStore};
 
 pub const DEFAULT_REMOTE_URL: &str = "https://github.com/AngelicaProject/HarmoniaSuite.git";
+const BOOTSTRAP_JOURNAL_SCHEMA_VERSION: u32 = 2;
 
 fn now_ms() -> u128 {
     SystemTime::now()
@@ -34,8 +35,8 @@ pub const DEFAULT_PRODUCT_VERSION: &str = "1.0.11-SNAPSHOT";
 
 #[derive(Clone, Debug)]
 pub struct BootstrapOptions {
-    pub remote_url: String,
-    pub product_version: String,
+    remote_url: String,
+    product_version: String,
 }
 
 impl Default for BootstrapOptions {
@@ -103,6 +104,8 @@ pub enum BootstrapError {
     Io(#[from] std::io::Error),
     #[error("bootstrap JSON failed: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("unsupported bootstrap journal schema: {0}")]
+    UnsupportedJournalSchema(u32),
     #[error("bootstrap diagnostics failed: {0}")]
     Diagnostics(#[from] DiagnosticError),
     #[error("bootstrap toolchain catalog failed: {0}")]
@@ -111,12 +114,207 @@ pub enum BootstrapError {
     Build(#[from] BuildError),
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+fn new_bootstrap_journal(options: &BootstrapOptions, operation_id: String) -> BootstrapJournal {
+    BootstrapJournal {
+        schema_version: BOOTSTRAP_JOURNAL_SCHEMA_VERSION,
+        operation_id,
+        operation: OperationKind::Install,
+        status: BootstrapJournalStatus::Running,
+        started_at_ms: now_ms(),
+        finished_at_ms: None,
+        phase: BootstrapJournalPhase::Recovering,
+        target_commit: None,
+        product_version: options.product_version.clone(),
+        toolchains: BTreeMap::new(),
+        activation_completed: false,
+        launch_attempted: false,
+        launch_handoff_completed: false,
+        failure: None,
+    }
+}
+
+fn load_bootstrap_journal(
+    paths: &InstallationPaths,
+) -> Result<Option<BootstrapJournal>, BootstrapError> {
+    let path = paths.bootstrap_operation_path();
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let mut journal: BootstrapJournal = serde_json::from_slice(&std::fs::read(path)?)?;
+    if journal.schema_version > BOOTSTRAP_JOURNAL_SCHEMA_VERSION {
+        return Err(BootstrapError::UnsupportedJournalSchema(
+            journal.schema_version,
+        ));
+    }
+    journal.schema_version = BOOTSTRAP_JOURNAL_SCHEMA_VERSION;
+    Ok(Some(journal))
+}
+
+fn persist_bootstrap_journal(
+    paths: &InstallationPaths,
+    journal: &BootstrapJournal,
+) -> Result<(), BootstrapError> {
+    crate::state::atomic_write_json(&paths.bootstrap_operation_path(), journal)?;
+    Ok(())
+}
+
+fn desktop_launch_spec(
+    paths: &InstallationPaths,
+    runtime: &crate::activation::RuntimePaths,
+) -> DetachedLaunchSpec {
+    DetachedLaunchSpec::new(runtime.desktop_executable.clone())
+        .current_dir(runtime.version_dir.clone())
+        .env("HARMONIA_RUNTIME_MODE", "installed")
+        .env(
+            "HARMONIA_ACTIVE_VERSION_DIR",
+            runtime.version_dir.display().to_string(),
+        )
+        .env(
+            "HARMONIA_BACKEND_JAR",
+            runtime.backend_jar.display().to_string(),
+        )
+        .env(
+            "HARMONIA_JAVA_BINARY",
+            runtime.java_binary.display().to_string(),
+        )
+        .env(
+            "HARMONIA_USER_DATA_ROOT",
+            paths.user_data_root.display().to_string(),
+        )
+        .env(
+            "HARMONIA_WORKSPACE",
+            paths.user_data_root.display().to_string(),
+        )
+}
+
+fn reconcile_running_activation<L: DetachedLauncher>(
+    paths: &InstallationPaths,
+    options: &BootstrapOptions,
+    mut journal: BootstrapJournal,
+    activation: &ActivationEngine,
+    launcher: &L,
+    logger: Option<&DiagnosticLogger>,
+) -> Result<BootstrapResult, BootstrapError> {
+    let started_at_ms = journal.started_at_ms;
+    let operation_id = journal.operation_id.clone();
+    let runtime = match activation.resolve_current() {
+        Ok(Some(runtime)) => runtime,
+        Ok(None) => {
+            let reason =
+                "bootstrap journal says activation completed but current version is missing";
+            journal.failure = Some(reason.to_owned());
+            return finish_result(
+                paths,
+                logger,
+                &operation_id,
+                options,
+                started_at_ms,
+                journal,
+                BootstrapStatus::ReviewRequired {
+                    reason: reason.to_owned(),
+                },
+                None,
+                BTreeMap::new(),
+                false,
+                false,
+            );
+        }
+        Err(error) => {
+            let reason = format!("cannot resolve current after completed activation: {error}");
+            journal.failure = Some(reason.clone());
+            let target_commit = journal.target_commit.clone();
+            let toolchains = journal.toolchains.clone();
+            return finish_result(
+                paths,
+                logger,
+                &operation_id,
+                options,
+                started_at_ms,
+                journal,
+                BootstrapStatus::ReviewRequired { reason },
+                target_commit,
+                toolchains,
+                false,
+                false,
+            );
+        }
+    };
+
+    journal.target_commit = Some(runtime.metadata.target_commit.clone());
+    if journal.product_version.is_empty() {
+        journal.product_version = runtime.metadata.product_version.clone();
+    }
+    if journal.toolchains.is_empty() {
+        journal.toolchains = runtime.metadata.toolchains.clone();
+    }
+    journal.phase = BootstrapJournalPhase::Launching;
+    persist_bootstrap_journal(paths, &journal)?;
+    let launch = desktop_launch_spec(paths, &runtime);
+    journal.launch_attempted = true;
+    persist_bootstrap_journal(paths, &journal)?;
+    if let Err(error) = launcher.launch(&launch) {
+        journal.failure = Some(error.to_string());
+        return finish_result(
+            paths,
+            logger,
+            &operation_id,
+            options,
+            started_at_ms,
+            journal,
+            BootstrapStatus::LaunchFailed {
+                reason: error.to_string(),
+                version_dir: runtime.version_dir,
+            },
+            Some(runtime.metadata.target_commit),
+            runtime.metadata.toolchains,
+            true,
+            false,
+        );
+    }
+    journal.launch_handoff_completed = true;
+    finish_result(
+        paths,
+        logger,
+        &operation_id,
+        options,
+        started_at_ms,
+        journal,
+        BootstrapStatus::Installed {
+            commit: runtime.metadata.target_commit.clone(),
+            product_version: runtime.metadata.product_version,
+            version_dir: runtime.version_dir,
+        },
+        Some(runtime.metadata.target_commit),
+        runtime.metadata.toolchains,
+        true,
+        true,
+    )
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "PascalCase")]
 enum BootstrapJournalStatus {
     Running,
     Completed,
     Failed,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "PascalCase")]
+enum BootstrapJournalPhase {
+    Recovering,
+    Detecting,
+    Building,
+    Activating,
+    Launching,
+    Completed,
+    Failed,
+}
+
+impl Default for BootstrapJournalPhase {
+    fn default() -> Self {
+        Self::Recovering
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -127,7 +325,19 @@ struct BootstrapJournal {
     status: BootstrapJournalStatus,
     started_at_ms: u128,
     finished_at_ms: Option<u128>,
+    #[serde(default)]
+    phase: BootstrapJournalPhase,
     target_commit: Option<String>,
+    #[serde(default)]
+    product_version: String,
+    #[serde(default)]
+    toolchains: BTreeMap<String, String>,
+    #[serde(default)]
+    activation_completed: bool,
+    #[serde(default)]
+    launch_attempted: bool,
+    #[serde(default)]
+    launch_handoff_completed: bool,
     failure: Option<String>,
 }
 
@@ -180,27 +390,17 @@ impl<D: DownloadClient, P: ProcessRunner, L: DetachedLauncher> BootstrapInstalle
             launcher,
             logger,
         } = self;
-        let operation_id = Uuid::new_v4().simple().to_string();
-        let started_at_ms = now_ms();
-        let mut journal = BootstrapJournal {
-            schema_version: 1,
-            operation_id: operation_id.clone(),
-            operation: OperationKind::Install,
-            status: BootstrapJournalStatus::Running,
-            started_at_ms,
-            finished_at_ms: None,
-            target_commit: None,
-            failure: None,
-        };
-
         // The parent directory is state-owned; opening the lock creates only
         // that directory before any recovery or install decisions.
         let lock = InstallationLock::acquire(paths.lock_path(), "phase6-install")?;
         let store = StateStore::new(paths.clone());
-        crate::state::atomic_write_json(&paths.bootstrap_operation_path(), &journal)?;
         let activation = ActivationEngine::new(paths.clone());
         let recovery_config = ActivationConfig::for_paths(&paths, PathBuf::new());
+        let previous_journal = load_bootstrap_journal(&paths)?;
         if let Err(error) = activation.recover_with_lock(&recovery_config, checker, &lock) {
+            let journal = previous_journal.unwrap_or_else(|| {
+                new_bootstrap_journal(&options, Uuid::new_v4().simple().to_string())
+            });
             let status = if matches!(&error, ActivationError::ReviewRequired(_)) {
                 BootstrapStatus::ReviewRequired {
                     reason: error.to_string(),
@@ -225,7 +425,40 @@ impl<D: DownloadClient, P: ProcessRunner, L: DetachedLauncher> BootstrapInstalle
             );
         }
 
+        if let Some(previous) = previous_journal {
+            if previous.status == BootstrapJournalStatus::Running
+                && !previous.launch_handoff_completed
+                && (previous.activation_completed
+                    || activation_target_is_current(&activation, &previous))
+            {
+                return reconcile_running_activation(
+                    &paths,
+                    &options,
+                    previous,
+                    &activation,
+                    &launcher,
+                    logger.as_ref(),
+                );
+            }
+            if previous.status == BootstrapJournalStatus::Running {
+                let mut interrupted = previous;
+                interrupted.status = BootstrapJournalStatus::Failed;
+                interrupted.phase = BootstrapJournalPhase::Failed;
+                interrupted.finished_at_ms = Some(now_ms());
+                interrupted.failure =
+                    Some("interrupted before activation; low-level recovery completed".to_owned());
+                persist_bootstrap_journal(&paths, &interrupted)?;
+            }
+        }
+
+        let operation_id = Uuid::new_v4().simple().to_string();
+        let started_at_ms = now_ms();
+        let mut journal = new_bootstrap_journal(&options, operation_id.clone());
+        persist_bootstrap_journal(&paths, &journal)?;
+
         store.initialize()?;
+        journal.phase = BootstrapJournalPhase::Detecting;
+        persist_bootstrap_journal(&paths, &journal)?;
         let installation = store.load_installation()?;
         if let Some(commit) = installation.current_commit.clone() {
             match activation.resolve_current() {
@@ -272,6 +505,8 @@ impl<D: DownloadClient, P: ProcessRunner, L: DetachedLauncher> BootstrapInstalle
             }
         }
 
+        journal.phase = BootstrapJournalPhase::Building;
+        persist_bootstrap_journal(&paths, &journal)?;
         let build_config = BuildConfig::new(
             options.remote_url.clone(),
             options.product_version.clone(),
@@ -302,10 +537,33 @@ impl<D: DownloadClient, P: ProcessRunner, L: DetachedLauncher> BootstrapInstalle
             }
         };
         journal.target_commit = Some(build.target_commit.clone());
-        crate::state::atomic_write_json(&paths.bootstrap_operation_path(), &journal)?;
+        journal.product_version = build.product_version.clone();
+        journal.toolchains = build.toolchains.clone();
+        journal.phase = BootstrapJournalPhase::Activating;
+        persist_bootstrap_journal(&paths, &journal)?;
         let result_path = pipeline.result_path_for(&build)?;
         let toolchain_ids = build.toolchains.clone();
-        let java_binary = resolve_build_java(&paths, &build)?;
+        let java_binary = match resolve_build_java(&paths, &build) {
+            Ok(path) => path,
+            Err(error) => {
+                journal.failure = Some(error.to_string());
+                return finish_result(
+                    &paths,
+                    logger.as_ref(),
+                    &operation_id,
+                    &options,
+                    started_at_ms,
+                    journal,
+                    BootstrapStatus::ActivationFailed {
+                        reason: error.to_string(),
+                    },
+                    Some(build.target_commit),
+                    toolchain_ids,
+                    false,
+                    false,
+                );
+            }
+        };
         let activation_config = ActivationConfig::for_paths(&paths, java_binary);
         let mut hooks = NoopActivationHooks;
         let runtime = match activation.activate_with_lock(
@@ -342,25 +600,12 @@ impl<D: DownloadClient, P: ProcessRunner, L: DetachedLauncher> BootstrapInstalle
             }
         };
 
-        let launch = DetachedLaunchSpec::new(runtime.desktop_executable.clone())
-            .current_dir(runtime.version_dir.clone())
-            .env("HARMONIA_RUNTIME_MODE", "installed")
-            .env(
-                "HARMONIA_ACTIVE_VERSION_DIR",
-                runtime.version_dir.display().to_string(),
-            )
-            .env(
-                "HARMONIA_BACKEND_JAR",
-                runtime.backend_jar.display().to_string(),
-            )
-            .env(
-                "HARMONIA_JAVA_BINARY",
-                runtime.java_binary.display().to_string(),
-            )
-            .env(
-                "HARMONIA_WORKSPACE",
-                paths.user_data_root.display().to_string(),
-            );
+        journal.activation_completed = true;
+        journal.phase = BootstrapJournalPhase::Launching;
+        persist_bootstrap_journal(&paths, &journal)?;
+        let launch = desktop_launch_spec(&paths, &runtime);
+        journal.launch_attempted = true;
+        persist_bootstrap_journal(&paths, &journal)?;
         if let Err(error) = launcher.launch(&launch) {
             journal.failure = Some(error.to_string());
             let status = BootstrapStatus::LaunchFailed {
@@ -382,6 +627,7 @@ impl<D: DownloadClient, P: ProcessRunner, L: DetachedLauncher> BootstrapInstalle
             );
         }
 
+        journal.launch_handoff_completed = true;
         let status = BootstrapStatus::Installed {
             commit: build.target_commit.clone(),
             product_version: build.product_version.clone(),
@@ -401,6 +647,17 @@ impl<D: DownloadClient, P: ProcessRunner, L: DetachedLauncher> BootstrapInstalle
             true,
         )
     }
+}
+
+fn activation_target_is_current(activation: &ActivationEngine, journal: &BootstrapJournal) -> bool {
+    let Some(target) = journal.target_commit.as_deref() else {
+        return false;
+    };
+    activation
+        .resolve_current()
+        .ok()
+        .flatten()
+        .is_some_and(|runtime| runtime.metadata.target_commit == target)
 }
 
 // This is the single terminalization boundary for the bootstrap journal and
@@ -429,8 +686,19 @@ fn finish_result(
         BootstrapJournalStatus::Failed
     };
     journal.status = terminal;
+    journal.phase = if journal.status == BootstrapJournalStatus::Completed {
+        BootstrapJournalPhase::Completed
+    } else {
+        BootstrapJournalPhase::Failed
+    };
     journal.finished_at_ms = Some(now_ms());
     journal.target_commit = target_commit.clone();
+    journal.toolchains = toolchains.clone();
+    journal.activation_completed |= activation_succeeded;
+    journal.launch_handoff_completed |= launch_succeeded;
+    if journal.product_version.is_empty() {
+        journal.product_version = options.product_version.clone();
+    }
     if journal.failure.is_none() {
         journal.failure = match &status {
             BootstrapStatus::Installed { .. } | BootstrapStatus::AlreadyInstalled { .. } => None,
@@ -451,7 +719,7 @@ fn finish_result(
                 ("target_commit".to_owned(), json!(target_commit.clone())),
                 (
                     "product_version".to_owned(),
-                    json!(options.product_version.clone()),
+                    json!(journal.product_version.clone()),
                 ),
                 ("platform".to_owned(), json!(paths.platform.as_str())),
                 (
@@ -475,7 +743,7 @@ fn finish_result(
     Ok(BootstrapResult {
         operation_id: operation_id.to_owned(),
         target_commit,
-        product_version: options.product_version.clone(),
+        product_version: journal.product_version,
         platform: paths.platform.as_str().to_owned(),
         architecture: paths.architecture.as_str().to_owned(),
         toolchains,
@@ -793,11 +1061,18 @@ mod tests {
     #[derive(Clone, Default)]
     struct RecordingLauncher {
         last: Arc<Mutex<Option<DetachedLaunchSpec>>>,
+        fail: bool,
     }
 
     impl DetachedLauncher for RecordingLauncher {
         fn launch(&self, spec: &DetachedLaunchSpec) -> Result<DetachedLaunch, DetachedLaunchError> {
             *self.last.lock().unwrap() = Some(spec.clone());
+            if self.fail {
+                return Err(DetachedLaunchError::Spawn {
+                    program: spec.program.display().to_string(),
+                    source: io::Error::other("controlled launch failure"),
+                });
+            }
             Ok(DetachedLaunch { process_id: 7 })
         }
     }
@@ -815,12 +1090,128 @@ mod tests {
         }
     }
 
+    struct UnhealthyFixture;
+
+    impl HealthChecker for UnhealthyFixture {
+        fn check(
+            &self,
+            _version_dir: &Path,
+            _metadata: &crate::VersionMetadata,
+            _config: &ActivationConfig,
+        ) -> Result<(), ActivationError> {
+            Err(ActivationError::HealthCheck(
+                "controlled unhealthy backend".to_owned(),
+            ))
+        }
+    }
+
+    struct FixtureDefinition {
+        paths: InstallationPaths,
+        remote_url: String,
+        target: String,
+        jdk: crate::ToolchainDescriptor,
+        node: crate::ToolchainDescriptor,
+        downloader: FixtureDownloader,
+    }
+
+    fn fixture_definition(root: &Path) -> FixtureDefinition {
+        let paths = test_paths(root);
+        let remote_path = root.join("remote");
+        let repository = Repository::init(&remote_path).unwrap();
+        for (relative, contents) in [
+            ("frontend/package.json", br#"{"scripts":{"build":"vite build"}}"#.as_slice()),
+            ("frontend/package-lock.json", br#"{"lockfileVersion":3}"#.as_slice()),
+            (
+                "apps/desktop/package.json",
+                br#"{"scripts":{"build":"tsc","package":"node package"}}"#.as_slice(),
+            ),
+            (
+                "apps/desktop/package-lock.json",
+                br#"{"lockfileVersion":3}"#.as_slice(),
+            ),
+            ("pom.xml", b"<project/>".as_slice()),
+            (
+                ".mvn/wrapper/maven-wrapper.properties",
+                b"distributionType=only-script\ndistributionSha256Sum=0000000000000000000000000000000000000000000000000000000000000000\n".as_slice(),
+            ),
+            ("mvnw", b"#!/bin/sh\n".as_slice()),
+        ] {
+            let path = remote_path.join(relative);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, contents).unwrap();
+        }
+        let mut index = repository.index().unwrap();
+        index.add_all(["."], IndexAddOption::DEFAULT, None).unwrap();
+        let tree_id = index.write_tree().unwrap();
+        let tree = repository.find_tree(tree_id).unwrap();
+        let signature = Signature::now("Harmonia test", "test@example.invalid").unwrap();
+        let target = repository
+            .commit(
+                Some("refs/heads/main"),
+                &signature,
+                &signature,
+                "bootstrap fixture",
+                &tree,
+                &[],
+            )
+            .unwrap()
+            .to_string();
+        let remote_url = reqwest::Url::from_file_path(&remote_path)
+            .unwrap()
+            .to_string();
+        let jdk_archive = tar_gz(&[("jdk-21/bin/java", b"java", 0o100755)]);
+        let node_archive = tar_gz(&[
+            ("node-24/bin/node", b"node", 0o100755),
+            ("node-24/bin/npm", b"npm", 0o100755),
+        ]);
+        let jdk_url = "https://fixture.invalid/jdk.tar.gz".to_owned();
+        let node_url = "https://fixture.invalid/node.tar.gz".to_owned();
+        let jdk = crate::ToolchainDescriptor::new(
+            crate::ToolchainKind::Jdk,
+            "21.0.1",
+            Platform::Linux,
+            TargetArchitecture::X64,
+            jdk_url.clone(),
+            sha256(&jdk_archive),
+            crate::ArchiveFormat::TarGz,
+        )
+        .home_dir("jdk-21")
+        .executable("java", "jdk-21/bin/java");
+        let node = crate::ToolchainDescriptor::new(
+            crate::ToolchainKind::Node,
+            "24.15.0",
+            Platform::Linux,
+            TargetArchitecture::X64,
+            node_url.clone(),
+            sha256(&node_archive),
+            crate::ArchiveFormat::TarGz,
+        )
+        .home_dir("node-24")
+        .executable("node", "node-24/bin/node")
+        .executable("npm", "node-24/bin/npm");
+        FixtureDefinition {
+            paths,
+            remote_url,
+            target,
+            jdk,
+            node,
+            downloader: FixtureDownloader {
+                archives: BTreeMap::from([(jdk_url, jdk_archive), (node_url, node_archive)]),
+            },
+        }
+    }
+
     #[test]
     fn controlled_local_git_fixture_completes_fresh_install_and_handoff() {
         let root = tempdir().unwrap();
-        let paths = test_paths(root.path());
-        let remote_path = root.path().join("remote");
+        let workspace = root.path().join("install root with spaces");
+        fs::create_dir_all(&workspace).unwrap();
+        let paths = test_paths(&workspace);
+        let remote_path = workspace.join("remote");
         let repository = Repository::init(&remote_path).unwrap();
+        fs::create_dir_all(&paths.user_data_root).unwrap();
+        let legacy_file = paths.user_data_root.join("legacy data.txt");
+        fs::write(&legacy_file, b"preserve").unwrap();
         for (relative, contents) in [
             ("frontend/package.json", br#"{"scripts":{"build":"vite build"}}"#.as_slice()),
             ("frontend/package-lock.json", br#"{"lockfileVersion":3}"#.as_slice()),
@@ -886,6 +1277,8 @@ mod tests {
         .home_dir("node-24")
         .executable("node", "node-24/bin/node")
         .executable("npm", "node-24/bin/npm");
+        let restart_jdk = jdk.clone();
+        let restart_node = node.clone();
         let launcher = RecordingLauncher::default();
         let result = BootstrapInstaller::new(
             paths.clone(),
@@ -920,7 +1313,135 @@ mod tests {
             launch.environment.get("HARMONIA_RUNTIME_MODE"),
             Some(&"installed".to_owned())
         );
+        assert_eq!(
+            launch.environment.get("HARMONIA_USER_DATA_ROOT"),
+            Some(&paths.user_data_root.display().to_string())
+        );
+        assert_eq!(
+            launch.environment.get("HARMONIA_WORKSPACE"),
+            Some(&paths.user_data_root.display().to_string())
+        );
         assert!(launch.program.is_file());
+        assert_eq!(fs::read(&legacy_file).unwrap(), b"preserve");
+
+        let journal_path = paths.bootstrap_operation_path();
+        let mut journal: BootstrapJournal =
+            serde_json::from_slice(&fs::read(&journal_path).unwrap()).unwrap();
+        let original_operation_id = journal.operation_id.clone();
+        journal.status = BootstrapJournalStatus::Running;
+        journal.phase = BootstrapJournalPhase::Activating;
+        journal.finished_at_ms = None;
+        journal.activation_completed = true;
+        journal.launch_attempted = false;
+        journal.launch_handoff_completed = false;
+        journal.failure = None;
+        persist_bootstrap_journal(&paths, &journal).unwrap();
+
+        let resumed_launcher = RecordingLauncher::default();
+        let resumed = BootstrapInstaller::new(
+            paths.clone(),
+            NoopDownloader,
+            NoopRunner,
+            resumed_launcher.clone(),
+            None,
+        )
+        .install_with_descriptors(
+            BootstrapOptions::default(),
+            restart_jdk,
+            restart_node,
+            &HealthyFixture,
+        )
+        .unwrap();
+        assert!(matches!(resumed.status, BootstrapStatus::Installed { .. }));
+        assert_eq!(resumed.operation_id, original_operation_id);
+        assert!(resumed.launch_succeeded);
+        let terminal: BootstrapJournal =
+            serde_json::from_slice(&fs::read(journal_path).unwrap()).unwrap();
+        assert_eq!(terminal.status, BootstrapJournalStatus::Completed);
+        assert_eq!(terminal.phase, BootstrapJournalPhase::Completed);
+        assert!(terminal.launch_handoff_completed);
+        assert!(resumed_launcher.last.lock().unwrap().is_some());
+    }
+
+    #[test]
+    fn first_install_activation_failure_preserves_no_install_state_and_user_data() {
+        let root = tempdir().unwrap();
+        let fixture = fixture_definition(root.path());
+        fs::create_dir_all(&fixture.paths.user_data_root).unwrap();
+        let user_file = fixture.paths.user_data_root.join("keep.txt");
+        fs::write(&user_file, b"keep").unwrap();
+
+        let result = BootstrapInstaller::new(
+            fixture.paths.clone(),
+            fixture.downloader,
+            FixtureBuildRunner,
+            RecordingLauncher::default(),
+            None,
+        )
+        .install_with_descriptors(
+            BootstrapOptions {
+                remote_url: fixture.remote_url,
+                product_version: "fixture".to_owned(),
+            },
+            fixture.jdk,
+            fixture.node,
+            &UnhealthyFixture,
+        )
+        .unwrap();
+
+        assert!(matches!(
+            result.status,
+            BootstrapStatus::ActivationFailed { .. }
+        ));
+        assert!(StateStore::new(fixture.paths.clone())
+            .load_installation()
+            .unwrap()
+            .current_commit
+            .is_none());
+        assert_eq!(fs::read(user_file).unwrap(), b"keep");
+    }
+
+    #[test]
+    fn launch_failure_keeps_successfully_activated_version_healthy() {
+        let root = tempdir().unwrap();
+        let fixture = fixture_definition(root.path());
+        let launcher = RecordingLauncher {
+            fail: true,
+            ..RecordingLauncher::default()
+        };
+        let result = BootstrapInstaller::new(
+            fixture.paths.clone(),
+            fixture.downloader,
+            FixtureBuildRunner,
+            launcher,
+            None,
+        )
+        .install_with_descriptors(
+            BootstrapOptions {
+                remote_url: fixture.remote_url,
+                product_version: "fixture".to_owned(),
+            },
+            fixture.jdk,
+            fixture.node,
+            &HealthyFixture,
+        )
+        .unwrap();
+
+        assert!(matches!(
+            result.status,
+            BootstrapStatus::LaunchFailed { .. }
+        ));
+        let installation = StateStore::new(fixture.paths.clone())
+            .load_installation()
+            .unwrap();
+        assert_eq!(
+            installation.current_commit.as_deref(),
+            Some(fixture.target.as_str())
+        );
+        assert!(ActivationEngine::new(fixture.paths)
+            .resolve_current()
+            .unwrap()
+            .is_some());
     }
 
     fn tar_gz(entries: &[(&str, &[u8], u32)]) -> Vec<u8> {

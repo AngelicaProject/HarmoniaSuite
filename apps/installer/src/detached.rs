@@ -3,6 +3,7 @@ use std::env;
 use std::io;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::time::Duration;
 
 use thiserror::Error;
 
@@ -57,6 +58,11 @@ pub enum DetachedLaunchError {
     Spawn { program: String, source: io::Error },
     #[error("detached launch path is invalid: {0}")]
     InvalidPath(PathBuf),
+    #[error("detached child exited during startup for {program} (status={status:?})")]
+    ExitedEarly {
+        program: String,
+        status: Option<i32>,
+    },
 }
 
 pub trait DetachedLauncher {
@@ -65,6 +71,8 @@ pub trait DetachedLauncher {
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct SystemDetachedLauncher;
+
+const STARTUP_GRACE: Duration = Duration::from_millis(150);
 
 impl DetachedLauncher for SystemDetachedLauncher {
     fn launch(&self, spec: &DetachedLaunchSpec) -> Result<DetachedLaunch, DetachedLaunchError> {
@@ -92,12 +100,25 @@ impl DetachedLauncher for SystemDetachedLauncher {
         #[cfg(unix)]
         configure_detached_unix(&mut command);
 
-        let child = command
+        let mut child = command
             .spawn()
             .map_err(|source| DetachedLaunchError::Spawn {
                 program: spec.program.display().to_string(),
                 source,
             })?;
+        std::thread::sleep(STARTUP_GRACE);
+        if let Some(status) = child
+            .try_wait()
+            .map_err(|source| DetachedLaunchError::Spawn {
+                program: spec.program.display().to_string(),
+                source,
+            })?
+        {
+            return Err(DetachedLaunchError::ExitedEarly {
+                program: spec.program.display().to_string(),
+                status: status.code(),
+            });
+        }
         let process_id = child.id();
         // Dropping Child does not terminate a process. The child has no owner
         // containment object and all standard handles are detached/null.
@@ -166,6 +187,29 @@ mod tests {
     use std::thread;
     use std::time::Duration;
     use tempfile::tempdir;
+
+    #[test]
+    fn detached_launcher_rejects_immediate_nonzero_exit() {
+        #[cfg(unix)]
+        let command = DetachedLaunchSpec::new("/bin/sh").args(["-c", "exit 17"]);
+        #[cfg(windows)]
+        let command = {
+            let powershell = PathBuf::from(env::var_os("SystemRoot").unwrap())
+                .join("System32")
+                .join("WindowsPowerShell")
+                .join("v1.0")
+                .join("powershell.exe");
+            DetachedLaunchSpec::new(powershell).args(["-NoProfile", "-Command", "exit 17"])
+        };
+
+        assert!(matches!(
+            SystemDetachedLauncher.launch(&command),
+            Err(DetachedLaunchError::ExitedEarly {
+                status: Some(17),
+                ..
+            })
+        ));
+    }
 
     #[cfg(unix)]
     #[test]

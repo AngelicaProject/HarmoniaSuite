@@ -288,6 +288,9 @@ fn verify_checkout_head(repository: &Repository, target_sha: &str) -> Result<(),
 
 fn validate_remote_url(value: &str, allow_test_file_url: bool) -> Result<(), GitError> {
     let url = Url::parse(value).map_err(|_| GitError::InvalidRemoteUrl)?;
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err(GitError::InvalidRemoteUrl);
+    }
     let valid = (url.scheme() == "https" && url.host_str().is_some())
         || (allow_test_file_url && url.scheme() == "file");
     if valid {
@@ -428,6 +431,18 @@ mod tests {
         let resolved = source.fetch_origin_main().unwrap();
         assert_eq!(resolved.sha, expected);
         assert_eq!(source.resolve_main().unwrap().sha, expected);
+    }
+
+    #[test]
+    fn rejects_credentials_in_https_remote_urls() {
+        assert!(matches!(
+            validate_remote_url("https://user@example.invalid/repo.git", false),
+            Err(GitError::InvalidRemoteUrl)
+        ));
+        assert!(matches!(
+            validate_remote_url("https://user:secret@example.invalid/repo.git", false),
+            Err(GitError::InvalidRemoteUrl)
+        ));
     }
 
     #[test]
