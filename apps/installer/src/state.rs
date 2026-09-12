@@ -88,6 +88,12 @@ pub enum TransactionStatus {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum DatabasePreState {
+    Absent,
+    Snapshot(PathBuf),
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct InstallationState {
     pub schema_version: u32,
     pub product_version: Option<String>,
@@ -161,6 +167,10 @@ pub struct TransactionRecord {
     pub rollback_completed: bool,
     #[serde(default)]
     pub database_path: Option<PathBuf>,
+    #[serde(default)]
+    pub workspace_path: Option<PathBuf>,
+    #[serde(default)]
+    pub database_pre_state: Option<DatabasePreState>,
     #[serde(default)]
     pub pre_activation_state: Option<InstallationState>,
 }
@@ -493,6 +503,8 @@ impl Transaction {
             db_backup_required: false,
             rollback_completed: false,
             database_path: None,
+            workspace_path: None,
+            database_pre_state: None,
             pre_activation_state: None,
         };
         store.write_transaction(&record)?;
@@ -600,6 +612,16 @@ impl Transaction {
 
     pub fn set_database_path(&mut self, path: impl Into<PathBuf>) -> Result<(), StateError> {
         self.record.database_path = Some(path.into());
+        self.store.write_transaction(&self.record)
+    }
+
+    pub fn set_workspace_path(&mut self, path: impl Into<PathBuf>) -> Result<(), StateError> {
+        self.record.workspace_path = Some(path.into());
+        self.store.write_transaction(&self.record)
+    }
+
+    pub fn set_database_pre_state(&mut self, state: DatabasePreState) -> Result<(), StateError> {
+        self.record.database_pre_state = Some(state);
         self.store.write_transaction(&self.record)
     }
 
@@ -809,6 +831,52 @@ pub(crate) fn durable_replace_file(temporary: &Path, destination: &Path) -> Resu
     Ok(())
 }
 
+/// Publish an immutable directory without replacing an existing destination.
+/// The caller must have validated both paths against its managed root.
+pub(crate) fn durable_promote_directory(
+    staging: &Path,
+    destination: &Path,
+) -> Result<(), StateError> {
+    if destination.exists() {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            format!(
+                "immutable directory already exists: {}",
+                destination.display()
+            ),
+        )
+        .into());
+    }
+    #[cfg(not(windows))]
+    {
+        fs::rename(staging, destination)?;
+        if let Some(parent) = destination.parent() {
+            File::open(parent)?.sync_all()?;
+        }
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::Storage::FileSystem::{MoveFileExW, MOVEFILE_WRITE_THROUGH};
+        let source: Vec<u16> = staging
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        let target: Vec<u16> = destination
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        let result =
+            unsafe { MoveFileExW(source.as_ptr(), target.as_ptr(), MOVEFILE_WRITE_THROUGH) };
+        if result == 0 {
+            return Err(io::Error::last_os_error().into());
+        }
+    }
+    Ok(())
+}
+
 #[cfg(not(windows))]
 fn replace_file(temporary: &Path, destination: &Path) -> io::Result<()> {
     fs::rename(temporary, destination)
@@ -966,6 +1034,52 @@ mod tests {
             TransactionStatus::Failed
         ));
         assert!(Transaction::begin(store, OperationKind::Update, None, None, Vec::new()).is_ok());
+    }
+
+    #[test]
+    fn review_required_transaction_protects_all_pinned_toolchains() {
+        let store = store();
+        let mut transaction = Transaction::begin(
+            store.clone(),
+            OperationKind::Update,
+            None,
+            Some("target".to_owned()),
+            Vec::new(),
+        )
+        .unwrap();
+        transaction.pin_toolchain("jdk", "jdk-target").unwrap();
+        transaction.pin_toolchain("node", "node-target").unwrap();
+        transaction
+            .mark_review_required("rollback needs operator review")
+            .unwrap();
+
+        let protected = store.protected_toolchain_ids().unwrap();
+        assert!(protected.contains("jdk-target"));
+        assert!(protected.contains("node-target"));
+        assert!(matches!(
+            Transaction::begin(store, OperationKind::Update, None, None, Vec::new()),
+            Err(StateError::ReviewRequiredTransaction(_))
+        ));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn durable_directory_promotion_does_not_replace_immutable_destination() {
+        let root = tempdir().unwrap();
+        let staging = root.path().join("staging");
+        let destination = root.path().join("versions/target");
+        fs::create_dir_all(&staging).unwrap();
+        fs::create_dir_all(destination.parent().unwrap()).unwrap();
+        fs::write(staging.join("payload"), b"payload").unwrap();
+        durable_promote_directory(&staging, &destination).unwrap();
+        assert_eq!(fs::read(destination.join("payload")).unwrap(), b"payload");
+
+        let second = root.path().join("second");
+        fs::create_dir_all(&second).unwrap();
+        assert!(matches!(
+            durable_promote_directory(&second, &destination),
+            Err(StateError::Io(error)) if error.kind() == io::ErrorKind::AlreadyExists
+        ));
     }
 
     #[test]

@@ -224,6 +224,7 @@ impl ProcessRunner for SystemProcessRunner {
         }
         #[cfg(unix)]
         process.process_group(0);
+        configure_parent_death(&mut process);
         let mut containment = ProcessContainment::new().map_err(ProcessError::Io)?;
         let mut child = process.spawn().map_err(|source| ProcessError::Spawn {
             program: command.program.display().to_string(),
@@ -315,6 +316,7 @@ impl ProcessRunner for SystemProcessRunner {
         }
         #[cfg(unix)]
         process.process_group(0);
+        configure_parent_death(&mut process);
 
         let mut containment = ProcessContainment::new().map_err(ProcessError::Io)?;
         let mut child = process.spawn().map_err(|source| ProcessError::Spawn {
@@ -409,6 +411,35 @@ fn default_environment_allowlist() -> Vec<String> {
     let names = ["PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "LC_CTYPE"];
     names.into_iter().map(str::to_owned).collect()
 }
+
+#[cfg(target_os = "linux")]
+fn configure_parent_death(process: &mut Command) {
+    let owner_pid = std::process::id() as libc::pid_t;
+    unsafe {
+        process.pre_exec(move || {
+            if libc::getppid() != owner_pid {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Interrupted,
+                    "process owner exited before child setup",
+                ));
+            }
+            if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            if libc::getppid() != owner_pid {
+                libc::kill(libc::getpid(), libc::SIGKILL);
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Interrupted,
+                    "process owner exited during child setup",
+                ));
+            }
+            Ok(())
+        });
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn configure_parent_death(_process: &mut Command) {}
 
 struct ProcessContainment {
     #[cfg(unix)]
@@ -655,5 +686,42 @@ mod tests {
         let result = SystemProcessRunner::default().run(&command).unwrap();
         assert!(result.success());
         assert_eq!(result.stdout.len(), MAX_CAPTURE_BYTES);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn parent_death_kills_owned_health_child() {
+        if env::var_os("HARMONIA_PARENT_DEATH_HELPER").is_some() {
+            let command = CommandSpec::new("sh")
+                .args(["-c", "sleep 60"])
+                .timeout(None);
+            let process = SystemProcessRunner::default().spawn(&command).unwrap();
+            println!("{}", process.child.id());
+            std::mem::forget(process);
+            return;
+        }
+
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "process::tests::parent_death_kills_owned_health_child",
+                "--nocapture",
+            ])
+            .env("HARMONIA_PARENT_DEATH_HELPER", "1")
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "helper failed: {output:?}");
+        let child_pid = String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .find_map(|line| line.trim().parse::<libc::pid_t>().ok())
+            .expect("helper did not report child PID");
+        for _ in 0..20 {
+            let alive = unsafe { libc::kill(child_pid, 0) } == 0;
+            if !alive {
+                return;
+            }
+            thread::sleep(Duration::from_millis(25));
+        }
+        panic!("owned child {child_pid} survived owner process");
     }
 }

@@ -18,8 +18,11 @@ use crate::lock::{InstallationLock, LockError};
 use crate::paths::InstallationPaths;
 use crate::process::{CommandSpec, ManagedProcess, ProcessError, ProcessRunner};
 use crate::state::{
-    validate_managed_path, InstallationState, OperationKind, StateError, StateStore, Transaction,
-    TransactionPhase, TransactionStatus,
+    validate_managed_path, DatabasePreState, InstallationState, OperationKind, StateError,
+    StateStore, Transaction, TransactionPhase, TransactionStatus,
+};
+use crate::toolchain::{
+    ArchiveFormat, ToolchainKind, ToolchainRecord, ToolchainState, ToolchainStateStore,
 };
 
 const VERSION_METADATA_SCHEMA_VERSION: u32 = 1;
@@ -228,6 +231,8 @@ pub enum ActivationError {
     Json(#[from] serde_json::Error),
     #[error("activation process failed: {0}")]
     Process(#[from] ProcessError),
+    #[error("activation toolchain failed: {0}")]
+    Toolchain(#[from] crate::toolchain::ToolchainError),
     #[error("unsupported BuildResult schema: {0}")]
     UnsupportedBuildSchema(u32),
     #[error("invalid activation input: {0}")]
@@ -270,7 +275,13 @@ impl ActivationEngine {
         let candidate = self.validate_candidate(&result)?;
         let store = StateStore::new(self.paths.clone());
         let installation = store.load_installation()?;
-        validate_activation_path(&self.paths.user_data_root, &config.database_path)?;
+        let workspace =
+            validate_activation_path_value(&self.paths.user_data_root, &config.workspace)?;
+        let database_path =
+            validate_activation_path_value(&self.paths.user_data_root, &config.database_path)?;
+        let mut activation_config = config.clone();
+        activation_config.workspace = workspace.clone();
+        activation_config.database_path = database_path.clone();
         let mut transaction = Transaction::begin(
             store.clone(),
             OperationKind::Update,
@@ -279,11 +290,19 @@ impl ActivationEngine {
             Vec::new(),
         )?;
         transaction.set_pre_activation_state(installation.clone())?;
-        transaction.set_database_path(config.database_path.clone())?;
+        transaction.set_workspace_path(workspace)?;
+        transaction.set_database_path(database_path)?;
+        for (kind, id) in &result.toolchains {
+            if let Err(error) = transaction.pin_toolchain(kind.clone(), id.clone()) {
+                let reason = format!("failed to pin transaction toolchain {kind}={id}: {error}");
+                let _ = transaction.mark_review_required(reason);
+                return Err(error.into());
+            }
+        }
         let activation = self.activate_transaction(
             &result,
             &candidate,
-            config,
+            &activation_config,
             hooks,
             checker,
             &mut transaction,
@@ -304,9 +323,20 @@ impl ActivationEngine {
                         }
                     }
                 } else {
-                    let _ = transaction.cleanup_owned_paths();
-                    let _ =
+                    let cleanup = transaction.cleanup_owned_paths();
+                    let clear =
                         self.clear_pending_version(transaction.record().target_commit.as_deref());
+                    let recovery_error = cleanup
+                        .err()
+                        .map(|error| error.to_string())
+                        .or_else(|| clear.err().map(|error| error.to_string()));
+                    if let Some(recovery_error) = recovery_error {
+                        let reason = format!(
+                            "pre-activation cleanup/state restoration failed and requires review: {recovery_error}"
+                        );
+                        let _ = transaction.mark_review_required(reason.clone());
+                        return Err(ActivationError::ReviewRequired(reason));
+                    }
                 }
                 let _ = transaction.fail(error.to_string());
                 Err(error)
@@ -340,7 +370,10 @@ impl ActivationEngine {
             &transaction.record().id,
         )? {
             transaction.mark_db_backup_required()?;
-            transaction.set_db_backup_path(snapshot.directory)?;
+            transaction.set_db_backup_path(snapshot.directory.clone())?;
+            transaction.set_database_pre_state(DatabasePreState::Snapshot(snapshot.directory))?;
+        } else {
+            transaction.set_database_pre_state(DatabasePreState::Absent)?;
         }
 
         transaction.transition(TransactionPhase::Activating)?;
@@ -383,6 +416,7 @@ impl ActivationEngine {
         ));
         validate_activation_path(&self.paths.versions_dir(), &final_dir)?;
         validate_activation_path(&self.paths.versions_dir(), &staging_dir)?;
+        let managed_java = self.resolve_build_jdk(result, config)?;
         transaction.own_path(&staging_dir)?;
         if final_dir.exists() {
             if !self.version_matches_result(&final_dir, result)? {
@@ -424,7 +458,6 @@ impl ActivationEngine {
             ));
         }
         require_executable(&executable)?;
-        let managed_java = validate_managed_java(&self.paths, &config.java_binary)?;
         let metadata = VersionMetadata {
             schema_version: VERSION_METADATA_SCHEMA_VERSION,
             target_commit: result.target_commit.clone(),
@@ -466,9 +499,44 @@ impl ActivationEngine {
         if let Some(parent) = final_dir.parent() {
             fs::create_dir_all(parent)?;
         }
-        fs::rename(&staging_dir, &final_dir)?;
-        sync_directory(&self.paths.versions_dir())?;
+        crate::state::durable_promote_directory(&staging_dir, &final_dir)?;
         Ok(final_dir)
+    }
+
+    fn resolve_build_jdk(
+        &self,
+        result: &BuildResult,
+        config: &ActivationConfig,
+    ) -> Result<PathBuf, ActivationError> {
+        let jdk_id = result.toolchains.get("jdk").ok_or_else(|| {
+            ActivationError::InvalidInput("BuildResult is missing jdk toolchain ID".to_owned())
+        })?;
+        let resolved = ToolchainStateStore::new(self.paths.clone()).resolve(jdk_id)?;
+        if resolved.kind != ToolchainKind::Jdk {
+            return Err(ActivationError::InvalidInput(format!(
+                "BuildResult jdk ID {jdk_id:?} does not resolve to a JDK"
+            )));
+        }
+        let java = resolved.executable("java").ok_or_else(|| {
+            ActivationError::InvalidInput(format!("managed JDK {jdk_id:?} has no java executable"))
+        })?;
+        if !require_executable_result(java) {
+            return Err(ActivationError::InvalidInput(
+                "managed JDK java executable is not runnable".to_owned(),
+            ));
+        }
+        let supplied = absolute_path(&config.java_binary)?;
+        if supplied != java {
+            return Err(ActivationError::InvalidInput(
+                "ActivationConfig.java_binary must exactly match the BuildResult managed JDK"
+                    .to_owned(),
+            ));
+        }
+        java.strip_prefix(&self.paths.app_root)
+            .map(PathBuf::from)
+            .map_err(|_| {
+                ActivationError::InvalidInput("managed JDK is outside app root".to_owned())
+            })
     }
 
     fn switch_current(
@@ -516,8 +584,23 @@ impl ActivationEngine {
                     "transaction has no pre-activation installation snapshot".to_owned(),
                 )
             })?;
-        if let Some(backup) = transaction.record().db_backup_path.clone() {
-            DatabaseSnapshot::restore(&backup, &self.paths.user_data_root)?;
+        let database_path = transaction
+            .record()
+            .database_path
+            .clone()
+            .unwrap_or_else(|| config.database_path.clone());
+        match transaction.record().database_pre_state.clone() {
+            Some(DatabasePreState::Snapshot(backup)) => {
+                DatabaseSnapshot::restore(&backup, &self.paths.user_data_root)?;
+            }
+            Some(DatabasePreState::Absent) => {
+                remove_database_files(&self.paths.user_data_root, &database_path)?;
+            }
+            None => {
+                if let Some(backup) = transaction.record().db_backup_path.clone() {
+                    DatabaseSnapshot::restore(&backup, &self.paths.user_data_root)?;
+                }
+            }
         }
         store.save_installation(&snapshot)?;
         if let Some(commit) = snapshot.current_commit.as_deref() {
@@ -596,8 +679,18 @@ impl ActivationEngine {
         }
         let mut transaction = Transaction::resume_existing(store.clone(), record.clone());
         if !record.activation_started {
-            transaction.cleanup_owned_paths()?;
-            self.clear_pending_version(record.target_commit.as_deref())?;
+            let cleanup = transaction.cleanup_owned_paths();
+            let clear = self.clear_pending_version(record.target_commit.as_deref());
+            let error = cleanup
+                .err()
+                .map(|error| error.to_string())
+                .or_else(|| clear.err().map(|error| error.to_string()));
+            if let Some(error) = error {
+                let reason =
+                    format!("pre-activation recovery cleanup/state restoration failed: {error}");
+                let _ = transaction.mark_review_required(reason.clone());
+                return Err(ActivationError::ReviewRequired(reason));
+            }
             transaction.fail("recovered interrupted pre-activation transaction")?;
             return Ok(());
         }
@@ -609,7 +702,7 @@ impl ActivationEngine {
             Some(target) => target,
             None => {
                 let reason = "activation target is missing".to_owned();
-                let _ = transaction.fail(reason.clone());
+                let _ = transaction.mark_review_required(reason.clone());
                 return Err(ActivationError::ReviewRequired(reason));
             }
         };
@@ -617,7 +710,11 @@ impl ActivationEngine {
         if installation.current_commit.as_deref() == Some(target.as_str())
             && record.health_check_passed
         {
-            self.clear_pending_version(Some(&target))?;
+            if let Err(error) = self.clear_pending_version(Some(&target)) {
+                let reason = format!("failed to clear pending activation state: {error}");
+                let _ = transaction.mark_review_required(reason.clone());
+                return Err(ActivationError::ReviewRequired(reason));
+            }
             transaction.complete()?;
             return Ok(());
         }
@@ -627,8 +724,21 @@ impl ActivationEngine {
             return Err(ActivationError::ReviewRequired(reason));
         }
         let mut recovery_config = config.clone();
-        if let Some(database_path) = record.database_path.clone() {
-            recovery_config.database_path = database_path;
+        let recovery_paths = (|| -> Result<(), ActivationError> {
+            if let Some(workspace) = record.workspace_path.clone() {
+                recovery_config.workspace =
+                    validate_activation_path_value(&self.paths.user_data_root, &workspace)?;
+            }
+            if let Some(database_path) = record.database_path.clone() {
+                recovery_config.database_path =
+                    validate_activation_path_value(&self.paths.user_data_root, &database_path)?;
+            }
+            Ok(())
+        })();
+        if let Err(error) = recovery_paths {
+            let reason = format!("journaled runtime data path validation failed: {error}");
+            let _ = transaction.mark_review_required(reason.clone());
+            return Err(ActivationError::ReviewRequired(reason));
         }
         if let Err(error) = self.rollback_transaction(&mut transaction, &recovery_config, checker) {
             let reason = format!("recovery rollback failed: {error}");
@@ -717,6 +827,7 @@ impl ActivationEngine {
             || metadata.product_version != result.product_version
             || metadata.desktop_artifact_sha256 != result.desktop.sha256
             || metadata.backend_artifact_sha256 != result.backend.sha256
+            || metadata.toolchains != result.toolchains
         {
             return Ok(false);
         }
@@ -779,14 +890,7 @@ impl ActivationEngine {
                 .is_file()
             && require_executable_result(&version_dir.join(&metadata.runtime.desktop_executable))
             && version_dir.join(&metadata.runtime.backend_jar).is_file()
-            && validate_managed_java(
-                &self.paths,
-                &self
-                    .paths
-                    .app_root
-                    .join(&metadata.runtime.managed_java_binary),
-            )
-            .is_ok()
+            && validate_version_jdk(&self.paths, metadata).is_ok()
             && hash_directory(&version_dir.join("desktop"))
                 .map(|hash| hash == metadata.desktop_artifact_sha256)
                 .unwrap_or(false)
@@ -817,8 +921,17 @@ impl DatabaseSnapshot {
         database_path: &Path,
         transaction_id: &str,
     ) -> Result<Option<SnapshotInfo>, ActivationError> {
-        if !database_path.exists() {
+        let sidecars = [
+            PathBuf::from(format!("{}-wal", database_path.display())),
+            PathBuf::from(format!("{}-shm", database_path.display())),
+        ];
+        if !database_path.exists() && sidecars.iter().all(|path| !path.exists()) {
             return Ok(None);
+        }
+        if !database_path.is_file() {
+            return Err(ActivationError::InvalidInput(
+                "database sidecar exists without a regular primary database".to_owned(),
+            ));
         }
         validate_activation_path(user_data_root, database_path)?;
         let database_relative = database_path
@@ -1175,28 +1288,34 @@ fn require_executable_result(path: &Path) -> bool {
     }
 }
 
-fn validate_managed_java(
+fn validate_version_jdk(
     paths: &InstallationPaths,
-    java_binary: &Path,
-) -> Result<PathBuf, ActivationError> {
-    let java_binary = absolute_path(java_binary)?;
-    let jdk_root = paths.toolchain_dir().join("jdk");
-    validate_activation_path(&jdk_root, &java_binary)?;
-    if !java_binary.is_file() {
+    metadata: &VersionMetadata,
+) -> Result<(), ActivationError> {
+    let jdk_id = metadata.toolchains.get("jdk").ok_or_else(|| {
+        ActivationError::InvalidInput("version metadata is missing jdk ID".to_owned())
+    })?;
+    let resolved = ToolchainStateStore::new(paths.clone()).resolve(jdk_id)?;
+    if resolved.kind != ToolchainKind::Jdk {
         return Err(ActivationError::InvalidInput(
-            "managed JDK binary is missing".to_owned(),
+            "version metadata jdk ID is not a JDK".to_owned(),
         ));
     }
-    #[cfg(unix)]
-    if !require_executable_result(&java_binary) {
+    let java = resolved.executable("java").ok_or_else(|| {
+        ActivationError::InvalidInput("managed JDK has no java executable".to_owned())
+    })?;
+    if !require_executable_result(java) {
         return Err(ActivationError::InvalidInput(
-            "managed JDK binary is not executable".to_owned(),
+            "managed JDK java executable is not runnable".to_owned(),
         ));
     }
-    java_binary
-        .strip_prefix(&paths.app_root)
-        .map(PathBuf::from)
-        .map_err(|_| ActivationError::InvalidInput("managed JDK is outside app root".to_owned()))
+    let metadata_java = paths.app_root.join(&metadata.runtime.managed_java_binary);
+    if metadata_java != java {
+        return Err(ActivationError::InvalidInput(
+            "version metadata Java path does not match its JDK record".to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 fn absolute_path(path: &Path) -> Result<PathBuf, ActivationError> {
@@ -1208,11 +1327,41 @@ fn absolute_path(path: &Path) -> Result<PathBuf, ActivationError> {
 }
 
 fn validate_activation_path(root: &Path, path: &Path) -> Result<(), ActivationError> {
+    validate_activation_path_value(root, path).map(|_| ())
+}
+
+fn validate_activation_path_value(root: &Path, path: &Path) -> Result<PathBuf, ActivationError> {
     let root = absolute_path(root)?;
     let path = absolute_path(path)?;
     validate_managed_path(&root, &path)
-        .map(|_| ())
+        .map(|_| path)
         .map_err(ActivationError::State)
+}
+
+fn remove_database_files(
+    user_data_root: &Path,
+    database_path: &Path,
+) -> Result<(), ActivationError> {
+    for suffix in ["", "-wal", "-shm"] {
+        let path = if suffix.is_empty() {
+            database_path.to_path_buf()
+        } else {
+            PathBuf::from(format!("{}{}", database_path.display(), suffix))
+        };
+        let path = validate_activation_path_value(user_data_root, &path)?;
+        match fs::symlink_metadata(&path) {
+            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+                return Err(ActivationError::ReviewRequired(format!(
+                    "database pre-state path is not a regular file: {}",
+                    path.display()
+                )));
+            }
+            Ok(_) => fs::remove_file(path)?,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(())
 }
 
 fn sync_directory(path: &Path) -> io::Result<()> {
@@ -1357,6 +1506,56 @@ mod tests {
     }
 
     #[test]
+    fn recovery_uses_journaled_workspace_instead_of_new_caller_config() {
+        let root = tempdir().unwrap();
+        let paths = paths(root.path());
+        let engine = ActivationEngine::new(paths.clone());
+        let mut hooks = NoopActivationHooks;
+        let (first_path, first) = fixture_result(&paths, &"a".repeat(40), "tx-a");
+        engine
+            .activate(
+                first_path,
+                &fixture_config(&paths),
+                &mut hooks,
+                &FixtureHealthChecker {
+                    healthy: true,
+                    fail_commit: None,
+                },
+            )
+            .unwrap();
+
+        let store = StateStore::new(paths.clone());
+        let custom_workspace = paths.user_data_root.join("workspace/custom");
+        fs::create_dir_all(&custom_workspace).unwrap();
+        let mut transaction = Transaction::begin(
+            store.clone(),
+            OperationKind::Update,
+            Some(first.target_commit.clone()),
+            Some("b".repeat(40)),
+            Vec::new(),
+        )
+        .unwrap();
+        transaction
+            .set_pre_activation_state(store.load_installation().unwrap())
+            .unwrap();
+        transaction
+            .set_workspace_path(custom_workspace.clone())
+            .unwrap();
+        transaction.mark_activation_started().unwrap();
+        drop(transaction);
+
+        let caller_config = fixture_config(&paths);
+        engine
+            .recover_with_health_checker(
+                &caller_config,
+                &WorkspaceHealthChecker {
+                    expected: custom_workspace,
+                },
+            )
+            .unwrap();
+    }
+
+    #[test]
     fn managed_candidate_path_rejects_traversal() {
         let root = tempdir().unwrap();
         let managed = root.path().join("build/candidates/commit");
@@ -1408,6 +1607,64 @@ mod tests {
 
     struct DatabasePathHealthChecker {
         expected: PathBuf,
+    }
+
+    struct WorkspaceHealthChecker {
+        expected: PathBuf,
+    }
+
+    impl HealthChecker for WorkspaceHealthChecker {
+        fn check(
+            &self,
+            _version_dir: &Path,
+            _metadata: &VersionMetadata,
+            config: &ActivationConfig,
+        ) -> Result<(), ActivationError> {
+            if config.workspace == self.expected {
+                Ok(())
+            } else {
+                Err(ActivationError::HealthCheck(format!(
+                    "unexpected workspace: {}",
+                    config.workspace.display()
+                )))
+            }
+        }
+    }
+
+    struct CreatesDatabaseThenFails {
+        failing_commit: String,
+        database: PathBuf,
+    }
+
+    impl HealthChecker for CreatesDatabaseThenFails {
+        fn check(
+            &self,
+            _version_dir: &Path,
+            metadata: &VersionMetadata,
+            _config: &ActivationConfig,
+        ) -> Result<(), ActivationError> {
+            if metadata.target_commit == self.failing_commit {
+                fs::create_dir_all(self.database.parent().unwrap()).unwrap();
+                fs::write(&self.database, b"created-by-failed-backend").unwrap();
+                fs::write(
+                    PathBuf::from(format!("{}-wal", self.database.display())),
+                    b"wal",
+                )
+                .unwrap();
+                fs::write(
+                    PathBuf::from(format!("{}-shm", self.database.display())),
+                    b"shm",
+                )
+                .unwrap();
+                return Err(ActivationError::HealthCheck(
+                    "failed backend created a database".to_owned(),
+                ));
+            }
+            assert!(!self.database.exists());
+            assert!(!PathBuf::from(format!("{}-wal", self.database.display())).exists());
+            assert!(!PathBuf::from(format!("{}-shm", self.database.display())).exists());
+            Ok(())
+        }
     }
 
     impl HealthChecker for DatabasePathHealthChecker {
@@ -1524,6 +1781,27 @@ mod tests {
             use std::os::unix::fs::PermissionsExt;
             fs::set_permissions(&java, fs::Permissions::from_mode(0o755)).unwrap();
         }
+        let mut state = ToolchainState::default();
+        state.records.insert(
+            "jdk-test".to_owned(),
+            ToolchainRecord {
+                id: "jdk-test".to_owned(),
+                kind: ToolchainKind::Jdk,
+                version: "test".to_owned(),
+                platform: paths.platform,
+                architecture: paths.architecture.clone(),
+                url: "https://example.invalid/jdk-test.tar.gz".to_owned(),
+                sha256: "a".repeat(64),
+                archive: ArchiveFormat::TarGz,
+                home_dir: PathBuf::from("."),
+                install_dir: PathBuf::from("toolchain/jdk"),
+                executables: BTreeMap::from([(String::from("java"), PathBuf::from("bin/java"))]),
+                installed_at_ms: 1,
+            },
+        );
+        ToolchainStateStore::new(paths.clone())
+            .save(&state)
+            .unwrap();
         ActivationConfig::for_paths(paths, java)
     }
 
@@ -1561,6 +1839,77 @@ mod tests {
         assert!(!runtime.version_dir.join("frontend").exists());
         assert!(!runtime.version_dir.starts_with(&paths.user_data_root));
         assert!(!runtime.version_dir.join("source").exists());
+    }
+
+    #[test]
+    fn build_result_jdk_must_match_supplied_managed_java() {
+        let root = tempdir().unwrap();
+        let paths = paths(root.path());
+        let (result_path, mut result) = fixture_result(&paths, &"a".repeat(40), "tx-a");
+        let mut config = fixture_config(&paths);
+        let state_store = ToolchainStateStore::new(paths.clone());
+        let mut state = state_store.load().unwrap();
+        let template = state.records["jdk-test"].clone();
+        for (id, relative) in [("jdk-a", "toolchain/jdk-a"), ("jdk-b", "toolchain/jdk-b")] {
+            let java = paths.app_root.join(relative).join("bin/java");
+            fs::create_dir_all(java.parent().unwrap()).unwrap();
+            fs::write(&java, b"managed-java").unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(&java, fs::Permissions::from_mode(0o755)).unwrap();
+            }
+            let mut record = template.clone();
+            record.id = id.to_owned();
+            record.install_dir = PathBuf::from(relative);
+            state.records.insert(id.to_owned(), record);
+        }
+        state_store.save(&state).unwrap();
+        result
+            .toolchains
+            .insert("jdk".to_owned(), "jdk-b".to_owned());
+        fs::write(&result_path, serde_json::to_vec_pretty(&result).unwrap()).unwrap();
+        config.java_binary = paths.app_root.join("toolchain/jdk-a/bin/java");
+        let mut hooks = NoopActivationHooks;
+        let error = ActivationEngine::new(paths.clone())
+            .activate(
+                result_path,
+                &config,
+                &mut hooks,
+                &FixtureHealthChecker {
+                    healthy: true,
+                    fail_commit: None,
+                },
+            )
+            .unwrap_err();
+        assert!(
+            matches!(error, ActivationError::InvalidInput(message) if message.contains("exactly match"))
+        );
+    }
+
+    #[test]
+    fn missing_build_result_jdk_fails_closed() {
+        let root = tempdir().unwrap();
+        let paths = paths(root.path());
+        let (result_path, mut result) = fixture_result(&paths, &"a".repeat(40), "tx-a");
+        let _config = fixture_config(&paths);
+        result.toolchains.remove("jdk");
+        fs::write(&result_path, serde_json::to_vec_pretty(&result).unwrap()).unwrap();
+        let mut hooks = NoopActivationHooks;
+        let error = ActivationEngine::new(paths.clone())
+            .activate(
+                result_path,
+                &fixture_config(&paths),
+                &mut hooks,
+                &FixtureHealthChecker {
+                    healthy: true,
+                    fail_commit: None,
+                },
+            )
+            .unwrap_err();
+        assert!(
+            matches!(error, ActivationError::InvalidInput(message) if message.contains("missing jdk"))
+        );
     }
 
     #[cfg(unix)]
@@ -1638,6 +1987,51 @@ mod tests {
                 .target_commit,
             "a".repeat(40)
         );
+    }
+
+    #[test]
+    fn absent_database_pre_state_is_restored_before_previous_health_check() {
+        let root = tempdir().unwrap();
+        let paths = paths(root.path());
+        let (first_path, first) = fixture_result(&paths, &"a".repeat(40), "tx-a");
+        let engine = ActivationEngine::new(paths.clone());
+        let mut hooks = NoopActivationHooks;
+        engine
+            .activate(
+                first_path,
+                &fixture_config(&paths),
+                &mut hooks,
+                &FixtureHealthChecker {
+                    healthy: true,
+                    fail_commit: None,
+                },
+            )
+            .unwrap();
+
+        let (second_path, second) = fixture_result(&paths, &"b".repeat(40), "tx-b");
+        let database = paths.user_data_root.join("data/harmonia.db");
+        let error = engine
+            .activate(
+                second_path,
+                &fixture_config(&paths),
+                &mut hooks,
+                &CreatesDatabaseThenFails {
+                    failing_commit: second.target_commit.clone(),
+                    database: database.clone(),
+                },
+            )
+            .unwrap_err();
+        assert!(matches!(error, ActivationError::HealthCheck(_)));
+        assert_eq!(
+            StateStore::new(paths.clone())
+                .load_installation()
+                .unwrap()
+                .current_commit,
+            Some(first.target_commit)
+        );
+        assert!(!database.exists());
+        assert!(!PathBuf::from(format!("{}-wal", database.display())).exists());
+        assert!(!PathBuf::from(format!("{}-shm", database.display())).exists());
     }
 
     #[test]
@@ -1750,6 +2144,93 @@ mod tests {
             .unwrap_err();
         assert!(matches!(error, ActivationError::HealthCheck(_)));
         assert_eq!(store.load_installation().unwrap(), before);
+    }
+
+    #[test]
+    fn recovery_with_missing_target_persists_review_required_and_blocks_activation() {
+        let root = tempdir().unwrap();
+        let paths = paths(root.path());
+        let engine = ActivationEngine::new(paths.clone());
+        let config = fixture_config(&paths);
+        let store = StateStore::new(paths.clone());
+        let mut transaction =
+            Transaction::begin(store.clone(), OperationKind::Update, None, None, Vec::new())
+                .unwrap();
+        transaction.mark_activation_started().unwrap();
+        drop(transaction);
+
+        let error = engine
+            .recover_with_health_checker(
+                &config,
+                &FixtureHealthChecker {
+                    healthy: true,
+                    fail_commit: None,
+                },
+            )
+            .unwrap_err();
+        assert!(matches!(error, ActivationError::ReviewRequired(_)));
+        assert_eq!(
+            store.load_transaction().unwrap().unwrap().status,
+            TransactionStatus::ReviewRequired
+        );
+
+        let (result_path, _) = fixture_result(&paths, &"a".repeat(40), "tx-a");
+        let mut hooks = NoopActivationHooks;
+        assert!(matches!(
+            engine.activate(
+                result_path,
+                &fixture_config(&paths),
+                &mut hooks,
+                &FixtureHealthChecker {
+                    healthy: true,
+                    fail_commit: None,
+                },
+            ),
+            Err(ActivationError::ReviewRequired(_))
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn recovery_cleanup_failure_is_persisted_as_review_required() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempdir().unwrap();
+        let paths = paths(root.path());
+        let engine = ActivationEngine::new(paths.clone());
+        let config = fixture_config(&paths);
+        let outside = root.path().join("outside");
+        fs::create_dir_all(&outside).unwrap();
+        let link = paths.build_dir().join("external");
+        fs::create_dir_all(link.parent().unwrap()).unwrap();
+        symlink(&outside, &link).unwrap();
+        let owned = link.join("partial");
+        let store = StateStore::new(paths.clone());
+        let mut transaction = Transaction::begin(
+            store.clone(),
+            OperationKind::Update,
+            None,
+            Some("a".repeat(40)),
+            vec![owned],
+        )
+        .unwrap();
+        transaction.transition(TransactionPhase::Staging).unwrap();
+        drop(transaction);
+
+        let error = engine
+            .recover_with_health_checker(
+                &config,
+                &FixtureHealthChecker {
+                    healthy: true,
+                    fail_commit: None,
+                },
+            )
+            .unwrap_err();
+        assert!(matches!(error, ActivationError::ReviewRequired(_)));
+        assert_eq!(
+            store.load_transaction().unwrap().unwrap().status,
+            TransactionStatus::ReviewRequired
+        );
     }
 
     #[test]
