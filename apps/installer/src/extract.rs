@@ -50,7 +50,7 @@ pub fn extract_archive(
 
 #[cfg(windows)]
 fn extended_windows_path(path: &Path) -> PathBuf {
-    let value = path.to_string_lossy();
+    let value = path.to_string_lossy().replace('/', "\\");
     if !path.is_absolute() || value.starts_with(r"\\?\") {
         return path.to_path_buf();
     }
