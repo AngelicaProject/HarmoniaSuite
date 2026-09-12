@@ -730,11 +730,21 @@ mod tests {
                     .args
                     .iter()
                     .any(|argument| argument.contains("run") && argument.contains("build"));
+            let build_command = build_command
+                || command
+                    .args
+                    .windows(2)
+                    .any(|args| args[0] == "run" && args[1] == "build");
             let package_command = command.args == ["run", "package"]
                 || command
                     .args
                     .iter()
                     .any(|argument| argument.contains("run") && argument.contains("package"));
+            let package_command = package_command
+                || command
+                    .args
+                    .windows(2)
+                    .any(|args| args[0] == "run" && args[1] == "package");
             let maven_command = command.program.file_name().and_then(|value| value.to_str())
                 == Some("mvnw")
                 || command

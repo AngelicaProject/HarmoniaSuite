@@ -1031,6 +1031,7 @@ mod tests {
 
     fn is_npm_ci_command(command: &CommandSpec) -> bool {
         command.args.first().map(String::as_str) == Some("ci")
+            || command.args.iter().any(|argument| argument == "ci")
             || command
                 .args
                 .iter()
