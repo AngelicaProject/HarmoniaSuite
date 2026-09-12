@@ -363,17 +363,14 @@ impl<D: DownloadClient, P: ProcessRunner> BuildPipeline<D, P> {
             let system_root = std::env::var_os("SystemRoot").ok_or_else(|| {
                 BuildError::InvalidConfig("SystemRoot is required to run mvnw.cmd".to_owned())
             })?;
-            let command_line = std::iter::once(wrapper.display().to_string())
-                .chain(wrapper_args.iter().map(|argument| (*argument).to_owned()))
-                .map(|argument| quote_windows_argument(&argument))
-                .collect::<Vec<_>>()
-                .join(" ");
-            let command_args = vec![
+            let mut command_args = vec![
                 "/D".to_owned(),
                 "/S".to_owned(),
                 "/C".to_owned(),
-                command_line,
+                "call".to_owned(),
+                wrapper.display().to_string(),
             ];
+            command_args.extend(wrapper_args.iter().map(|argument| (*argument).to_owned()));
             self.run_command_strings(
                 &TransactionPhase::BuildingBackend,
                 target,
@@ -462,17 +459,14 @@ impl<D: DownloadClient, P: ProcessRunner> BuildPipeline<D, P> {
             let system_root = std::env::var_os("SystemRoot").ok_or_else(|| {
                 BuildError::InvalidConfig("SystemRoot is required to run managed npm".to_owned())
             })?;
-            let command_line = std::iter::once(npm.display().to_string())
-                .chain(args.iter().map(|argument| (*argument).to_owned()))
-                .map(|argument| quote_windows_argument(&argument))
-                .collect::<Vec<_>>()
-                .join(" ");
-            let command_args = vec![
+            let mut command_args = vec![
                 "/D".to_owned(),
                 "/S".to_owned(),
                 "/C".to_owned(),
-                command_line,
+                "call".to_owned(),
+                npm.display().to_string(),
             ];
+            command_args.extend(args.iter().map(|argument| (*argument).to_owned()));
             self.run_command_strings(
                 phase,
                 target,
@@ -642,11 +636,6 @@ impl<D: DownloadClient, P: ProcessRunner> BuildPipeline<D, P> {
         logger.log("info", event, values)?;
         Ok(())
     }
-}
-
-#[cfg(windows)]
-fn quote_windows_argument(value: &str) -> String {
-    format!("\"{}\"", value.replace('"', "\\\""))
 }
 
 fn validate_config(config: &BuildConfig) -> Result<(), BuildError> {
@@ -1018,6 +1007,10 @@ mod tests {
                 .args
                 .iter()
                 .any(|argument| argument.contains("\"run\" \"build\""))
+            || command
+                .args
+                .windows(2)
+                .any(|args| args[0] == "run" && args[1] == "build")
     }
 
     fn is_desktop_package_command(command: &CommandSpec) -> bool {
@@ -1025,7 +1018,11 @@ mod tests {
             || command
                 .args
                 .iter()
-                .any(|argument| argument.contains("\"run\" \"package\"")))
+                .any(|argument| argument.contains("\"run\" \"package\""))
+            || command
+                .args
+                .windows(2)
+                .any(|args| args[0] == "run" && args[1] == "package"))
             && command
                 .current_dir
                 .as_ref()

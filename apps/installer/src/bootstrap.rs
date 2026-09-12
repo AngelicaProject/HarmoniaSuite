@@ -983,15 +983,25 @@ mod tests {
             let command = {
                 #[cfg(windows)]
                 {
-                    let cmd = PathBuf::from(std::env::var_os("SystemRoot").unwrap())
-                        .join("System32")
-                        .join("cmd.exe");
-                    environment.apply_to(CommandSpec::new(cmd).args([
-                        "/D",
-                        "/S",
-                        "/C",
-                        &format!("\"{}\" --version", executable.display()),
-                    ]))
+                    if executable
+                        .extension()
+                        .is_some_and(|extension| extension.eq_ignore_ascii_case("cmd"))
+                    {
+                        let cmd = PathBuf::from(std::env::var_os("SystemRoot").unwrap())
+                            .join("System32")
+                            .join("cmd.exe");
+                        environment.apply_to(CommandSpec::new(cmd).args([
+                            "/D".to_owned(),
+                            "/S".to_owned(),
+                            "/C".to_owned(),
+                            "call".to_owned(),
+                            executable.display().to_string(),
+                            "--version".to_owned(),
+                        ]))
+                    } else {
+                        environment
+                            .apply_to(CommandSpec::new(executable.to_path_buf()).arg("--version"))
+                    }
                 }
                 #[cfg(not(windows))]
                 {
