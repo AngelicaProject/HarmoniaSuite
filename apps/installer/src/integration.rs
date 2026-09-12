@@ -185,7 +185,7 @@ fn write_windows_shortcut(
         return Err(IntegrationError::Registry(create as u32));
     }
     let mut persist: *mut ComObject = std::ptr::null_mut();
-    let query: QueryInterface = unsafe { transmute(((*shell).vtable)[0]) };
+    let query: QueryInterface = unsafe { transmute(*((*shell).vtable.add(0))) };
     let query_result = unsafe {
         query(
             shell,
@@ -195,11 +195,11 @@ fn write_windows_shortcut(
     };
     let target_wide = to_wide(target);
     let path_wide = to_wide(path);
-    let set_path: SetPath = unsafe { transmute(((*shell).vtable)[20]) };
-    let set_description: SetDescription = unsafe { transmute(((*shell).vtable)[7]) };
-    let release: Release = unsafe { transmute(((*shell).vtable)[2]) };
+    let set_path: SetPath = unsafe { transmute(*((*shell).vtable.add(20))) };
+    let set_description: SetDescription = unsafe { transmute(*((*shell).vtable.add(7))) };
+    let release: Release = unsafe { transmute(*((*shell).vtable.add(2))) };
     let save: Save = if !persist.is_null() {
-        unsafe { transmute(((*persist).vtable)[6]) }
+        unsafe { transmute(*((*persist).vtable.add(6))) }
     } else {
         unsafe { release(shell) };
         unsafe { CoUninitialize() };
