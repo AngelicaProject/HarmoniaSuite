@@ -413,7 +413,7 @@ impl ActivationEngine {
             }
         }
         transaction.fail("explicit post-activation rollback completed")?;
-        self.resolve_current().map_err(Into::into)
+        self.resolve_current()
     }
 
     fn activate_transaction<H: HealthChecker>(

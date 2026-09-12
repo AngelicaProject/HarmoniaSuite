@@ -616,6 +616,7 @@ impl<D: DownloadClient, P: ProcessRunner> UpdateEngine<D, P> {
         ))
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn finish_launch_failure<H: HealthChecker, L: DetachedLauncher>(
         &self,
         journal: &mut UpdateJournal,

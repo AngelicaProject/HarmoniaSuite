@@ -180,6 +180,20 @@ fn process_alive(pid: u32) -> bool {
     }
 }
 
+#[cfg(windows)]
+fn process_alive(pid: u32) -> bool {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+
+    let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+    if handle.is_null() {
+        false
+    } else {
+        unsafe { CloseHandle(handle) };
+        true
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -206,19 +220,5 @@ mod tests {
         let mut hooks = DesktopShutdownHooks::new(paths.clone(), false);
         assert!(hooks.request_shutdown().unwrap_err().contains("shutdown"));
         clear_desktop_session(&paths).unwrap();
-    }
-}
-
-#[cfg(windows)]
-fn process_alive(pid: u32) -> bool {
-    use windows_sys::Win32::Foundation::CloseHandle;
-    use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
-
-    let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
-    if handle.is_null() {
-        false
-    } else {
-        unsafe { CloseHandle(handle) };
-        true
     }
 }
