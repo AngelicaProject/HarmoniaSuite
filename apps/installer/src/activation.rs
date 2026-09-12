@@ -1,6 +1,8 @@
 use std::collections::BTreeMap;
 use std::ffi::OsString;
-use std::fs::{self, File, OpenOptions};
+#[cfg(unix)]
+use std::fs::File;
+use std::fs::{self, OpenOptions};
 use std::io;
 use std::path::{Component, Path, PathBuf};
 use std::thread;
@@ -677,7 +679,7 @@ impl ActivationEngine {
         {
             return Ok(false);
         }
-        self.version_complete(version_dir, &metadata)
+        Ok(self.version_complete(version_dir, &metadata))
     }
 
     pub fn resolve_current(&self) -> Result<Option<RuntimePaths>, ActivationError> {
