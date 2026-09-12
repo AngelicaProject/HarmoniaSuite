@@ -210,18 +210,20 @@ mod tests {
     fn detached_windows_child_survives_owner_process_exit() {
         if env::var_os("HARMONIA_DETACHED_HELPER").is_some() {
             let marker = env::var_os("HARMONIA_DETACHED_MARKER").unwrap();
-            let command = DetachedLaunchSpec::new(
-                PathBuf::from(env::var_os("SystemRoot").unwrap())
-                    .join("System32")
-                    .join("cmd.exe"),
-            )
-            .args([
-                "/D",
-                "/S",
-                "/C",
+            let powershell = PathBuf::from(env::var_os("SystemRoot").unwrap())
+                .join("System32")
+                .join("WindowsPowerShell")
+                .join("v1.0")
+                .join("powershell.exe");
+            let marker = PathBuf::from(marker);
+            let marker_literal = marker.display().to_string().replace('\'', "''");
+            let command = DetachedLaunchSpec::new(powershell).args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
                 &format!(
-                    "ping 127.0.0.1 -n 2 >NUL & echo detached > \"{}\"",
-                    PathBuf::from(marker).display()
+                    "Start-Sleep -Seconds 1; Set-Content -LiteralPath '{}' -Value detached",
+                    marker_literal
                 ),
             ]);
             SystemDetachedLauncher.launch(&command).unwrap();

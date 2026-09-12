@@ -604,20 +604,42 @@ mod tests {
 
     #[test]
     fn production_paths_are_user_scoped() {
-        let environment = PathEnvironment {
-            home: Some(PathBuf::from("C:\\Users\\test")),
-            local_app_data: Some(PathBuf::from("C:\\Users\\test\\AppData\\Local")),
-            app_data: Some(PathBuf::from("C:\\Users\\test\\AppData\\Roaming")),
-            ..PathEnvironment::default()
-        };
-        let paths = InstallationPaths::for_environment(
-            Platform::Windows,
-            TargetArchitecture::X64,
-            &environment,
-        )
-        .unwrap();
-        assert!(paths.app_root.starts_with("C:\\Users\\test"));
-        assert!(!paths.app_root.starts_with("C:\\Users\\Public"));
+        #[cfg(windows)]
+        {
+            let environment = PathEnvironment {
+                home: Some(PathBuf::from("C:\\Users\\test")),
+                local_app_data: Some(PathBuf::from("C:\\Users\\test\\AppData\\Local")),
+                app_data: Some(PathBuf::from("C:\\Users\\test\\AppData\\Roaming")),
+                ..PathEnvironment::default()
+            };
+            let paths = InstallationPaths::for_environment(
+                Platform::Windows,
+                TargetArchitecture::X64,
+                &environment,
+            )
+            .unwrap();
+            assert!(paths.app_root.starts_with("C:\\Users\\test"));
+            assert!(!paths.app_root.starts_with("C:\\Users\\Public"));
+        }
+
+        #[cfg(not(windows))]
+        {
+            let environment = PathEnvironment {
+                home: Some(PathBuf::from("/home/test")),
+                xdg_data_home: Some(PathBuf::from("/home/test/.local/share")),
+                xdg_state_home: Some(PathBuf::from("/home/test/.local/state")),
+                xdg_cache_home: Some(PathBuf::from("/home/test/.cache")),
+                ..PathEnvironment::default()
+            };
+            let paths = InstallationPaths::for_environment(
+                Platform::Linux,
+                TargetArchitecture::X64,
+                &environment,
+            )
+            .unwrap();
+            assert!(paths.app_root.starts_with("/home/test"));
+            assert!(!paths.app_root.starts_with("/tmp"));
+        }
     }
 
     #[test]

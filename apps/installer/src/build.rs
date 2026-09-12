@@ -1013,13 +1013,19 @@ mod tests {
     }
 
     fn is_build_command(command: &CommandSpec) -> bool {
-        command.args.len() == 2 && command.args[0] == "run" && command.args[1] == "build"
+        (command.args.len() == 2 && command.args[0] == "run" && command.args[1] == "build")
+            || command
+                .args
+                .iter()
+                .any(|argument| argument.contains("\"run\" \"build\""))
     }
 
     fn is_desktop_package_command(command: &CommandSpec) -> bool {
-        command.args.len() == 2
-            && command.args[0] == "run"
-            && command.args[1] == "package"
+        (command.args.len() == 2 && command.args[0] == "run" && command.args[1] == "package"
+            || command
+                .args
+                .iter()
+                .any(|argument| argument.contains("\"run\" \"package\"")))
             && command
                 .current_dir
                 .as_ref()
