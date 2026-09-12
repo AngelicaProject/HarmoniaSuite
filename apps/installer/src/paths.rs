@@ -206,6 +206,10 @@ impl InstallationPaths {
         self.state_root.join("transaction.json")
     }
 
+    pub fn bootstrap_operation_path(&self) -> PathBuf {
+        self.state_root.join("bootstrap-operation.json")
+    }
+
     pub fn toolchain_state_path(&self) -> PathBuf {
         self.state_root.join("toolchains.json")
     }

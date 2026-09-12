@@ -21,9 +21,18 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.89.0
         with:
           components: rustfmt, clippy
+      - name: cache production toolchains
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/harmonia-toolchain-smoke
+          key: installer-toolchains-${{ runner.os }}-jdk-21.0.12-8-node-24.15.0
       - run: cargo fmt --check --manifest-path apps/installer/Cargo.toml
       - run: cargo clippy --manifest-path apps/installer/Cargo.toml --all-targets -- -D warnings
       - run: cargo test --manifest-path apps/installer/Cargo.toml
+      - name: smoke-test production managed toolchains
+        env:
+          HARMONIA_TOOLCHAIN_SMOKE_ROOT: ${{ runner.temp }}/harmonia-toolchain-smoke
+        run: cargo test --manifest-path apps/installer/Cargo.toml production_toolchain_smoke -- --ignored --nocapture
       - run: cargo test --manifest-path apps/installer/Cargo.toml --lib fetches_public_https_origin_main -- --ignored --nocapture
       - run: cargo build --release --manifest-path apps/installer/Cargo.toml
 

@@ -267,7 +267,25 @@ impl ActivationEngine {
         hooks: &mut dyn ActivationHooks,
         checker: &H,
     ) -> Result<RuntimePaths, ActivationError> {
-        let _lock = InstallationLock::acquire(self.paths.lock_path(), "phase5-activate")?;
+        let lock = InstallationLock::acquire(self.paths.lock_path(), "phase5-activate")?;
+        self.activate_with_lock(result_path, config, hooks, checker, &lock)
+    }
+
+    /// Activate while a caller-owned installation lock covers a larger
+    /// operation. No nested lock is acquired.
+    pub fn activate_with_lock<H: HealthChecker>(
+        &self,
+        result_path: impl AsRef<Path>,
+        config: &ActivationConfig,
+        hooks: &mut dyn ActivationHooks,
+        checker: &H,
+        lock: &InstallationLock,
+    ) -> Result<RuntimePaths, ActivationError> {
+        if lock.path() != self.paths.lock_path() {
+            return Err(ActivationError::InvalidInput(
+                "caller lock does not belong to this installation".to_owned(),
+            ));
+        }
         self.recover_locked(config, checker)?;
         let result = self.load_build_result(result_path.as_ref())?;
         let candidate = self.validate_candidate(&result)?;
@@ -652,6 +670,20 @@ impl ActivationEngine {
         checker: &H,
     ) -> Result<(), ActivationError> {
         let _lock = InstallationLock::acquire(self.paths.lock_path(), "phase5-recovery")?;
+        self.recover_locked(config, checker)
+    }
+
+    pub fn recover_with_lock<H: HealthChecker>(
+        &self,
+        config: &ActivationConfig,
+        checker: &H,
+        lock: &InstallationLock,
+    ) -> Result<(), ActivationError> {
+        if lock.path() != self.paths.lock_path() {
+            return Err(ActivationError::InvalidInput(
+                "caller lock does not belong to this installation".to_owned(),
+            ));
+        }
         self.recover_locked(config, checker)
     }
 

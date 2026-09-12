@@ -76,7 +76,7 @@ impl ManagedGitRepository {
         remote_url: impl Into<String>,
     ) -> Result<Self, GitError> {
         let remote_url = remote_url.into();
-        validate_remote_url(&remote_url, false)?;
+        validate_remote_url(&remote_url, cfg!(test))?;
         Ok(Self {
             source_dir: source_dir.into(),
             remote_url,

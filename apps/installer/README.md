@@ -1,8 +1,8 @@
 # Harmonia installer core
 
-Phase 2 through Phase 4 provide the shared Rust foundation for future install, repair and update
-commands. It is currently a library crate; no installer UI, OS registration, activation or self-update
-helper is included yet.
+Phase 2 through Phase 5 provide the shared Rust foundation. Phase 6 adds the first CLI bootstrap
+operation; it is still not an installer UI, OS registration, shortcut manager, repair implementation,
+uninstaller, or updater.
 
 The core owns:
 
@@ -29,9 +29,9 @@ Phase 3 additionally provides:
   archives are not a mandatory managed toolchain;
 - Rust 1.89.0 pinning for installer development and CI.
 
-The production descriptor catalog is data supplied by the release/update layer. Every descriptor must
-carry an exact upstream version, HTTPS URL and SHA-256; the manager does not resolve “latest” or fall
-back to system Java or Node. Git operations are reserved for the Rust/libgit2 updater phase.
+The Phase 6 production descriptor catalog is checked in under `src/catalog.rs`. Every descriptor carries
+an exact upstream version, HTTPS URL and SHA-256; the manager does not resolve “latest” or fall back to
+system Java or Node. Git operations use the Rust/libgit2 implementation directly.
 
 Phase 4 additionally provides:
 
@@ -48,6 +48,20 @@ Phase 4 additionally provides:
 
 Phase 4 deliberately does not stage or activate an artifact, switch current/previous versions, or
 implement signed manifests, installer UI, shortcuts or uninstall. Those are later phases.
+
+Phase 5 adds immutable version staging, managed-Java runtime metadata, health checks, database-safe
+rollback, current/previous state and crash recovery. Phase 6 composes those engines into one
+per-user `install` operation:
+
+- `harmonia-setup install` resolves one exact `origin/main` commit, downloads only the checked-in
+  production JDK/Node descriptors, builds through the existing pipeline, activates through the
+  existing engine, and launches the immutable Electron payload;
+- the global installation lock is held across recovery, build, activation and detached launch
+  handoff, using locked engine APIs to avoid nested lock deadlocks;
+- `--json` emits a machine-readable outcome and the stable exit codes are documented in
+  `docs/phase6-fresh-bootstrap-design.md`;
+- the final desktop handoff uses a separate detached launcher, so the setup process's health-process
+  containment does not kill the installed desktop when setup exits.
 
 Run the checks from the repository root with:
 

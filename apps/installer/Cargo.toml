@@ -6,6 +6,14 @@ rust-version = "1.89"
 description = "Transactional installation and update primitives for Harmonia Suite"
 license = "AGPL-3.0-only"
 
+[[bin]]
+name = "harmonia-setup"
+path = "src/bin/harmonia-setup.rs"
+
+[[bin]]
+name = "HarmoniaSetup"
+path = "src/bin/harmonia-setup.rs"
+
 [dependencies]
 fs2 = "0.4"
 flate2 = "1"
