@@ -215,7 +215,7 @@ fn process_alive(pid: u32) -> bool {
     use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
 
     let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
-    if handle == 0 {
+    if handle.is_null() {
         false
     } else {
         unsafe { CloseHandle(handle) };

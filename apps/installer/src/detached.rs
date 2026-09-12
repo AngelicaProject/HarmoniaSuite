@@ -152,7 +152,7 @@ impl DetachedLauncher for SystemDetachedLauncher {
                 OpenProcess, TerminateProcess, PROCESS_TERMINATE,
             };
             let handle = unsafe { OpenProcess(PROCESS_TERMINATE, 0, launch.process_id) };
-            if handle == 0 {
+            if handle.is_null() {
                 return Ok(());
             }
             let result = unsafe { TerminateProcess(handle, 1) };
