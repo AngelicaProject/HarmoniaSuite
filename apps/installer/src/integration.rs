@@ -337,7 +337,9 @@ mod tests {
         install(&paths, false).unwrap();
         let entry = fs::read_to_string(paths.linux_desktop_entry_path()).unwrap();
         assert!(entry.contains("Name=HarmoniaSuite"));
-        assert!(entry.contains(&paths.stable_launcher_path().display().to_string()));
+        assert!(entry.contains(&escape_desktop_field(
+            &paths.stable_launcher_path().display().to_string(),
+        )));
         assert!(paths.linux_icon_path().is_file());
         remove(&paths).unwrap();
         assert!(!paths.linux_desktop_entry_path().exists());
