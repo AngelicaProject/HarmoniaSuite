@@ -203,7 +203,9 @@ mod tests {
         };
 
         match SystemDetachedLauncher.launch(&command) {
-            Err(DetachedLaunchError::ExitedEarly { status: Some(_), .. }) => {}
+            Err(DetachedLaunchError::ExitedEarly {
+                status: Some(_), ..
+            }) => {}
             other => panic!("expected early exit with status, got {other:?}"),
         }
     }
