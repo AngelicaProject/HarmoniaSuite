@@ -473,7 +473,7 @@ impl<D: DownloadClient, P: ProcessRunner> BuildPipeline<D, P> {
                 "/C".to_owned(),
                 command_line,
             ];
-            return self.run_command_strings(
+            self.run_command_strings(
                 phase,
                 target,
                 environment,
@@ -488,6 +488,7 @@ impl<D: DownloadClient, P: ProcessRunner> BuildPipeline<D, P> {
         }
     }
 
+    #[cfg(not(windows))]
     fn run_command(
         &self,
         phase: &TransactionPhase,

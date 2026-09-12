@@ -403,6 +403,10 @@ impl<D: DownloadClient, P: ProcessRunner, L: DetachedLauncher> BootstrapInstalle
     }
 }
 
+// This is the single terminalization boundary for the bootstrap journal and
+// result contract; keeping all terminal fields together makes every exit path
+// durable and machine-readable.
+#[allow(clippy::too_many_arguments)]
 fn finish_result(
     paths: &InstallationPaths,
     logger: Option<&DiagnosticLogger>,
