@@ -19,19 +19,29 @@ use crate::paths::InstallationPaths;
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct DesktopSession {
+    pid: u32,
+    started_at_ms: u128,
+    session_id: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ShutdownRequest {
+    request_id: String,
+    session_id: String,
     pid: u32,
     started_at_ms: u128,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-struct ShutdownRequest {
-    request_id: String,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct ShutdownAcknowledgement {
     request_id: String,
+    session_id: String,
+    pid: u32,
+    started_at_ms: u128,
     acknowledged_at_ms: u128,
 }
 
@@ -60,6 +70,7 @@ pub fn publish_desktop_session(
         &DesktopSession {
             pid,
             started_at_ms: now_ms(),
+            session_id: Uuid::new_v4().simple().to_string(),
         },
     )
 }
@@ -73,6 +84,12 @@ pub fn clear_desktop_session(paths: &InstallationPaths) -> Result<(), DesktopCon
 }
 
 pub fn live_desktop_pid(paths: &InstallationPaths) -> Result<Option<u32>, DesktopControlError> {
+    Ok(live_desktop_session(paths)?.map(|session| session.pid))
+}
+
+fn live_desktop_session(
+    paths: &InstallationPaths,
+) -> Result<Option<DesktopSession>, DesktopControlError> {
     let path = desktop_session_path(paths);
     let bytes = match fs::read(&path) {
         Ok(bytes) => bytes,
@@ -81,7 +98,7 @@ pub fn live_desktop_pid(paths: &InstallationPaths) -> Result<Option<u32>, Deskto
     };
     let session: DesktopSession = serde_json::from_slice(&bytes)?;
     if process_alive(session.pid) {
-        Ok(Some(session.pid))
+        Ok(Some(session))
     } else {
         let _ = fs::remove_file(path);
         Ok(None)
@@ -91,7 +108,7 @@ pub fn live_desktop_pid(paths: &InstallationPaths) -> Result<Option<u32>, Deskto
 pub struct DesktopShutdownHooks {
     paths: InstallationPaths,
     allow_request: bool,
-    request_id: Option<String>,
+    request: Option<ShutdownRequest>,
 }
 
 impl DesktopShutdownHooks {
@@ -99,33 +116,35 @@ impl DesktopShutdownHooks {
         Self {
             paths,
             allow_request,
-            request_id: None,
+            request: None,
         }
     }
 }
 
 impl ActivationHooks for DesktopShutdownHooks {
     fn request_shutdown(&mut self) -> Result<(), String> {
-        let Some(_pid) = live_desktop_pid(&self.paths).map_err(|error| error.to_string())? else {
+        cleanup_shutdown_coordination(&self.paths).map_err(|error| error.to_string())?;
+        let Some(session) = live_desktop_session(&self.paths).map_err(|error| error.to_string())?
+        else {
             return Ok(());
         };
         if !self.allow_request {
             return Err(DesktopControlError::DesktopRunning.to_string());
         }
-        let request_id = Uuid::new_v4().simple().to_string();
-        write_json(
-            &self.paths.desktop_shutdown_request_path(),
-            &ShutdownRequest {
-                request_id: request_id.clone(),
-            },
-        )
-        .map_err(|error| error.to_string())?;
-        self.request_id = Some(request_id);
+        let request = ShutdownRequest {
+            request_id: Uuid::new_v4().simple().to_string(),
+            session_id: session.session_id,
+            pid: session.pid,
+            started_at_ms: session.started_at_ms,
+        };
+        write_json(&self.paths.desktop_shutdown_request_path(), &request)
+            .map_err(|error| error.to_string())?;
+        self.request = Some(request);
         Ok(())
     }
 
     fn wait_for_shutdown(&mut self, timeout: Duration) -> Result<(), String> {
-        let Some(request_id) = self.request_id.clone() else {
+        let Some(request) = self.request.clone() else {
             if live_desktop_pid(&self.paths)
                 .map_err(|error| error.to_string())?
                 .is_none()
@@ -138,15 +157,22 @@ impl ActivationHooks for DesktopShutdownHooks {
         loop {
             if let Ok(bytes) = fs::read(self.paths.desktop_shutdown_ack_path()) {
                 if let Ok(ack) = serde_json::from_slice::<ShutdownAcknowledgement>(&bytes) {
-                    if ack.request_id == request_id {
+                    if ack.request_id == request.request_id
+                        && ack.session_id == request.session_id
+                        && ack.pid == request.pid
+                        && ack.started_at_ms == request.started_at_ms
+                    {
+                        cleanup_shutdown_coordination(&self.paths)
+                            .map_err(|error| error.to_string())?;
                         return Ok(());
                     }
                 }
             }
-            if live_desktop_pid(&self.paths)
+            if live_desktop_session(&self.paths)
                 .map_err(|error| error.to_string())?
                 .is_none()
             {
+                cleanup_shutdown_coordination(&self.paths).map_err(|error| error.to_string())?;
                 return Ok(());
             }
             if std::time::Instant::now() >= deadline {
@@ -155,6 +181,20 @@ impl ActivationHooks for DesktopShutdownHooks {
             std::thread::sleep(POLL_INTERVAL);
         }
     }
+}
+
+pub fn cleanup_shutdown_coordination(paths: &InstallationPaths) -> Result<(), DesktopControlError> {
+    for path in [
+        paths.desktop_shutdown_request_path(),
+        paths.desktop_shutdown_ack_path(),
+    ] {
+        match fs::remove_file(path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(())
 }
 
 fn write_json<T: Serialize>(path: &std::path::Path, value: &T) -> Result<(), DesktopControlError> {
@@ -219,6 +259,65 @@ mod tests {
         publish_desktop_session(&paths, std::process::id()).unwrap();
         let mut hooks = DesktopShutdownHooks::new(paths.clone(), false);
         assert!(hooks.request_shutdown().unwrap_err().contains("shutdown"));
+        clear_desktop_session(&paths).unwrap();
+    }
+
+    #[test]
+    fn matching_ack_consumes_request_and_ack() {
+        let root = tempdir().unwrap();
+        let paths = paths(root.path());
+        crate::StateStore::new(paths.clone()).initialize().unwrap();
+        publish_desktop_session(&paths, std::process::id()).unwrap();
+        let mut hooks = DesktopShutdownHooks::new(paths.clone(), true);
+        hooks.request_shutdown().unwrap();
+        let request: ShutdownRequest =
+            serde_json::from_slice(&fs::read(paths.desktop_shutdown_request_path()).unwrap())
+                .unwrap();
+        write_json(
+            &paths.desktop_shutdown_ack_path(),
+            &ShutdownAcknowledgement {
+                request_id: request.request_id.clone(),
+                session_id: request.session_id.clone(),
+                pid: request.pid,
+                started_at_ms: request.started_at_ms,
+                acknowledged_at_ms: now_ms(),
+            },
+        )
+        .unwrap();
+        hooks.wait_for_shutdown(Duration::from_millis(100)).unwrap();
+        assert!(!paths.desktop_shutdown_request_path().exists());
+        assert!(!paths.desktop_shutdown_ack_path().exists());
+        clear_desktop_session(&paths).unwrap();
+    }
+
+    #[test]
+    fn mismatched_session_ack_is_ignored_and_stale_cleanup_is_idempotent() {
+        let root = tempdir().unwrap();
+        let paths = paths(root.path());
+        crate::StateStore::new(paths.clone()).initialize().unwrap();
+        publish_desktop_session(&paths, std::process::id()).unwrap();
+        let mut hooks = DesktopShutdownHooks::new(paths.clone(), true);
+        hooks.request_shutdown().unwrap();
+        let request: ShutdownRequest =
+            serde_json::from_slice(&fs::read(paths.desktop_shutdown_request_path()).unwrap())
+                .unwrap();
+        write_json(
+            &paths.desktop_shutdown_ack_path(),
+            &ShutdownAcknowledgement {
+                request_id: request.request_id,
+                session_id: "different-session".to_owned(),
+                pid: request.pid,
+                started_at_ms: request.started_at_ms,
+                acknowledged_at_ms: now_ms(),
+            },
+        )
+        .unwrap();
+        assert!(matches!(
+            hooks.wait_for_shutdown(Duration::ZERO),
+            Err(message) if message.contains("timed out")
+        ));
+        cleanup_shutdown_coordination(&paths).unwrap();
+        cleanup_shutdown_coordination(&paths).unwrap();
         clear_desktop_session(&paths).unwrap();
     }
 }

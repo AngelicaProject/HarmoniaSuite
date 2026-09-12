@@ -28,7 +28,7 @@ use crate::manifest::{
 };
 use crate::paths::InstallationPaths;
 use crate::process::ProcessRunner;
-use crate::state::{StateError, StateStore};
+use crate::state::{OperationKind, StateError, StateStore, TransactionPhase, TransactionStatus};
 use crate::toolchain::{ToolchainError, ToolchainStateStore};
 
 const UPDATE_JOURNAL_SCHEMA_VERSION: u32 = 1;
@@ -159,6 +159,8 @@ struct UpdateJournal {
     rollback_commit: Option<String>,
     launch_ack_path: Option<PathBuf>,
     launch_nonce: Option<String>,
+    #[serde(default)]
+    activation_transaction_id: Option<String>,
     failure: Option<String>,
 }
 
@@ -186,6 +188,7 @@ impl UpdateJournal {
             rollback_commit: None,
             launch_ack_path: Some(paths.bootstrap_ack_path(&operation_id, &nonce)),
             launch_nonce: Some(nonce),
+            activation_transaction_id: None,
             failure: None,
         }
     }
@@ -535,12 +538,13 @@ impl<D: DownloadClient, P: ProcessRunner> UpdateEngine<D, P> {
             .to_path_buf();
         let activation_config = ActivationConfig::for_paths(&self.paths, java_binary);
         let result_path = pipeline.result_path_for(&build)?;
-        let runtime = match activation.activate_with_lock(
+        let runtime = match activation.activate_with_lock_for_operation(
             result_path,
             &activation_config,
             hooks,
             checker,
             lock,
+            Some(&journal.operation_id),
         ) {
             Ok(runtime) => runtime,
             Err(error) => {
@@ -568,6 +572,9 @@ impl<D: DownloadClient, P: ProcessRunner> UpdateEngine<D, P> {
                 return Ok(result_from_journal(&journal, status));
             }
         };
+        journal.activation_transaction_id = StateStore::new(self.paths.clone())
+            .load_transaction()?
+            .map(|record| record.id);
         journal.activation_completed = true;
         journal.phase = UpdateJournalPhase::Restarting;
         journal.launch_attempted = true;
@@ -781,7 +788,7 @@ impl<D: DownloadClient, P: ProcessRunner> UpdateEngine<D, P> {
         if !path.is_file() {
             return Ok(None);
         }
-        let journal: UpdateJournal = serde_json::from_slice(&fs::read(path)?)?;
+        let mut journal: UpdateJournal = serde_json::from_slice(&fs::read(path)?)?;
         if journal.schema_version != UPDATE_JOURNAL_SCHEMA_VERSION {
             return Err(UpdateError::TrustFailure(
                 "unsupported updater journal schema".to_owned(),
@@ -799,6 +806,56 @@ impl<D: DownloadClient, P: ProcessRunner> UpdateEngine<D, P> {
         }
         if journal.status != UpdateJournalStatus::Running {
             return Ok(None);
+        }
+        if !journal.activation_completed {
+            let activation = ActivationEngine::new(self.paths.clone());
+            let current = StateStore::new(self.paths.clone())
+                .load_installation()?
+                .current_commit;
+            let target = journal.target_commit.as_deref();
+            if current.as_deref() == target {
+                let runtime = activation.resolve_current().ok().flatten();
+                let record = StateStore::new(self.paths.clone()).load_transaction()?;
+                let proven = target
+                    .zip(runtime.as_ref())
+                    .zip(record.as_ref())
+                    .is_some_and(|((target, runtime), record)| {
+                        runtime.metadata.target_commit == target
+                            && record.operation == OperationKind::Update
+                            && record.external_operation_id.as_deref()
+                                == Some(journal.operation_id.as_str())
+                            && journal
+                                .activation_transaction_id
+                                .as_deref()
+                                .is_none_or(|id| id == record.id)
+                            && record.target_commit.as_deref() == Some(target)
+                            && record.published_version.as_deref() == Some(target)
+                            && record.current_switched
+                            && record.health_check_passed
+                            && record.status == TransactionStatus::Completed
+                            && record.phase == TransactionPhase::Completed
+                    });
+                if proven {
+                    journal.activation_completed = true;
+                    journal.activation_transaction_id = record.map(|value| value.id);
+                    journal.phase = UpdateJournalPhase::Restarting;
+                    persist_journal(&self.paths, &journal)?;
+                } else {
+                    journal.status = UpdateJournalStatus::ReviewRequired;
+                    journal.phase = UpdateJournalPhase::ReviewRequired;
+                    journal.failure = Some(
+                        "current target is not fully verified as this completed activation"
+                            .to_owned(),
+                    );
+                    finish_journal(&self.paths, &mut journal)?;
+                    return Ok(Some(result_from_journal(
+                        &journal,
+                        UpdateStatus::ReviewRequired {
+                            reason: journal.failure.clone().unwrap_or_default(),
+                        },
+                    )));
+                }
+            }
         }
         if journal.activation_completed {
             let activation = ActivationEngine::new(self.paths.clone());
@@ -1762,6 +1819,121 @@ mod tests {
             Some(fixture.b.as_str())
         );
         assert_ne!(fixture.b, fixture.c);
+    }
+
+    #[test]
+    fn restart_infers_completed_activation_before_updater_journal_persist() {
+        let fixture = ab_fixture();
+        ab_paths_and_state(&fixture, &fixture.a);
+        let health = AbHealthChecker {
+            fail_commit: None,
+            checks: Arc::new(Mutex::new(Vec::new())),
+        };
+        let mut hooks = RecordingHooks::default();
+        let first = ab_update(
+            &fixture,
+            &fixture.b,
+            1,
+            AbBuildRunner::default(),
+            &mut hooks,
+            &health,
+            &AbLauncher::default(),
+        );
+        assert!(matches!(first.status, UpdateStatus::Updated { .. }));
+
+        let journal_path = fixture.paths.update_operation_path();
+        let mut journal: UpdateJournal =
+            serde_json::from_slice(&fs::read(&journal_path).unwrap()).unwrap();
+        let record = StateStore::new(fixture.paths.clone())
+            .load_transaction()
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            record.external_operation_id.as_deref(),
+            Some(journal.operation_id.as_str())
+        );
+        if let Some(path) = journal.launch_ack_path.as_ref() {
+            let _ = fs::remove_file(path);
+        }
+        journal.status = UpdateJournalStatus::Running;
+        journal.phase = UpdateJournalPhase::Activating;
+        journal.activation_completed = false;
+        journal.launch_attempted = false;
+        journal.launch_handoff_completed = false;
+        journal.finished_at_ms = None;
+        crate::state::atomic_write_json(&journal_path, &journal).unwrap();
+
+        let runner = AbBuildRunner::default();
+        let calls = runner.calls.clone();
+        let resumed = ab_update(
+            &fixture,
+            &fixture.b,
+            1,
+            runner,
+            &mut hooks,
+            &health,
+            &AbLauncher::default(),
+        );
+        assert!(matches!(resumed.status, UpdateStatus::Updated { .. }));
+        assert!(calls.lock().unwrap().is_empty(), "resume must not rebuild");
+        assert_eq!(
+            StateStore::new(fixture.paths.clone())
+                .load_installation()
+                .unwrap()
+                .current_commit
+                .as_deref(),
+            Some(fixture.b.as_str())
+        );
+        let terminal: UpdateJournal =
+            serde_json::from_slice(&fs::read(journal_path).unwrap()).unwrap();
+        assert_eq!(terminal.status, UpdateJournalStatus::Completed);
+        assert!(terminal.activation_completed);
+        assert!(terminal.launch_handoff_completed);
+    }
+
+    #[test]
+    fn current_target_without_matching_low_level_operation_requires_review() {
+        let fixture = ab_fixture();
+        ab_paths_and_state(&fixture, &fixture.a);
+        let health = AbHealthChecker {
+            fail_commit: None,
+            checks: Arc::new(Mutex::new(Vec::new())),
+        };
+        let mut hooks = RecordingHooks::default();
+        let first = ab_update(
+            &fixture,
+            &fixture.b,
+            1,
+            AbBuildRunner::default(),
+            &mut hooks,
+            &health,
+            &AbLauncher::default(),
+        );
+        assert!(matches!(first.status, UpdateStatus::Updated { .. }));
+
+        let journal_path = fixture.paths.update_operation_path();
+        let mut journal: UpdateJournal =
+            serde_json::from_slice(&fs::read(&journal_path).unwrap()).unwrap();
+        journal.status = UpdateJournalStatus::Running;
+        journal.phase = UpdateJournalPhase::Activating;
+        journal.activation_completed = false;
+        journal.operation_id = "unrelated-operation".to_owned();
+        journal.finished_at_ms = None;
+        crate::state::atomic_write_json(&journal_path, &journal).unwrap();
+
+        let resumed = ab_update(
+            &fixture,
+            &fixture.b,
+            1,
+            AbBuildRunner::default(),
+            &mut hooks,
+            &health,
+            &AbLauncher::default(),
+        );
+        assert!(matches!(
+            resumed.status,
+            UpdateStatus::ReviewRequired { .. }
+        ));
     }
 
     #[test]

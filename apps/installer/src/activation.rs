@@ -281,6 +281,21 @@ impl ActivationEngine {
         checker: &H,
         lock: &InstallationLock,
     ) -> Result<RuntimePaths, ActivationError> {
+        self.activate_with_lock_for_operation(result_path, config, hooks, checker, lock, None)
+    }
+
+    /// Activate while a caller-owned operation identity is recorded in the low-level journal.
+    /// Updater recovery uses this correlation id to distinguish a completed activation from an
+    /// unrelated version that happened to become current before a crash.
+    pub fn activate_with_lock_for_operation<H: HealthChecker>(
+        &self,
+        result_path: impl AsRef<Path>,
+        config: &ActivationConfig,
+        hooks: &mut dyn ActivationHooks,
+        checker: &H,
+        lock: &InstallationLock,
+        external_operation_id: Option<&str>,
+    ) -> Result<RuntimePaths, ActivationError> {
         if lock.path() != self.paths.lock_path() {
             return Err(ActivationError::InvalidInput(
                 "caller lock does not belong to this installation".to_owned(),
@@ -305,6 +320,9 @@ impl ActivationEngine {
             Some(result.target_commit.clone()),
             Vec::new(),
         )?;
+        if let Some(operation_id) = external_operation_id {
+            transaction.set_external_operation_id(operation_id)?;
+        }
         transaction.set_pre_activation_state(installation.clone())?;
         transaction.set_workspace_path(workspace)?;
         transaction.set_database_path(database_path)?;

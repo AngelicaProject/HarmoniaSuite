@@ -1,4 +1,5 @@
 import { existsSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { join, resolve } from "node:path";
 
 import {
@@ -20,6 +21,11 @@ import {
 import { userDataRoot } from "./paths.js";
 import { registerHarmoniaProtocol } from "./protocol.js";
 import { registerUpdaterIpc } from "./updater-ipc.js";
+import {
+  isMatchingShutdownRequest,
+  shutdownAcknowledgement,
+  type DesktopSession,
+} from "./shutdown-control.js";
 import type { ActiveGateway } from "./types.js";
 
 protocol.registerSchemesAsPrivileged([
@@ -44,6 +50,7 @@ if (!hasLock) {
   let shuttingDown = false;
   let shutdownWatcher: NodeJS.Timeout | undefined;
   let startupReady = false;
+  let desktopSession: DesktopSession | undefined;
   const pendingLaunchRequests = new Map<string, LaunchRequest>();
 
   app.on("second-instance", (_event, _commandLine, _workingDirectory, additionalData) => {
@@ -191,10 +198,19 @@ if (!hasLock) {
     try {
       await localGateway?.stop();
       if (requestId) {
-        writeJsonAtomically(join(process.env.HARMONIA_INSTALL_STATE_ROOT || "", "desktop-shutdown-ack.json"), {
-          requestId,
-          acknowledgedAtMs: Date.now(),
-        });
+        const stateRoot = process.env.HARMONIA_INSTALL_STATE_ROOT;
+        if (!stateRoot || !desktopSession) {
+          throw new Error("shutdown acknowledgement requires the current installed desktop session");
+        }
+        writeJsonAtomically(
+          join(stateRoot, "desktop-shutdown-ack.json"),
+          shutdownAcknowledgement({ ...desktopSession, requestId }),
+        );
+        try {
+          unlinkSync(join(stateRoot, "desktop-shutdown-request.json"));
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        }
       }
     } finally {
       clearDesktopSession();
@@ -208,10 +224,12 @@ if (!hasLock) {
     if (!stateRoot || !isAbsolutePath(stateRoot)) {
       throw new Error("installed runtime requires an absolute HARMONIA_INSTALL_STATE_ROOT");
     }
-    writeJsonAtomically(join(stateRoot, "desktop-session.json"), {
+    desktopSession = {
+      sessionId: randomUUID(),
       pid: process.pid,
       startedAtMs: Date.now(),
-    });
+    };
+    writeJsonAtomically(join(stateRoot, "desktop-session.json"), desktopSession);
   }
 
   function clearDesktopSession(): void {
@@ -230,10 +248,12 @@ if (!hasLock) {
     shutdownWatcher = setInterval(() => {
       if (shuttingDown) return;
       try {
-        const request = JSON.parse(
+        const request: unknown = JSON.parse(
           readFileSync(join(stateRoot, "desktop-shutdown-request.json"), "utf8"),
-        ) as { requestId?: string };
-        if (request.requestId) void shutdownForUpdate(0, request.requestId);
+        );
+        if (desktopSession && isMatchingShutdownRequest(request, desktopSession)) {
+          void shutdownForUpdate(0, request.requestId);
+        }
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") console.warn(error);
       }

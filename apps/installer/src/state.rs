@@ -184,6 +184,8 @@ pub struct TransactionRecord {
     pub database_pre_state: Option<DatabasePreState>,
     #[serde(default)]
     pub pre_activation_state: Option<InstallationState>,
+    #[serde(default)]
+    pub external_operation_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -551,6 +553,7 @@ impl Transaction {
             workspace_path: None,
             database_pre_state: None,
             pre_activation_state: None,
+            external_operation_id: None,
         };
         store.write_transaction(&record)?;
         Ok(Self { store, record })
@@ -594,6 +597,14 @@ impl Transaction {
 
     pub fn set_pre_activation_state(&mut self, state: InstallationState) -> Result<(), StateError> {
         self.record.pre_activation_state = Some(state);
+        self.store.write_transaction(&self.record)
+    }
+
+    pub fn set_external_operation_id(
+        &mut self,
+        operation_id: impl Into<String>,
+    ) -> Result<(), StateError> {
+        self.record.external_operation_id = Some(operation_id.into());
         self.store.write_transaction(&self.record)
     }
 
