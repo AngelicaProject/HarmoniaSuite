@@ -270,6 +270,10 @@ impl StateStore {
                 TransactionStatus::Running | TransactionStatus::ReviewRequired
             ) {
                 protected.extend(transaction.toolchain_refs.values().cloned());
+                if let Some(pre_activation) = transaction.pre_activation_state {
+                    protected.extend(pre_activation.current_toolchains.values().cloned());
+                    protected.extend(pre_activation.previous_toolchains.values().cloned());
+                }
             }
         }
         Ok(protected)
@@ -1060,6 +1064,53 @@ mod tests {
             Transaction::begin(store, OperationKind::Update, None, None, Vec::new()),
             Err(StateError::ReviewRequiredTransaction(_))
         ));
+    }
+
+    #[test]
+    fn review_required_transaction_protects_pre_activation_toolchains_after_switch() {
+        let store = store();
+        let mut pre_activation = InstallationState::for_paths(store.paths());
+        pre_activation.current_commit = Some("a".to_owned());
+        pre_activation.previous_commit = Some("p".to_owned());
+        pre_activation.current_toolchains = BTreeMap::from([
+            ("jdk".to_owned(), "jdk-a".to_owned()),
+            ("node".to_owned(), "node-a".to_owned()),
+        ]);
+        pre_activation.previous_toolchains = BTreeMap::from([
+            ("jdk".to_owned(), "jdk-p".to_owned()),
+            ("node".to_owned(), "node-p".to_owned()),
+        ]);
+
+        let mut after_switch = pre_activation.clone();
+        after_switch.current_commit = Some("b".to_owned());
+        after_switch.previous_commit = Some("a".to_owned());
+        after_switch.current_toolchains = BTreeMap::from([
+            ("jdk".to_owned(), "jdk-b".to_owned()),
+            ("node".to_owned(), "node-b".to_owned()),
+        ]);
+        store.save_installation(&after_switch).unwrap();
+
+        let mut transaction = Transaction::begin(
+            store.clone(),
+            OperationKind::Update,
+            Some("a".to_owned()),
+            Some("b".to_owned()),
+            Vec::new(),
+        )
+        .unwrap();
+        transaction
+            .set_pre_activation_state(pre_activation)
+            .unwrap();
+        transaction.pin_toolchain("jdk", "jdk-b").unwrap();
+        transaction.pin_toolchain("node", "node-b").unwrap();
+        transaction
+            .mark_review_required("database restore failed after pointer switch")
+            .unwrap();
+
+        let protected = store.protected_toolchain_ids().unwrap();
+        for id in ["jdk-p", "node-p", "jdk-a", "node-a", "jdk-b", "node-b"] {
+            assert!(protected.contains(id), "missing protected toolchain {id}");
+        }
     }
 
     #[cfg(windows)]
