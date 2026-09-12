@@ -268,6 +268,7 @@ impl<D: DownloadClient, P: ProcessRunner> UpdateEngine<D, P> {
     }
 
     #[cfg(test)]
+    #[allow(clippy::too_many_arguments)]
     fn update_with_sources_for_test<
         F: ManifestFetcher,
         H: HealthChecker,
@@ -1756,40 +1757,46 @@ mod tests {
 
     #[test]
     fn build_failure_leaves_a_and_never_requests_desktop_shutdown() {
-        let fixture = ab_fixture();
-        ab_paths_and_state(&fixture, &fixture.a);
-        let hooks = &mut RecordingHooks::default();
-        let health = AbHealthChecker {
-            fail_commit: None,
-            checks: Arc::new(Mutex::new(Vec::new())),
-        };
-        let launcher = AbLauncher::default();
-        let result = ab_update(
-            &fixture,
-            &fixture.b,
-            1,
-            AbBuildRunner {
-                failure: Some(AbFailurePoint::Frontend),
-                ..Default::default()
-            },
-            hooks,
-            &health,
-            &launcher,
-        );
-        assert!(matches!(
-            result.status,
-            UpdateStatus::UpdateBuildFailed { .. }
-        ));
-        assert!(hooks.events.lock().unwrap().is_empty());
-        assert!(!fixture.paths.desktop_shutdown_request_path().exists());
-        assert_eq!(
-            StateStore::new(fixture.paths.clone())
-                .load_installation()
-                .unwrap()
-                .current_commit
-                .as_deref(),
-            Some(fixture.a.as_str())
-        );
+        for failure in [
+            AbFailurePoint::Frontend,
+            AbFailurePoint::Backend,
+            AbFailurePoint::Desktop,
+        ] {
+            let fixture = ab_fixture();
+            ab_paths_and_state(&fixture, &fixture.a);
+            let hooks = &mut RecordingHooks::default();
+            let health = AbHealthChecker {
+                fail_commit: None,
+                checks: Arc::new(Mutex::new(Vec::new())),
+            };
+            let launcher = AbLauncher::default();
+            let result = ab_update(
+                &fixture,
+                &fixture.b,
+                1,
+                AbBuildRunner {
+                    failure: Some(failure),
+                    ..Default::default()
+                },
+                hooks,
+                &health,
+                &launcher,
+            );
+            assert!(matches!(
+                result.status,
+                UpdateStatus::UpdateBuildFailed { .. }
+            ));
+            assert!(hooks.events.lock().unwrap().is_empty());
+            assert!(!fixture.paths.desktop_shutdown_request_path().exists());
+            assert_eq!(
+                StateStore::new(fixture.paths.clone())
+                    .load_installation()
+                    .unwrap()
+                    .current_commit
+                    .as_deref(),
+                Some(fixture.a.as_str())
+            );
+        }
     }
 
     #[test]
