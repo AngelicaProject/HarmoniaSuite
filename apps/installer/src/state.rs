@@ -1177,6 +1177,25 @@ mod tests {
         }
     }
 
+    #[test]
+    fn running_updater_journal_protects_manifest_toolchains_before_build_transaction() {
+        let store = store();
+        store.initialize().unwrap();
+        fs::write(
+            store.paths().update_operation_path(),
+            serde_json::json!({
+                "schema_version": 1,
+                "status": "Running",
+                "toolchains": {"jdk": "jdk-target", "node": "node-target"}
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let protected = store.protected_toolchain_ids().unwrap();
+        assert!(protected.contains("jdk-target"));
+        assert!(protected.contains("node-target"));
+    }
+
     #[cfg(windows)]
     #[test]
     fn durable_directory_promotion_does_not_replace_immutable_destination() {
