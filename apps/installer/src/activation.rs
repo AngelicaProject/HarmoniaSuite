@@ -271,17 +271,17 @@ impl ActivationEngine {
         match activation {
             Ok(runtime) => Ok(runtime),
             Err(error) => {
-                if transaction.record().activation_started
-                    && !transaction.record().rollback_completed
-                {
-                    if let Err(rollback_error) =
-                        self.rollback_transaction(&mut transaction, config, &installation)
-                    {
-                        let reason = format!(
-                            "{error}; rollback failed and requires review: {rollback_error}"
-                        );
-                        let _ = transaction.fail(reason.clone());
-                        return Err(ActivationError::ReviewRequired(reason));
+                if transaction.record().activation_started {
+                    if !transaction.record().rollback_completed {
+                        if let Err(rollback_error) =
+                            self.rollback_transaction(&mut transaction, config, &installation)
+                        {
+                            let reason = format!(
+                                "{error}; rollback failed and requires review: {rollback_error}"
+                            );
+                            let _ = transaction.fail(reason.clone());
+                            return Err(ActivationError::ReviewRequired(reason));
+                        }
                     }
                 } else {
                     let _ = transaction.cleanup_owned_paths();
@@ -1029,13 +1029,11 @@ fn has_link_ancestor(root: &Path, path: &Path) -> io::Result<bool> {
     if !root.is_absolute() || !path.is_absolute() {
         return Ok(true);
     }
-    for ancestor in path.ancestors() {
-        match fs::symlink_metadata(ancestor) {
-            Ok(_) if is_link_or_reparse(ancestor)? => return Ok(true),
-            Ok(_) => {}
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error),
-        }
+    match fs::symlink_metadata(root) {
+        Ok(_) if is_link_or_reparse(root)? => return Ok(true),
+        Ok(_) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
     }
     let mut current = root.to_path_buf();
     for component in relative.components() {
