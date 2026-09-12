@@ -644,7 +644,9 @@ mod tests {
     use crate::download::{DownloadError, DownloadReceipt, DownloadRequest};
     use crate::paths::{Platform, TargetArchitecture};
     use crate::process::{CommandSpec, ProcessOutput, SystemProcessRunner};
-    use crate::toolchain::{safe_os_utility_paths, ArchiveFormat, ToolchainKind};
+    #[cfg(windows)]
+    use crate::toolchain::safe_os_utility_paths;
+    use crate::toolchain::{ArchiveFormat, ToolchainKind};
     use flate2::write::GzEncoder;
     use flate2::Compression;
     use git2::{Oid, Repository, Signature};
