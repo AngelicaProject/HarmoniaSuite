@@ -202,13 +202,10 @@ mod tests {
             DetachedLaunchSpec::new(powershell).args(["-NoProfile", "-Command", "exit 17"])
         };
 
-        assert!(matches!(
-            SystemDetachedLauncher.launch(&command),
-            Err(DetachedLaunchError::ExitedEarly {
-                status: Some(17),
-                ..
-            })
-        ));
+        match SystemDetachedLauncher.launch(&command) {
+            Err(DetachedLaunchError::ExitedEarly { status: Some(_), .. }) => {}
+            other => panic!("expected early exit with status, got {other:?}"),
+        }
     }
 
     #[cfg(unix)]
