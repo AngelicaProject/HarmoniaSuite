@@ -4,10 +4,11 @@ use std::process::ExitCode;
 use harmonia_installer::uninstall::uninstall;
 use harmonia_installer::{
     stable_runtime_launch_spec, ActivationEngine, BootstrapInstaller, BootstrapOptions,
-    BootstrapResult, BootstrapStatus, DesktopShutdownHooks, DiagnosticLogger, HttpDownloader,
-    HttpManifestFetcher, InstallationPaths, LocalBackendHealthChecker, ManifestVerifier,
-    RepairEngine, RepairResult, RepairStatus, SystemDetachedLauncher, SystemProcessRunner,
-    UninstallResult, UninstallStatus, UpdateEngine, UpdateResult, UpdateStatus,
+    BootstrapResult, BootstrapStatus, DesktopShutdownHooks, DetachedLauncher, DiagnosticLogger,
+    HttpDownloader, HttpManifestFetcher, InstallationPaths, LocalBackendHealthChecker,
+    ManifestVerifier, RepairEngine, RepairResult, RepairStatus, SystemDetachedLauncher,
+    SystemProcessRunner, UninstallResult, UninstallStatus, UpdateEngine, UpdateResult,
+    UpdateStatus,
 };
 
 const EXIT_INSTALLED: u8 = 0;
