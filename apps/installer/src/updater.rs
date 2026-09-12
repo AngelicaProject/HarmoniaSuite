@@ -1710,7 +1710,11 @@ mod tests {
         let launcher = AbLauncher::default();
         let result = ab_update(&fixture, &fixture.b, 1, runner, hooks, &health, &launcher);
 
-        assert!(matches!(result.status, UpdateStatus::Updated { .. }));
+        assert!(
+            matches!(result.status, UpdateStatus::Updated { .. }),
+            "unexpected update status: {:?}",
+            result.status
+        );
         let state = StateStore::new(fixture.paths.clone())
             .load_installation()
             .unwrap();
@@ -1732,6 +1736,11 @@ mod tests {
         };
         let launcher = AbLauncher::default();
         let result = ab_update(&fixture, &fixture.b, 1, runner, hooks, &health, &launcher);
+        assert!(
+            matches!(result.status, UpdateStatus::Updated { .. }),
+            "unexpected update status: {:?}",
+            result.status
+        );
         assert_eq!(result.target_commit.as_deref(), Some(fixture.b.as_str()));
 
         let store = StateStore::new(fixture.paths.clone());
@@ -1782,10 +1791,11 @@ mod tests {
                 &health,
                 &launcher,
             );
-            assert!(matches!(
-                result.status,
-                UpdateStatus::UpdateBuildFailed { .. }
-            ));
+            assert!(
+                matches!(result.status, UpdateStatus::UpdateBuildFailed { .. }),
+                "unexpected build failure status: {:?}",
+                result.status
+            );
             assert!(hooks.events.lock().unwrap().is_empty());
             assert!(!fixture.paths.desktop_shutdown_request_path().exists());
             assert_eq!(
@@ -1817,7 +1827,11 @@ mod tests {
             &healthy,
             &AbLauncher::default(),
         );
-        assert!(matches!(first.status, UpdateStatus::Updated { .. }));
+        assert!(
+            matches!(first.status, UpdateStatus::Updated { .. }),
+            "unexpected first update status: {:?}",
+            first.status
+        );
         let database = fixture.paths.user_data_root.join("data/harmonia.db");
         fs::create_dir_all(database.parent().unwrap()).unwrap();
         fs::write(&database, b"database-before-c").unwrap();
@@ -1868,7 +1882,11 @@ mod tests {
             &health,
             &AbLauncher::default(),
         );
-        assert!(matches!(first.status, UpdateStatus::Updated { .. }));
+        assert!(
+            matches!(first.status, UpdateStatus::Updated { .. }),
+            "unexpected first update status: {:?}",
+            first.status
+        );
 
         let launcher = AbLauncher::default();
         launcher
