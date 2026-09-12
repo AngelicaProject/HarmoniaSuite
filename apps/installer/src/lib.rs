@@ -10,12 +10,15 @@ pub mod download;
 pub mod extract;
 pub mod git;
 pub mod helper;
+pub mod integration;
 pub mod lock;
 pub mod manifest;
 pub mod paths;
 pub mod process;
+pub mod repair;
 pub mod state;
 pub mod toolchain;
+pub mod uninstall;
 pub mod updater;
 
 pub use activation::{
@@ -24,8 +27,8 @@ pub use activation::{
     VersionComponent, VersionMetadata,
 };
 pub use bootstrap::{
-    BootstrapError, BootstrapInstaller, BootstrapOptions, BootstrapResult, BootstrapStatus,
-    DEFAULT_PRODUCT_VERSION, DEFAULT_REMOTE_URL,
+    stable_runtime_launch_spec, BootstrapError, BootstrapInstaller, BootstrapOptions,
+    BootstrapResult, BootstrapStatus, DEFAULT_PRODUCT_VERSION, DEFAULT_REMOTE_URL,
 };
 pub use build::{BuildArtifact, BuildConfig, BuildError, BuildPipeline, BuildResult, BuildStatus};
 pub use catalog::{production_catalog, production_descriptors, PRODUCTION_CATALOG_SCHEMA_VERSION};
@@ -44,7 +47,13 @@ pub use download::{
 };
 pub use extract::ExtractionError;
 pub use git::{GitError, ManagedCheckout, ManagedGitRepository, ResolvedCommit};
-pub use helper::{publish_installer_helper, HelperError, InstallerHelperMetadata};
+pub use helper::{
+    publish_installer_helper, publish_stable_launcher, run_cleanup_helper, HelperError,
+    InstallerHelperMetadata,
+};
+pub use integration::{
+    install as install_os_integration, remove as remove_os_integration, IntegrationError,
+};
 pub use lock::{InstallationLock, LockError};
 pub use manifest::{
     HttpManifestFetcher, ManifestError, ManifestFetcher, ManifestSignature, ManifestVerifier,
@@ -54,6 +63,7 @@ pub use paths::{InstallationPaths, PathEnvironment, PathError, Platform, TargetA
 pub use process::{
     CommandSpec, ManagedProcess, ProcessError, ProcessOutput, ProcessRunner, SystemProcessRunner,
 };
+pub use repair::{RepairEngine, RepairError, RepairResult, RepairStatus};
 pub use state::{
     InstallationState, OperationKind, RecoveryAction, StateError, StateStore, Transaction,
     TransactionPhase, TransactionRecord, TransactionStatus,
@@ -63,4 +73,5 @@ pub use toolchain::{
     ResolvedToolchain, ToolchainDescriptor, ToolchainError, ToolchainKind, ToolchainManager,
     ToolchainRecord, ToolchainState, ToolchainStateStore,
 };
+pub use uninstall::{UninstallError, UninstallResult, UninstallStatus};
 pub use updater::{UpdateEngine, UpdateError, UpdateResult, UpdateStatus};

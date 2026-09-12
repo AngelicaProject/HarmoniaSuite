@@ -154,17 +154,20 @@ impl ActivationHooks for DesktopShutdownHooks {
             return Err(DesktopControlError::DesktopRunning.to_string());
         };
         let deadline = std::time::Instant::now() + timeout;
+        let mut acknowledged = false;
         loop {
-            if let Ok(bytes) = fs::read(self.paths.desktop_shutdown_ack_path()) {
-                if let Ok(ack) = serde_json::from_slice::<ShutdownAcknowledgement>(&bytes) {
-                    if ack.request_id == request.request_id
-                        && ack.session_id == request.session_id
-                        && ack.pid == request.pid
-                        && ack.started_at_ms == request.started_at_ms
-                    {
-                        cleanup_shutdown_coordination(&self.paths)
-                            .map_err(|error| error.to_string())?;
-                        return Ok(());
+            if !acknowledged {
+                if let Ok(bytes) = fs::read(self.paths.desktop_shutdown_ack_path()) {
+                    if let Ok(ack) = serde_json::from_slice::<ShutdownAcknowledgement>(&bytes) {
+                        if ack.request_id == request.request_id
+                            && ack.session_id == request.session_id
+                            && ack.pid == request.pid
+                            && ack.started_at_ms == request.started_at_ms
+                        {
+                            cleanup_shutdown_coordination(&self.paths)
+                                .map_err(|error| error.to_string())?;
+                            acknowledged = true;
+                        }
                     }
                 }
             }
@@ -172,8 +175,11 @@ impl ActivationHooks for DesktopShutdownHooks {
                 .map_err(|error| error.to_string())?
                 .is_none()
             {
-                cleanup_shutdown_coordination(&self.paths).map_err(|error| error.to_string())?;
-                return Ok(());
+                if acknowledged || !self.paths.desktop_session_path().exists() {
+                    cleanup_shutdown_coordination(&self.paths)
+                        .map_err(|error| error.to_string())?;
+                    return Ok(());
+                }
             }
             if std::time::Instant::now() >= deadline {
                 return Err(DesktopControlError::ShutdownTimeout.to_string());
@@ -284,10 +290,10 @@ mod tests {
             },
         )
         .unwrap();
+        clear_desktop_session(&paths).unwrap();
         hooks.wait_for_shutdown(Duration::from_millis(100)).unwrap();
         assert!(!paths.desktop_shutdown_request_path().exists());
         assert!(!paths.desktop_shutdown_ack_path().exists());
-        clear_desktop_session(&paths).unwrap();
     }
 
     #[test]

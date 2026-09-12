@@ -17,7 +17,8 @@ use crate::catalog::production_descriptors;
 use crate::detached::{DetachedLaunchSpec, DetachedLauncher};
 use crate::diagnostics::{DiagnosticError, DiagnosticLogger};
 use crate::download::DownloadClient;
-use crate::helper::publish_installer_helper;
+use crate::helper::{publish_installer_helper, publish_stable_launcher};
+use crate::integration;
 use crate::lock::{InstallationLock, LockError};
 use crate::paths::InstallationPaths;
 use crate::process::{ProcessRunner, SystemProcessRunner};
@@ -271,6 +272,31 @@ pub fn runtime_launch_spec(
     ack_path: &Path,
     nonce: &str,
 ) -> DetachedLaunchSpec {
+    let mut spec = installed_runtime_spec(paths, runtime);
+    spec = spec
+        .env("HARMONIA_LAUNCH_ACK", ack_path.display().to_string())
+        .env("HARMONIA_LAUNCH_OPERATION_ID", operation_id.to_owned())
+        .env(
+            "HARMONIA_LAUNCH_COMMIT",
+            runtime.metadata.target_commit.clone(),
+        )
+        .env("HARMONIA_LAUNCH_NONCE", nonce.to_owned());
+    spec
+}
+
+/// Runtime contract used by the stable OS launcher. Unlike an install/update
+/// handoff it has no operation-scoped launch acknowledgement.
+pub fn stable_runtime_launch_spec(
+    paths: &InstallationPaths,
+    runtime: &crate::activation::RuntimePaths,
+) -> DetachedLaunchSpec {
+    installed_runtime_spec(paths, runtime)
+}
+
+fn installed_runtime_spec(
+    paths: &InstallationPaths,
+    runtime: &crate::activation::RuntimePaths,
+) -> DetachedLaunchSpec {
     let mut spec = DetachedLaunchSpec::new(runtime.desktop_executable.clone())
         .current_dir(runtime.version_dir.clone())
         .env("HARMONIA_RUNTIME_MODE", "installed")
@@ -307,13 +333,7 @@ pub fn runtime_launch_spec(
         "HARMONIA_INSTALLER_BINARY",
         paths.bin_dir().join(installer_name).display().to_string(),
     );
-    spec.env("HARMONIA_LAUNCH_ACK", ack_path.display().to_string())
-        .env("HARMONIA_LAUNCH_OPERATION_ID", operation_id.to_owned())
-        .env(
-            "HARMONIA_LAUNCH_COMMIT",
-            runtime.metadata.target_commit.clone(),
-        )
-        .env("HARMONIA_LAUNCH_NONCE", nonce.to_owned())
+    spec
 }
 
 fn desktop_launch_spec(
@@ -428,6 +448,30 @@ fn reconcile_running_activation<L: DetachedLauncher>(
     }
     if let Err(error) = publish_installer_helper(paths) {
         let reason = format!("installer helper publication failed: {error}");
+        journal.failure = Some(reason.clone());
+        return finish_result(
+            paths,
+            logger,
+            &operation_id,
+            options,
+            started_at_ms,
+            journal,
+            BootstrapStatus::LaunchFailed {
+                reason,
+                version_dir: runtime.version_dir,
+            },
+            Some(runtime.metadata.target_commit),
+            runtime.metadata.toolchains,
+            true,
+            false,
+        );
+    }
+    if let Err(error) = publish_stable_launcher(paths).and_then(|_| {
+        integration::install(paths, false).map_err(|error| {
+            crate::helper::HelperError::Io(std::io::Error::other(error.to_string()))
+        })
+    }) {
+        let reason = format!("stable launcher/OS integration publication failed: {error}");
         journal.failure = Some(reason.clone());
         return finish_result(
             paths,
@@ -728,6 +772,31 @@ impl<D: DownloadClient, P: ProcessRunner, L: DetachedLauncher> BootstrapInstalle
             match activation.resolve_current() {
                 Ok(Some(runtime)) => {
                     let existing_commit = commit.clone();
+                    if let Err(error) = publish_stable_launcher(&paths).and_then(|_| {
+                        integration::install(&paths, false).map_err(|error| {
+                            crate::helper::HelperError::Io(std::io::Error::other(error.to_string()))
+                        })
+                    }) {
+                        let reason =
+                            format!("stable launcher/OS integration repair failed: {error}");
+                        journal.failure = Some(reason.clone());
+                        return finish_result(
+                            &paths,
+                            logger.as_ref(),
+                            &operation_id,
+                            &options,
+                            started_at_ms,
+                            journal,
+                            BootstrapStatus::LaunchFailed {
+                                reason,
+                                version_dir: runtime.version_dir,
+                            },
+                            Some(existing_commit),
+                            installation.current_toolchains.clone(),
+                            true,
+                            false,
+                        );
+                    }
                     let status = BootstrapStatus::AlreadyInstalled {
                         commit,
                         version_dir: runtime.version_dir,
@@ -868,6 +937,30 @@ impl<D: DownloadClient, P: ProcessRunner, L: DetachedLauncher> BootstrapInstalle
         journal.activation_completed = true;
         if let Err(error) = publish_installer_helper(&paths) {
             let reason = format!("installer helper publication failed: {error}");
+            journal.failure = Some(reason.clone());
+            return finish_result(
+                &paths,
+                logger.as_ref(),
+                &operation_id,
+                &options,
+                started_at_ms,
+                journal,
+                BootstrapStatus::LaunchFailed {
+                    reason,
+                    version_dir: runtime.version_dir,
+                },
+                Some(build.target_commit),
+                toolchain_ids,
+                true,
+                false,
+            );
+        }
+        if let Err(error) = publish_stable_launcher(&paths).and_then(|_| {
+            integration::install(&paths, false).map_err(|error| {
+                crate::helper::HelperError::Io(std::io::Error::other(error.to_string()))
+            })
+        }) {
+            let reason = format!("stable launcher/OS integration publication failed: {error}");
             journal.failure = Some(reason.clone());
             return finish_result(
                 &paths,

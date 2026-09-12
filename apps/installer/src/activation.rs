@@ -434,6 +434,84 @@ impl ActivationEngine {
         self.resolve_current()
     }
 
+    /// Rebuild and republish a corrupted immutable current version without changing
+    /// the trusted commit pointer. The old directory is moved to an installer-owned
+    /// quarantine before the normal activation transaction runs; it is restored on
+    /// every pre-commit failure and deleted only after the replacement is healthy.
+    pub fn repair_current_with_lock<H: HealthChecker>(
+        &self,
+        result_path: impl AsRef<Path>,
+        config: &ActivationConfig,
+        hooks: &mut dyn ActivationHooks,
+        checker: &H,
+        lock: &InstallationLock,
+    ) -> Result<RuntimePaths, ActivationError> {
+        if lock.path() != self.paths.lock_path() {
+            return Err(ActivationError::InvalidInput(
+                "caller lock does not belong to this installation".to_owned(),
+            ));
+        }
+        let store = StateStore::new(self.paths.clone());
+        let installation = store.load_installation()?;
+        let current = installation.current_commit.clone().ok_or_else(|| {
+            ActivationError::InvalidInput(
+                "cannot repair an installation without current".to_owned(),
+            )
+        })?;
+        let result = self.load_build_result(result_path.as_ref())?;
+        if result.target_commit != current {
+            return Err(ActivationError::InvalidInput(
+                "repair BuildResult does not match the trusted current commit".to_owned(),
+            ));
+        }
+        let candidate = self.validate_candidate(&result)?;
+        let final_dir = self.paths.versions_dir().join(&current);
+        validate_activation_path(&self.paths.versions_dir(), &final_dir)?;
+        if self.version_matches_result(&final_dir, &result)? {
+            return self.resolve_current()?.ok_or_else(|| {
+                ActivationError::InvalidInput("current disappeared during repair".to_owned())
+            });
+        }
+
+        let quarantine = self
+            .paths
+            .versions_dir()
+            .join(format!(".{current}.repair-old-{}", Uuid::new_v4().simple()));
+        validate_activation_path(&self.paths.versions_dir(), &quarantine)?;
+        if final_dir.exists() {
+            fs::rename(&final_dir, &quarantine)?;
+        }
+        let result =
+            self.activate_with_lock_for_operation(result_path, config, hooks, checker, lock, None);
+        match result {
+            Ok(runtime) => {
+                if quarantine.exists() {
+                    fs::remove_dir_all(&quarantine)?;
+                }
+                Ok(runtime)
+            }
+            Err(error) => {
+                let restore = (|| -> Result<(), ActivationError> {
+                    let replacement = self.paths.versions_dir().join(&current);
+                    if replacement.exists() {
+                        validate_activation_path(&self.paths.versions_dir(), &replacement)?;
+                        fs::remove_dir_all(&replacement)?;
+                    }
+                    if quarantine.exists() {
+                        fs::rename(&quarantine, &final_dir)?;
+                    }
+                    Ok(())
+                })();
+                if let Err(restore_error) = restore {
+                    return Err(ActivationError::ReviewRequired(format!(
+                        "repair failed and quarantined version could not be restored: {restore_error}; original: {error}"
+                    )));
+                }
+                Err(error)
+            }
+        }
+    }
+
     fn activate_transaction<H: HealthChecker>(
         &self,
         result: &BuildResult,

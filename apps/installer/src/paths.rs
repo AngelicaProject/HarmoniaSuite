@@ -186,6 +186,58 @@ impl InstallationPaths {
         })
     }
 
+    pub fn stable_launcher_path(&self) -> PathBuf {
+        self.bin_dir().join(if self.platform == Platform::Windows {
+            "HarmoniaSuite.exe"
+        } else {
+            "harmonia-suite"
+        })
+    }
+
+    pub fn stable_launcher_metadata_path(&self) -> PathBuf {
+        self.bin_dir().join(if self.platform == Platform::Windows {
+            "HarmoniaSuite.exe.json"
+        } else {
+            "harmonia-suite.json"
+        })
+    }
+
+    pub fn linux_desktop_entry_path(&self) -> PathBuf {
+        self.app_root
+            .parent()
+            .unwrap_or(&self.app_root)
+            .join("applications")
+            .join("harmoniasuite.desktop")
+    }
+
+    pub fn linux_icon_path(&self) -> PathBuf {
+        self.app_root
+            .parent()
+            .unwrap_or(&self.app_root)
+            .join("icons")
+            .join("hicolor")
+            .join("scalable")
+            .join("apps")
+            .join("harmoniasuite.svg")
+    }
+
+    pub fn windows_start_menu_shortcut_path(&self) -> PathBuf {
+        self.app_data_root()
+            .join("Microsoft")
+            .join("Windows")
+            .join("Start Menu")
+            .join("Programs")
+            .join("HarmoniaSuite.lnk")
+    }
+
+    pub fn windows_desktop_shortcut_path(&self) -> PathBuf {
+        self.home_root().join("Desktop").join("HarmoniaSuite.lnk")
+    }
+
+    pub fn windows_uninstall_registry_key(&self) -> &'static str {
+        r"Software\Microsoft\Windows\CurrentVersion\Uninstall\HarmoniaSuite"
+    }
+
     pub fn versions_dir(&self) -> PathBuf {
         self.app_root.join("versions")
     }
@@ -301,6 +353,21 @@ impl InstallationPaths {
         path.starts_with(&self.app_root)
             || path.starts_with(&self.state_root)
             || path.starts_with(&self.cache_root)
+    }
+
+    fn app_data_root(&self) -> PathBuf {
+        self.user_data_root
+            .parent()
+            .unwrap_or(&self.user_data_root)
+            .to_path_buf()
+    }
+
+    fn home_root(&self) -> PathBuf {
+        self.user_data_root
+            .parent()
+            .and_then(Path::parent)
+            .unwrap_or(&self.user_data_root)
+            .to_path_buf()
     }
 }
 

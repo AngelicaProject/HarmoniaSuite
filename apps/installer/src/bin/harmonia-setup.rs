@@ -1,11 +1,13 @@
 use std::env;
 use std::process::ExitCode;
 
+use harmonia_installer::uninstall::uninstall;
 use harmonia_installer::{
-    BootstrapInstaller, BootstrapOptions, BootstrapResult, BootstrapStatus, DesktopShutdownHooks,
-    DiagnosticLogger, HttpDownloader, HttpManifestFetcher, InstallationPaths,
-    LocalBackendHealthChecker, ManifestVerifier, SystemDetachedLauncher, SystemProcessRunner,
-    UpdateEngine, UpdateResult, UpdateStatus,
+    stable_runtime_launch_spec, ActivationEngine, BootstrapInstaller, BootstrapOptions,
+    BootstrapResult, BootstrapStatus, DesktopShutdownHooks, DiagnosticLogger, HttpDownloader,
+    HttpManifestFetcher, InstallationPaths, LocalBackendHealthChecker, ManifestVerifier,
+    RepairEngine, RepairResult, RepairStatus, SystemDetachedLauncher, SystemProcessRunner,
+    UninstallResult, UninstallStatus, UpdateEngine, UpdateResult, UpdateStatus,
 };
 
 const EXIT_INSTALLED: u8 = 0;
@@ -19,20 +21,59 @@ const EXIT_UPGRADE_REQUIRED: u8 = 42;
 const EXIT_USAGE: u8 = 64;
 const EXIT_INTERNAL: u8 = 70;
 
+fn is_stable_launcher_process() -> bool {
+    let Some(name) = env::current_exe().ok().and_then(|path| {
+        path.file_stem()
+            .map(|value| value.to_string_lossy().to_ascii_lowercase())
+    }) else {
+        return false;
+    };
+    name == "harmoniasuite" || name == "harmonia-suite"
+}
+
+fn run_stable_launcher() -> ExitCode {
+    let paths = match InstallationPaths::current() {
+        Ok(paths) => paths,
+        Err(error) => return report_error(false, EXIT_INTERNAL, &error.to_string()),
+    };
+    let activation = ActivationEngine::new(paths.clone());
+    let runtime = match activation.resolve_current() {
+        Ok(Some(runtime)) => runtime,
+        Ok(None) => {
+            return report_error(
+                false,
+                EXIT_REPAIR_REQUIRED,
+                "HarmoniaSuite is not installed",
+            )
+        }
+        Err(error) => return report_error(false, EXIT_REPAIR_REQUIRED, &error.to_string()),
+    };
+    match SystemDetachedLauncher.launch(&stable_runtime_launch_spec(&paths, &runtime)) {
+        Ok(_) => ExitCode::from(EXIT_INSTALLED),
+        Err(error) => report_error(false, EXIT_LAUNCH_FAILED, &error.to_string()),
+    }
+}
+
 fn main() -> ExitCode {
+    if env::args().nth(1).as_deref() == Some("__cleanup") {
+        return match harmonia_installer::run_cleanup_helper() {
+            Ok(()) => ExitCode::from(EXIT_INSTALLED),
+            Err(error) => report_error(false, EXIT_INTERNAL, &error.to_string()),
+        };
+    }
+    if is_stable_launcher_process() {
+        return run_stable_launcher();
+    }
     let arguments = env::args().skip(1).collect::<Vec<_>>();
     let cli = match parse_cli(&arguments) {
         Ok(cli) => cli,
         Err(error) => return report_error(false, EXIT_USAGE, &error),
     };
-    if matches!(cli.command, Command::Repair | Command::Uninstall) {
-        return report_not_implemented(cli.json, cli.command.as_str());
-    }
     let paths = match InstallationPaths::current() {
         Ok(paths) => paths,
         Err(error) => return report_error(cli.json, EXIT_INTERNAL, &error.to_string()),
     };
-    let logger_name = if matches!(cli.command, Command::Update | Command::Check) {
+    let logger_name = if matches!(cli.command, Command::Update | Command::CheckUpdate) {
         "updater.jsonl"
     } else {
         "bootstrap.jsonl"
@@ -41,14 +82,14 @@ fn main() -> ExitCode {
         Ok(logger) => Some(logger),
         Err(error) => return report_error(cli.json, EXIT_INTERNAL, &error.to_string()),
     };
-    if matches!(cli.command, Command::Update | Command::Check) {
+    if matches!(cli.command, Command::Update | Command::CheckUpdate) {
         let updater = UpdateEngine::new(
             paths.clone(),
             HttpDownloader::default(),
             SystemProcessRunner::default(),
             logger,
         );
-        if matches!(cli.command, Command::Check) {
+        if matches!(cli.command, Command::CheckUpdate) {
             let fetcher = HttpManifestFetcher::default();
             let verifier = ManifestVerifier::production();
             return match updater.check_for_update(
@@ -71,6 +112,24 @@ fn main() -> ExitCode {
             Err(error) => report_error(cli.json, EXIT_INTERNAL, &error.to_string()),
         };
     }
+    if cli.command == Command::Repair {
+        let engine = RepairEngine::new(
+            paths,
+            HttpDownloader::default(),
+            SystemProcessRunner::default(),
+            logger,
+        );
+        return match engine.repair() {
+            Ok(result) => report_repair_result(cli.json, result),
+            Err(error) => report_error(cli.json, EXIT_INTERNAL, &error.to_string()),
+        };
+    }
+    if cli.command == Command::Uninstall {
+        return match uninstall(paths, cli.remove_user_data) {
+            Ok(result) => report_uninstall_result(cli.json, result),
+            Err(error) => report_error(cli.json, EXIT_INTERNAL, &error.to_string()),
+        };
+    }
     let installer = BootstrapInstaller::new(
         paths,
         HttpDownloader::default(),
@@ -87,38 +146,29 @@ fn main() -> ExitCode {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Command {
     Install,
-    Check,
+    CheckUpdate,
     Update,
     Repair,
     Uninstall,
-}
-
-impl Command {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Install => "install",
-            Self::Check => "check",
-            Self::Update => "update",
-            Self::Repair => "repair",
-            Self::Uninstall => "uninstall",
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct Cli {
     command: Command,
     json: bool,
+    remove_user_data: bool,
 }
 
 fn parse_cli(arguments: &[String]) -> Result<Cli, String> {
     let mut command = None;
     let mut json = false;
+    let mut remove_user_data = false;
     for argument in arguments {
         match argument.as_str() {
             "--json" => json = true,
+            "--remove-user-data" => remove_user_data = true,
             "install" => set_command(&mut command, Command::Install)?,
-            "check" => set_command(&mut command, Command::Check)?,
+            "check-update" => set_command(&mut command, Command::CheckUpdate)?,
             "update" => set_command(&mut command, Command::Update)?,
             "repair" => set_command(&mut command, Command::Repair)?,
             "uninstall" => set_command(&mut command, Command::Uninstall)?,
@@ -128,9 +178,14 @@ fn parse_cli(arguments: &[String]) -> Result<Cli, String> {
             value => return Err(format!("unknown command {value:?}")),
         }
     }
+    let command = command.unwrap_or(Command::Install);
+    if remove_user_data && command != Command::Uninstall {
+        return Err("--remove-user-data is valid only for uninstall".to_owned());
+    }
     Ok(Cli {
-        command: command.unwrap_or(Command::Install),
+        command,
         json,
+        remove_user_data,
     })
 }
 
@@ -139,21 +194,6 @@ fn set_command(command: &mut Option<Command>, value: Command) -> Result<(), Stri
         return Err("more than one command was provided".to_owned());
     }
     Ok(())
-}
-
-fn report_not_implemented(json: bool, operation: &str) -> ExitCode {
-    if json {
-        println!(
-            "{}",
-            serde_json::json!({
-                "status": "NotImplemented",
-                "operation": operation,
-            })
-        );
-    } else {
-        eprintln!("{operation} is not implemented in this installer phase");
-    }
-    ExitCode::from(EXIT_USAGE)
 }
 
 fn report_update_result(json: bool, result: UpdateResult) -> ExitCode {
@@ -262,12 +302,13 @@ mod tests {
     }
 
     #[test]
-    fn cli_accepts_only_install_and_json_for_implemented_flow() {
+    fn cli_accepts_install_update_and_json() {
         assert_eq!(
             parse_cli(&args(&["install", "--json"])),
             Ok(Cli {
                 command: Command::Install,
                 json: true,
+                remove_user_data: false,
             })
         );
         assert_eq!(
@@ -275,6 +316,7 @@ mod tests {
             Ok(Cli {
                 command: Command::Install,
                 json: false,
+                remove_user_data: false,
             })
         );
         assert_eq!(
@@ -282,7 +324,78 @@ mod tests {
             Ok(Cli {
                 command: Command::Update,
                 json: true,
+                remove_user_data: false,
+            })
+        );
+        assert_eq!(
+            parse_cli(&args(&["check-update"])),
+            Ok(Cli {
+                command: Command::CheckUpdate,
+                json: false,
+                remove_user_data: false,
             })
         );
     }
+
+    #[test]
+    fn cli_rejects_legacy_check_command() {
+        assert!(parse_cli(&args(&["check"])).is_err());
+    }
+
+    #[test]
+    fn cli_scopes_user_data_removal_to_uninstall() {
+        assert!(parse_cli(&args(&["install", "--remove-user-data"])).is_err());
+        assert_eq!(
+            parse_cli(&args(&["uninstall", "--remove-user-data", "--json"])),
+            Ok(Cli {
+                command: Command::Uninstall,
+                json: true,
+                remove_user_data: true,
+            })
+        );
+    }
+}
+
+fn report_repair_result(json: bool, result: RepairResult) -> ExitCode {
+    let code = match &result.status {
+        RepairStatus::Healthy { .. } | RepairStatus::Repaired { .. } => EXIT_INSTALLED,
+        RepairStatus::RepairRequired { .. } => EXIT_REPAIR_REQUIRED,
+        RepairStatus::ReviewRequired { .. } => EXIT_REVIEW_REQUIRED,
+        RepairStatus::BuildFailed { .. } => EXIT_BUILD_FAILED,
+        RepairStatus::ActivationFailed { .. } => EXIT_ACTIVATION_FAILED,
+    };
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&result).unwrap_or_else(|_| "{}".to_owned())
+        );
+    } else {
+        println!(
+            "{}",
+            serde_json::to_string(&result).unwrap_or_else(|_| "{}".to_owned())
+        );
+    }
+    ExitCode::from(code)
+}
+
+fn report_uninstall_result(json: bool, result: UninstallResult) -> ExitCode {
+    let code = match result.status {
+        UninstallStatus::Uninstalled { .. } | UninstallStatus::AlreadyUninstalled { .. } => {
+            EXIT_INSTALLED
+        }
+        UninstallStatus::ReviewRequired { .. } => EXIT_REVIEW_REQUIRED,
+        UninstallStatus::Failed { .. } => EXIT_INTERNAL,
+    };
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&result).unwrap_or_else(|_| "{}".to_owned())
+        );
+    } else {
+        println!(
+            "{}",
+            serde_json::to_string(&result).unwrap_or_else(|_| "{}".to_owned())
+        );
+    }
+    ExitCode::from(code)
 }
