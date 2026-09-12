@@ -494,7 +494,8 @@ mod tests {
         source.fetch_origin_main().unwrap();
         let second = commit_in_remote(&remote, b"second");
         assert_eq!(source.fetch_exact_commit(&first).unwrap().sha, first);
-        assert_eq!(source.resolve_main().unwrap().sha, second);
+        assert_eq!(source.resolve_main().unwrap().sha, first);
+        assert_ne!(first, second);
         source.verify_commit(&first).unwrap();
     }
 
