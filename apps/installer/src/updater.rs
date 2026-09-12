@@ -1510,7 +1510,7 @@ mod tests {
         .executable("npm", "node-24/bin/npm");
         let key = SigningKey::from_bytes(&[31u8; 32]);
         let verifier = ManifestVerifier::with_keys(BTreeMap::from([(
-            "ab-test".to_owned(),
+            "test".to_owned(),
             key.verifying_key().to_bytes(),
         )]));
         AbFixture {
