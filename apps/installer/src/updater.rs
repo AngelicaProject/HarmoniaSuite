@@ -678,7 +678,6 @@ impl<D: DownloadClient, P: ProcessRunner> UpdateEngine<D, P> {
         );
         let launch_result = launcher.launch(&launch);
         let launch_handle = launch_result.as_ref().ok().cloned();
-        let launch_error = launch_result.as_ref().err().map(ToString::to_string);
         if let Some(error) = launch_result.as_ref().err() {
             if !matches!(error, DetachedLaunchError::ExitedEarly { .. }) {
                 if let Some(launch) = launch_handle.as_ref() {

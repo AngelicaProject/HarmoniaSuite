@@ -66,11 +66,8 @@ pub fn publish_desktop_session(
 
 pub fn clear_desktop_session(paths: &InstallationPaths) -> Result<(), DesktopControlError> {
     match fs::remove_file(desktop_session_path(paths)) {
-        Ok(())
-        | Err(std::io::Error {
-            kind: std::io::ErrorKind::NotFound,
-            ..
-        }) => Ok(()),
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error.into()),
     }
 }

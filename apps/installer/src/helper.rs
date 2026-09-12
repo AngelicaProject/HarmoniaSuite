@@ -2,7 +2,6 @@
 
 use std::env;
 use std::fs::{self, OpenOptions};
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -25,8 +24,6 @@ pub struct InstallerHelperMetadata {
 
 #[derive(Debug, Error)]
 pub enum HelperError {
-    #[error("cannot determine installer helper executable: {0}")]
-    CurrentExecutable(#[from] std::io::Error),
     #[error("installer helper path is invalid: {0}")]
     InvalidPath(PathBuf),
     #[error("installer helper I/O failed: {0}")]
