@@ -3,7 +3,7 @@ use std::env;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -120,10 +120,68 @@ pub enum ProcessError {
     Io(#[from] std::io::Error),
     #[error("process output reader failed")]
     Reader,
+    #[error("long-lived process spawning is not supported by this runner")]
+    Unsupported,
 }
 
 pub trait ProcessRunner {
     fn run(&self, command: &CommandSpec) -> Result<ProcessOutput, ProcessError>;
+
+    fn spawn(&self, _command: &CommandSpec) -> Result<ManagedProcess, ProcessError> {
+        Err(ProcessError::Unsupported)
+    }
+}
+
+pub struct ManagedProcess {
+    child: Child,
+    containment: ProcessContainment,
+    stdout: Arc<Mutex<Vec<u8>>>,
+    stderr: Arc<Mutex<Vec<u8>>>,
+    readers: Vec<thread::JoinHandle<Result<(), std::io::Error>>>,
+}
+
+impl ManagedProcess {
+    pub fn stdout_snapshot(&self) -> String {
+        self.stdout
+            .lock()
+            .map(|value| String::from_utf8_lossy(&value).into_owned())
+            .unwrap_or_default()
+    }
+
+    pub fn stderr_snapshot(&self) -> String {
+        self.stderr
+            .lock()
+            .map(|value| String::from_utf8_lossy(&value).into_owned())
+            .unwrap_or_default()
+    }
+
+    pub fn try_wait(&mut self) -> Result<Option<i32>, ProcessError> {
+        Ok(self
+            .child
+            .try_wait()?
+            .map(|status| status.code().unwrap_or(1)))
+    }
+
+    pub fn stop(&mut self) -> Result<(), ProcessError> {
+        if self.child.try_wait()?.is_none() {
+            self.containment.terminate(&mut self.child)?;
+        }
+        let _ = self.child.wait()?;
+        self.join_readers()
+    }
+
+    fn join_readers(&mut self) -> Result<(), ProcessError> {
+        for reader in self.readers.drain(..) {
+            reader.join().map_err(|_| ProcessError::Reader)??;
+        }
+        Ok(())
+    }
+}
+
+impl Drop for ManagedProcess {
+    fn drop(&mut self) {
+        let _ = self.stop();
+    }
 }
 
 #[derive(Clone, Default)]
@@ -229,6 +287,85 @@ impl ProcessRunner for SystemProcessRunner {
         }
         Ok(result)
     }
+
+    fn spawn(&self, command: &CommandSpec) -> Result<ManagedProcess, ProcessError> {
+        if let Some(logger) = &self.logger {
+            let _ = logger.log(
+                "info",
+                "process.start",
+                [("command".to_owned(), json!(redacted_command(command)))],
+            );
+        }
+
+        let mut process = Command::new(&command.program);
+        process
+            .args(&command.args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        process.env_clear();
+        for name in &command.environment_allowlist {
+            if let Some(value) = env::var_os(name) {
+                process.env(name, value);
+            }
+        }
+        process.envs(&command.environment);
+        if let Some(current_dir) = &command.current_dir {
+            process.current_dir(current_dir);
+        }
+        #[cfg(unix)]
+        process.process_group(0);
+
+        let mut containment = ProcessContainment::new().map_err(ProcessError::Io)?;
+        let mut child = process.spawn().map_err(|source| ProcessError::Spawn {
+            program: command.program.display().to_string(),
+            source,
+        })?;
+        containment.attach(&child).map_err(|error| {
+            let _ = child.kill();
+            let _ = child.wait();
+            ProcessError::Io(error)
+        })?;
+        let stdout = child.stdout.take().ok_or(ProcessError::Reader)?;
+        let stderr = child.stderr.take().ok_or(ProcessError::Reader)?;
+        let stdout_buffer = Arc::new(Mutex::new(Vec::new()));
+        let stderr_buffer = Arc::new(Mutex::new(Vec::new()));
+        let readers = vec![
+            spawn_buffer_reader(stdout, stdout_buffer.clone()),
+            spawn_buffer_reader(stderr, stderr_buffer.clone()),
+        ];
+        Ok(ManagedProcess {
+            child,
+            containment,
+            stdout: stdout_buffer,
+            stderr: stderr_buffer,
+            readers,
+        })
+    }
+}
+
+fn spawn_buffer_reader<R: Read + Send + 'static>(
+    mut reader: R,
+    target: Arc<Mutex<Vec<u8>>>,
+) -> thread::JoinHandle<Result<(), std::io::Error>> {
+    thread::spawn(move || {
+        let mut buffer = [0_u8; 8192];
+        loop {
+            let read = reader.read(&mut buffer)?;
+            if read == 0 {
+                break;
+            }
+            let mut output = target
+                .lock()
+                .map_err(|_| std::io::Error::other("process output buffer poisoned"))?;
+            output.extend_from_slice(&buffer[..read]);
+            if output.len() > MAX_CAPTURE_BYTES {
+                let overflow = output.len() - MAX_CAPTURE_BYTES;
+                output.drain(..overflow);
+            }
+        }
+        Ok(())
+    })
 }
 
 fn read_output<R: Read>(mut reader: R) -> Result<Vec<u8>, std::io::Error> {

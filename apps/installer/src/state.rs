@@ -98,6 +98,12 @@ pub struct InstallationState {
     pub current_toolchains: BTreeMap<String, String>,
     #[serde(default)]
     pub previous_toolchains: BTreeMap<String, String>,
+    #[serde(default)]
+    pub staged_commit: Option<String>,
+    #[serde(default)]
+    pub pending_commit: Option<String>,
+    #[serde(default)]
+    pub activation_at_ms: Option<u128>,
 }
 
 impl InstallationState {
@@ -113,6 +119,9 @@ impl InstallationState {
             components: BTreeMap::new(),
             current_toolchains: BTreeMap::new(),
             previous_toolchains: BTreeMap::new(),
+            staged_commit: None,
+            pending_commit: None,
+            activation_at_ms: None,
         }
     }
 }
@@ -133,6 +142,20 @@ pub struct TransactionRecord {
     pub failure: Option<String>,
     #[serde(default)]
     pub toolchain_refs: BTreeMap<String, String>,
+    #[serde(default)]
+    pub published_version: Option<String>,
+    #[serde(default)]
+    pub current_switched: bool,
+    #[serde(default)]
+    pub new_process_started: bool,
+    #[serde(default)]
+    pub health_check_passed: bool,
+    #[serde(default)]
+    pub db_backup_path: Option<PathBuf>,
+    #[serde(default)]
+    pub db_backup_required: bool,
+    #[serde(default)]
+    pub rollback_completed: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -416,9 +439,20 @@ impl Transaction {
             activation_started: false,
             failure: None,
             toolchain_refs: BTreeMap::new(),
+            published_version: None,
+            current_switched: false,
+            new_process_started: false,
+            health_check_passed: false,
+            db_backup_path: None,
+            db_backup_required: false,
+            rollback_completed: false,
         };
         store.write_transaction(&record)?;
         Ok(Self { store, record })
+    }
+
+    pub(crate) fn resume_existing(store: StateStore, record: TransactionRecord) -> Self {
+        Self { store, record }
     }
 
     pub fn record(&self) -> &TransactionRecord {
@@ -473,6 +507,41 @@ impl Transaction {
 
     pub fn mark_activation_started(&mut self) -> Result<(), StateError> {
         self.record.activation_started = true;
+        self.store.write_transaction(&self.record)
+    }
+
+    pub fn set_published_version(&mut self, version: impl Into<String>) -> Result<(), StateError> {
+        self.record.published_version = Some(version.into());
+        self.store.write_transaction(&self.record)
+    }
+
+    pub fn mark_current_switched(&mut self) -> Result<(), StateError> {
+        self.record.current_switched = true;
+        self.store.write_transaction(&self.record)
+    }
+
+    pub fn mark_process_started(&mut self) -> Result<(), StateError> {
+        self.record.new_process_started = true;
+        self.store.write_transaction(&self.record)
+    }
+
+    pub fn mark_health_check_passed(&mut self) -> Result<(), StateError> {
+        self.record.health_check_passed = true;
+        self.store.write_transaction(&self.record)
+    }
+
+    pub fn set_db_backup_path(&mut self, path: impl Into<PathBuf>) -> Result<(), StateError> {
+        self.record.db_backup_path = Some(path.into());
+        self.store.write_transaction(&self.record)
+    }
+
+    pub fn mark_db_backup_required(&mut self) -> Result<(), StateError> {
+        self.record.db_backup_required = true;
+        self.store.write_transaction(&self.record)
+    }
+
+    pub fn mark_rollback_completed(&mut self) -> Result<(), StateError> {
+        self.record.rollback_completed = true;
         self.store.write_transaction(&self.record)
     }
 

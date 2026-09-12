@@ -175,14 +175,19 @@ export function parseGatewayReadyLine(line: string, expectedInstance?: string): 
 }
 
 export function defaultGatewayJar(): string | undefined {
-  const explicit = process.env.HARMONIA_GATEWAY_JAR;
-  if (explicit) {
-    return explicit;
-  }
+  const explicit = process.env.HARMONIA_BACKEND_JAR || process.env.HARMONIA_GATEWAY_JAR;
+  const activeVersion = process.env.HARMONIA_ACTIVE_VERSION_DIR;
+  const installed = process.env.HARMONIA_RUNTIME_MODE === "installed";
   const candidates = [
-    resolve(process.cwd(), "target", "harmonia-suite.jar"),
-    resolve(__dirname, "../../../target/harmonia-suite.jar"),
-  ];
+    explicit,
+    activeVersion ? join(activeVersion, "backend", "harmonia-suite.jar") : undefined,
+    ...(installed
+      ? []
+      : [
+          resolve(process.cwd(), "target", "harmonia-suite.jar"),
+          resolve(__dirname, "../../../target/harmonia-suite.jar"),
+        ]),
+  ].filter((candidate): candidate is string => Boolean(candidate));
   return candidates.find((candidate) => existsSync(candidate));
 }
 
