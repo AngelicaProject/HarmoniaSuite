@@ -1040,6 +1040,14 @@ mod tests {
                 .any(|argument| argument.contains("\"ci\""))
     }
 
+    fn uses_managed_toolchain(command: &CommandSpec, toolchain_dir: &Path) -> bool {
+        command.program.starts_with(toolchain_dir)
+            || command
+                .environment
+                .get("PATH")
+                .is_some_and(|path| path.contains(toolchain_dir.to_string_lossy().as_ref()))
+    }
+
     fn is_maven_command(command: &CommandSpec) -> bool {
         command
             .program
@@ -1090,7 +1098,7 @@ mod tests {
                 .unwrap_or(true)
         }));
         assert!(calls.iter().any(|call| {
-            call.program.starts_with(fixture.paths.toolchain_dir()) && is_npm_ci_command(call)
+            uses_managed_toolchain(call, &fixture.paths.toolchain_dir()) && is_npm_ci_command(call)
         }));
         assert!(calls.iter().any(|call| {
             call.environment
