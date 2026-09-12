@@ -1925,7 +1925,7 @@ mod tests {
         let review = ab_update(
             &fixture,
             &fixture.c,
-            3,
+            2,
             AbBuildRunner::default(),
             &mut hooks,
             &health,
