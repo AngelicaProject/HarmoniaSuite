@@ -1032,6 +1032,14 @@ mod tests {
                 .is_some_and(|path| path.ends_with(Path::new("desktop")))
     }
 
+    fn is_npm_ci_command(command: &CommandSpec) -> bool {
+        command.args.first().map(String::as_str) == Some("ci")
+            || command
+                .args
+                .iter()
+                .any(|argument| argument.contains("\"ci\""))
+    }
+
     fn is_maven_command(command: &CommandSpec) -> bool {
         command
             .program
@@ -1071,7 +1079,7 @@ mod tests {
         let calls = calls.lock().unwrap();
         let npm_calls = calls
             .iter()
-            .filter(|call| call.args.first().map(String::as_str) == Some("ci"))
+            .filter(|call| is_npm_ci_command(call))
             .collect::<Vec<_>>();
         assert_eq!(npm_calls.len(), 2);
         assert!(calls.iter().all(|call| {
@@ -1082,8 +1090,7 @@ mod tests {
                 .unwrap_or(true)
         }));
         assert!(calls.iter().any(|call| {
-            call.program.starts_with(fixture.paths.toolchain_dir())
-                && call.args.first().map(String::as_str) == Some("ci")
+            call.program.starts_with(fixture.paths.toolchain_dir()) && is_npm_ci_command(call)
         }));
         assert!(calls.iter().any(|call| {
             call.environment
