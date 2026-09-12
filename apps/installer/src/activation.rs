@@ -980,7 +980,10 @@ fn copy_regular_file(source: &Path, destination: &Path) -> Result<(), Activation
             fs::Permissions::from_mode(metadata.permissions().mode()),
         )?;
     }
-    let file = OpenOptions::new().read(true).open(destination)?;
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(destination)?;
     file.sync_all()?;
     Ok(())
 }
