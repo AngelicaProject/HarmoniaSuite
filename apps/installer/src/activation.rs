@@ -21,9 +21,7 @@ use crate::state::{
     validate_managed_path, DatabasePreState, InstallationState, OperationKind, StateError,
     StateStore, Transaction, TransactionPhase, TransactionStatus,
 };
-use crate::toolchain::{
-    ArchiveFormat, ToolchainKind, ToolchainRecord, ToolchainState, ToolchainStateStore,
-};
+use crate::toolchain::{ToolchainKind, ToolchainStateStore};
 
 const VERSION_METADATA_SCHEMA_VERSION: u32 = 1;
 const BUILD_RESULT_SCHEMA_VERSION: u32 = 1;
@@ -1391,6 +1389,7 @@ fn now_ms() -> u128 {
 mod tests {
     use super::*;
     use crate::paths::{Platform, TargetArchitecture};
+    use crate::toolchain::{ArchiveFormat, ToolchainRecord, ToolchainState};
     use tempfile::tempdir;
 
     fn paths(root: &Path) -> InstallationPaths {
