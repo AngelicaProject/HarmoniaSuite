@@ -17,6 +17,7 @@ use crate::process::CommandSpec;
 use crate::state::{StateError, StateStore};
 
 const TOOLCHAIN_STATE_SCHEMA_VERSION: u32 = 1;
+pub const TOOLCHAIN_CATALOG_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -182,7 +183,7 @@ pub struct OfficialToolchainCatalog {
 impl OfficialToolchainCatalog {
     pub fn from_json(bytes: &[u8]) -> Result<Self, ToolchainError> {
         let catalog: Self = serde_json::from_slice(bytes)?;
-        if catalog.schema_version != TOOLCHAIN_STATE_SCHEMA_VERSION {
+        if catalog.schema_version != TOOLCHAIN_CATALOG_SCHEMA_VERSION {
             return Err(ToolchainError::UnsupportedCatalogSchema(
                 catalog.schema_version,
             ));

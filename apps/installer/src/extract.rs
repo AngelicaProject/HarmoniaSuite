@@ -28,22 +28,42 @@ pub fn extract_archive(
     format: ArchiveFormat,
     destination: &Path,
 ) -> Result<(), ExtractionError> {
-    reject_links(archive_path)?;
+    let archive_path = extended_windows_path(archive_path);
+    let destination = extended_windows_path(destination);
+    reject_links(&archive_path)?;
     if destination.exists() {
-        return Err(ExtractionError::UnsafePath(destination.to_path_buf()));
+        return Err(ExtractionError::UnsafePath(destination));
     }
-    ensure_existing_ancestors_are_safe(destination)?;
-    fs::create_dir(destination)?;
-    reject_links(destination)?;
+    ensure_existing_ancestors_are_safe(&destination)?;
+    fs::create_dir(&destination)?;
+    reject_links(&destination)?;
 
     let result = match format {
-        ArchiveFormat::Zip => extract_zip(archive_path, destination),
-        ArchiveFormat::TarGz => extract_tar_gz(archive_path, destination),
+        ArchiveFormat::Zip => extract_zip(&archive_path, &destination),
+        ArchiveFormat::TarGz => extract_tar_gz(&archive_path, &destination),
     };
     if result.is_err() {
-        let _ = fs::remove_dir_all(destination);
+        let _ = fs::remove_dir_all(&destination);
     }
     result
+}
+
+#[cfg(windows)]
+fn extended_windows_path(path: &Path) -> PathBuf {
+    let value = path.to_string_lossy().replace('/', "\\");
+    if !path.is_absolute() || value.starts_with(r"\\?\") {
+        return path.to_path_buf();
+    }
+    if let Some(unc_path) = value.strip_prefix(r"\\") {
+        PathBuf::from(format!(r"\\?\UNC\{unc_path}"))
+    } else {
+        PathBuf::from(format!(r"\\?\{value}"))
+    }
+}
+
+#[cfg(not(windows))]
+fn extended_windows_path(path: &Path) -> PathBuf {
+    path.to_path_buf()
 }
 
 fn extract_zip(archive_path: &Path, destination: &Path) -> Result<(), ExtractionError> {

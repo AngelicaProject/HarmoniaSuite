@@ -141,10 +141,60 @@ impl<D: DownloadClient, P: ProcessRunner> BuildPipeline<D, P> {
         &self.toolchains
     }
 
+    /// Locate the durable result emitted by the successful build for this
+    /// exact target. Activation consumes this path and validates its candidate.
+    pub fn result_path_for(&self, result: &BuildResult) -> Result<PathBuf, BuildError> {
+        let directory = self.paths.build_results_dir();
+        let mut matches = Vec::new();
+        if directory.is_dir() {
+            for entry in fs::read_dir(directory)? {
+                let path = entry?.path();
+                if path.extension().and_then(|value| value.to_str()) != Some("json") {
+                    continue;
+                }
+                let candidate: BuildResult = match fs::read(&path)
+                    .ok()
+                    .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+                {
+                    Some(value) => value,
+                    None => continue,
+                };
+                if candidate.target_commit == result.target_commit
+                    && candidate.checkout_dir == result.checkout_dir
+                    && candidate.finished_at_ms == result.finished_at_ms
+                {
+                    matches.push(path);
+                }
+            }
+        }
+        matches.sort();
+        matches
+            .pop()
+            .ok_or_else(|| BuildError::InvalidOutput(result.checkout_dir.clone()))
+    }
+
     pub fn run(&self, config: &BuildConfig) -> Result<BuildResult, BuildError> {
         validate_config(config)?;
         let git = ManagedGitRepository::new(self.paths.source_dir(), config.remote_url.clone())?;
         self.run_with_git(config, &git)
+    }
+
+    /// Run while the caller owns the single installation lock for a larger
+    /// operation. This is the bootstrap/update composition boundary; it does
+    /// not acquire a second non-reentrant lock.
+    pub fn run_with_lock(
+        &self,
+        config: &BuildConfig,
+        lock: &InstallationLock,
+    ) -> Result<BuildResult, BuildError> {
+        if lock.path() != self.paths.lock_path() {
+            return Err(BuildError::InvalidConfig(
+                "caller lock does not belong to this installation".to_owned(),
+            ));
+        }
+        validate_config(config)?;
+        let git = ManagedGitRepository::new(self.paths.source_dir(), config.remote_url.clone())?;
+        self.run_with_git_locked(config, &git)
     }
 
     fn run_with_git(
@@ -153,6 +203,14 @@ impl<D: DownloadClient, P: ProcessRunner> BuildPipeline<D, P> {
         git: &ManagedGitRepository,
     ) -> Result<BuildResult, BuildError> {
         let _installation_lock = InstallationLock::acquire(self.paths.lock_path(), "phase4-build")?;
+        self.run_with_git_locked(config, git)
+    }
+
+    fn run_with_git_locked(
+        &self,
+        config: &BuildConfig,
+        git: &ManagedGitRepository,
+    ) -> Result<BuildResult, BuildError> {
         let state_store = match &self.logger {
             Some(logger) => StateStore::new(self.paths.clone()).with_logger(logger.clone()),
             None => StateStore::new(self.paths.clone()),
@@ -305,17 +363,14 @@ impl<D: DownloadClient, P: ProcessRunner> BuildPipeline<D, P> {
             let system_root = std::env::var_os("SystemRoot").ok_or_else(|| {
                 BuildError::InvalidConfig("SystemRoot is required to run mvnw.cmd".to_owned())
             })?;
-            let command_line = std::iter::once(wrapper.display().to_string())
-                .chain(wrapper_args.iter().map(|argument| (*argument).to_owned()))
-                .map(|argument| quote_windows_argument(&argument))
-                .collect::<Vec<_>>()
-                .join(" ");
-            let command_args = vec![
+            let mut command_args = vec![
                 "/D".to_owned(),
                 "/S".to_owned(),
                 "/C".to_owned(),
-                command_line,
+                "call".to_owned(),
+                wrapper.display().to_string(),
             ];
+            command_args.extend(wrapper_args.iter().map(|argument| (*argument).to_owned()));
             self.run_command_strings(
                 &TransactionPhase::BuildingBackend,
                 target,
@@ -382,7 +437,7 @@ impl<D: DownloadClient, P: ProcessRunner> BuildPipeline<D, P> {
             vec![&["ci"][..], &["run", "build"][..]]
         };
         for args in commands {
-            let output = self.run_command(phase, target, environment, npm, args, directory)?;
+            let output = self.run_npm_command(phase, target, environment, npm, args, directory)?;
             if !output.success() {
                 return Err(command_failed(phase.clone(), npm, output));
             }
@@ -390,6 +445,44 @@ impl<D: DownloadClient, P: ProcessRunner> BuildPipeline<D, P> {
         Ok(())
     }
 
+    fn run_npm_command(
+        &self,
+        phase: &TransactionPhase,
+        target: &str,
+        environment: &ManagedEnvironment,
+        npm: &Path,
+        args: &[&str],
+        current_dir: &Path,
+    ) -> Result<crate::process::ProcessOutput, BuildError> {
+        #[cfg(windows)]
+        {
+            let system_root = std::env::var_os("SystemRoot").ok_or_else(|| {
+                BuildError::InvalidConfig("SystemRoot is required to run managed npm".to_owned())
+            })?;
+            let mut command_args = vec![
+                "/D".to_owned(),
+                "/S".to_owned(),
+                "/C".to_owned(),
+                "call".to_owned(),
+                npm.display().to_string(),
+            ];
+            command_args.extend(args.iter().map(|argument| (*argument).to_owned()));
+            self.run_command_strings(
+                phase,
+                target,
+                environment,
+                &PathBuf::from(system_root).join("System32").join("cmd.exe"),
+                &command_args,
+                current_dir,
+            )
+        }
+        #[cfg(not(windows))]
+        {
+            self.run_command(phase, target, environment, npm, args, current_dir)
+        }
+    }
+
+    #[cfg(not(windows))]
     fn run_command(
         &self,
         phase: &TransactionPhase,
@@ -543,11 +636,6 @@ impl<D: DownloadClient, P: ProcessRunner> BuildPipeline<D, P> {
         logger.log("info", event, values)?;
         Ok(())
     }
-}
-
-#[cfg(windows)]
-fn quote_windows_argument(value: &str) -> String {
-    format!("\"{}\"", value.replace('"', "\\\""))
 }
 
 fn validate_config(config: &BuildConfig) -> Result<(), BuildError> {
@@ -914,17 +1002,48 @@ mod tests {
     }
 
     fn is_build_command(command: &CommandSpec) -> bool {
-        command.args.len() == 2 && command.args[0] == "run" && command.args[1] == "build"
+        (command.args.len() == 2 && command.args[0] == "run" && command.args[1] == "build")
+            || command
+                .args
+                .iter()
+                .any(|argument| argument.contains("\"run\" \"build\""))
+            || command
+                .args
+                .windows(2)
+                .any(|args| args[0] == "run" && args[1] == "build")
     }
 
     fn is_desktop_package_command(command: &CommandSpec) -> bool {
-        command.args.len() == 2
-            && command.args[0] == "run"
-            && command.args[1] == "package"
+        (command.args.len() == 2 && command.args[0] == "run" && command.args[1] == "package"
+            || command
+                .args
+                .iter()
+                .any(|argument| argument.contains("\"run\" \"package\""))
+            || command
+                .args
+                .windows(2)
+                .any(|args| args[0] == "run" && args[1] == "package"))
             && command
                 .current_dir
                 .as_ref()
                 .is_some_and(|path| path.ends_with(Path::new("desktop")))
+    }
+
+    fn is_npm_ci_command(command: &CommandSpec) -> bool {
+        command.args.first().map(String::as_str) == Some("ci")
+            || command.args.iter().any(|argument| argument == "ci")
+            || command
+                .args
+                .iter()
+                .any(|argument| argument.contains("\"ci\""))
+    }
+
+    fn uses_managed_toolchain(command: &CommandSpec, toolchain_dir: &Path) -> bool {
+        command.program.starts_with(toolchain_dir)
+            || command
+                .environment
+                .get("PATH")
+                .is_some_and(|path| path.contains(toolchain_dir.to_string_lossy().as_ref()))
     }
 
     fn is_maven_command(command: &CommandSpec) -> bool {
@@ -966,7 +1085,7 @@ mod tests {
         let calls = calls.lock().unwrap();
         let npm_calls = calls
             .iter()
-            .filter(|call| call.args.first().map(String::as_str) == Some("ci"))
+            .filter(|call| is_npm_ci_command(call))
             .collect::<Vec<_>>();
         assert_eq!(npm_calls.len(), 2);
         assert!(calls.iter().all(|call| {
@@ -977,8 +1096,7 @@ mod tests {
                 .unwrap_or(true)
         }));
         assert!(calls.iter().any(|call| {
-            call.program.starts_with(fixture.paths.toolchain_dir())
-                && call.args.first().map(String::as_str) == Some("ci")
+            uses_managed_toolchain(call, &fixture.paths.toolchain_dir()) && is_npm_ci_command(call)
         }));
         assert!(calls.iter().any(|call| {
             call.environment
