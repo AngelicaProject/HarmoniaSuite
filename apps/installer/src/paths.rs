@@ -210,6 +210,15 @@ impl InstallationPaths {
         self.state_root.join("bootstrap-operation.json")
     }
 
+    pub fn bootstrap_ack_dir(&self) -> PathBuf {
+        self.state_root.join("bootstrap-acks")
+    }
+
+    pub fn bootstrap_ack_path(&self, operation_id: &str, nonce: &str) -> PathBuf {
+        self.bootstrap_ack_dir()
+            .join(format!("{operation_id}-{nonce}.json"))
+    }
+
     pub fn toolchain_state_path(&self) -> PathBuf {
         self.state_root.join("toolchains.json")
     }

@@ -11,6 +11,12 @@ import {
 import { OsCredentialStore } from "./credentials.js";
 import { activeGateway, loadGatewayConfig } from "./gateway-config.js";
 import { LocalGateway } from "./local-gateway.js";
+import {
+  launchRequestFromAdditionalData,
+  launchRequestFromEnvironment,
+  writeLaunchAcknowledgement,
+  type LaunchRequest,
+} from "./launch-ack.js";
 import { userDataRoot } from "./paths.js";
 import { registerHarmoniaProtocol } from "./protocol.js";
 import type { ActiveGateway } from "./types.js";
@@ -22,7 +28,10 @@ protocol.registerSchemesAsPrivileged([
   },
 ]);
 
-const hasLock = app.requestSingleInstanceLock();
+const initialLaunchRequest = launchRequestFromEnvironment();
+const hasLock = app.requestSingleInstanceLock(
+  initialLaunchRequest ? { harmoniaLaunch: initialLaunchRequest } : undefined,
+);
 if (!hasLock) {
   app.quit();
 } else {
@@ -31,8 +40,18 @@ if (!hasLock) {
   let window: BrowserWindow | undefined;
   let localGateway: LocalGateway | undefined;
   let shuttingDown = false;
+  let startupReady = false;
+  const pendingLaunchRequests = new Map<string, LaunchRequest>();
 
-  app.on("second-instance", () => {
+  app.on("second-instance", (_event, _commandLine, _workingDirectory, additionalData) => {
+    const request = launchRequestFromAdditionalData(additionalData);
+    if (request) {
+      if (startupReady) {
+        void acknowledgeLaunchRequest(request);
+      } else {
+        pendingLaunchRequests.set(request.nonce, request);
+      }
+    }
     if (window) {
       if (window.isMinimized()) window.restore();
       window.focus();
@@ -63,6 +82,14 @@ if (!hasLock) {
       registerHarmoniaProtocol(frontendDist(), gateway, new OsCredentialStore());
       window = createWindow();
       await window.loadURL("harmonia://app/");
+      startupReady = true;
+      if (initialLaunchRequest) {
+        await acknowledgeLaunchRequest(initialLaunchRequest, true);
+      }
+      for (const request of pendingLaunchRequests.values()) {
+        void acknowledgeLaunchRequest(request);
+      }
+      pendingLaunchRequests.clear();
     } catch (error) {
       console.error("Harmonia desktop startup failed", error);
       await shutdown(1);
@@ -76,6 +103,18 @@ if (!hasLock) {
       log: (message) => console.log(message),
     });
     return localGateway.start();
+  }
+
+  async function acknowledgeLaunchRequest(
+    request: LaunchRequest,
+    failStartup = false,
+  ): Promise<void> {
+    try {
+      await writeLaunchAcknowledgement(request);
+    } catch (error) {
+      console.error("Harmonia desktop launch acknowledgement failed", error);
+      if (failStartup) throw error;
+    }
   }
 
   function createWindow(): BrowserWindow {

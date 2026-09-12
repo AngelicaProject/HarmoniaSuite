@@ -62,8 +62,9 @@ per-user `install` operation:
   `docs/phase6-fresh-bootstrap-design.md`;
 - the final desktop handoff uses a separate detached launcher, so the setup process's health-process
   containment does not kill the installed desktop when setup exits. It passes the exact
-  `HARMONIA_USER_DATA_ROOT` contract to Electron and performs a bounded early-exit check before
-  declaring handoff success;
+  `HARMONIA_USER_DATA_ROOT` contract to Electron and waits for an operation-bound, durable
+  acknowledgement after Electron readiness. A bounded early-exit check remains a fast-failure signal;
+  an already-running primary can acknowledge a recovery request received through `second-instance`;
 - production setup accepts no arbitrary source URL or product-version override. Custom repositories
   and descriptors remain restricted to internal fixture seams.
 

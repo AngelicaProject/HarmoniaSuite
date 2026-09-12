@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
+use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -19,11 +20,14 @@ use crate::download::DownloadClient;
 use crate::lock::{InstallationLock, LockError};
 use crate::paths::InstallationPaths;
 use crate::process::{ProcessRunner, SystemProcessRunner};
-use crate::state::{OperationKind, StateError, StateStore};
+use crate::state::{validate_managed_path, OperationKind, StateError, StateStore};
 use crate::toolchain::{ToolchainError, ToolchainStateStore};
 
 pub const DEFAULT_REMOTE_URL: &str = "https://github.com/AngelicaProject/HarmoniaSuite.git";
-const BOOTSTRAP_JOURNAL_SCHEMA_VERSION: u32 = 2;
+const BOOTSTRAP_JOURNAL_SCHEMA_VERSION: u32 = 3;
+const LAUNCH_ACK_SCHEMA_VERSION: u32 = 1;
+const LAUNCH_ACK_TIMEOUT: Duration = Duration::from_secs(30);
+const LAUNCH_ACK_AFTER_EARLY_EXIT_TIMEOUT: Duration = Duration::from_secs(3);
 
 fn now_ms() -> u128 {
     SystemTime::now()
@@ -112,12 +116,21 @@ pub enum BootstrapError {
     Toolchain(#[from] ToolchainError),
     #[error("bootstrap build failed: {0}")]
     Build(#[from] BuildError),
+    #[error("desktop launch acknowledgement path is invalid: {0}")]
+    InvalidLaunchAckPath(PathBuf),
+    #[error("desktop launch acknowledgement timed out: {0}")]
+    LaunchHandshakeTimeout(PathBuf),
 }
 
-fn new_bootstrap_journal(options: &BootstrapOptions, operation_id: String) -> BootstrapJournal {
+fn new_bootstrap_journal(
+    paths: &InstallationPaths,
+    options: &BootstrapOptions,
+    operation_id: String,
+) -> BootstrapJournal {
+    let launch_nonce = Uuid::new_v4().simple().to_string();
     BootstrapJournal {
         schema_version: BOOTSTRAP_JOURNAL_SCHEMA_VERSION,
-        operation_id,
+        operation_id: operation_id.clone(),
         operation: OperationKind::Install,
         status: BootstrapJournalStatus::Running,
         started_at_ms: now_ms(),
@@ -129,8 +142,37 @@ fn new_bootstrap_journal(options: &BootstrapOptions, operation_id: String) -> Bo
         activation_completed: false,
         launch_attempted: false,
         launch_handoff_completed: false,
+        launch_ack_path: Some(paths.bootstrap_ack_path(&operation_id, &launch_nonce)),
+        launch_nonce: Some(launch_nonce),
         failure: None,
     }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LaunchAcknowledgement {
+    schema_version: u32,
+    operation_id: String,
+    target_commit: String,
+    nonce: String,
+    acknowledged_at_ms: u128,
+}
+
+fn ensure_launch_identity(
+    paths: &InstallationPaths,
+    journal: &mut BootstrapJournal,
+) -> Result<(), BootstrapError> {
+    if journal.launch_nonce.is_none() || journal.launch_ack_path.is_none() {
+        let nonce = Uuid::new_v4().simple().to_string();
+        journal.launch_nonce = Some(nonce.clone());
+        journal.launch_ack_path = Some(paths.bootstrap_ack_path(&journal.operation_id, &nonce));
+    }
+    let path = journal
+        .launch_ack_path
+        .as_ref()
+        .expect("launch ack path initialized");
+    validate_managed_path(&paths.state_root, path)?;
+    Ok(())
 }
 
 fn load_bootstrap_journal(
@@ -158,11 +200,75 @@ fn persist_bootstrap_journal(
     Ok(())
 }
 
+fn read_matching_launch_ack(
+    paths: &InstallationPaths,
+    journal: &BootstrapJournal,
+    target_commit: &str,
+) -> Result<bool, BootstrapError> {
+    ensure_launch_identity_path(paths, journal)?;
+    let Some(path) = journal.launch_ack_path.as_ref() else {
+        return Ok(false);
+    };
+    if !path.is_file() {
+        return Ok(false);
+    }
+    let document = match fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error.into()),
+    };
+    let Ok(ack) = serde_json::from_slice::<LaunchAcknowledgement>(&document) else {
+        return Ok(false);
+    };
+    Ok(ack.schema_version == LAUNCH_ACK_SCHEMA_VERSION
+        && ack.operation_id == journal.operation_id
+        && ack.target_commit == target_commit
+        && Some(&ack.nonce) == journal.launch_nonce.as_ref())
+}
+
+fn ensure_launch_identity_path(
+    paths: &InstallationPaths,
+    journal: &BootstrapJournal,
+) -> Result<(), BootstrapError> {
+    let Some(path) = journal.launch_ack_path.as_ref() else {
+        return Err(BootstrapError::InvalidLaunchAckPath(
+            paths.bootstrap_ack_dir(),
+        ));
+    };
+    validate_managed_path(&paths.state_root, path)?;
+    Ok(())
+}
+
+fn wait_for_launch_ack(
+    paths: &InstallationPaths,
+    journal: &BootstrapJournal,
+    target_commit: &str,
+    timeout: Duration,
+) -> Result<(), BootstrapError> {
+    ensure_launch_identity_path(paths, journal)?;
+    let deadline = Instant::now() + timeout;
+    loop {
+        if read_matching_launch_ack(paths, journal, target_commit)? {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(BootstrapError::LaunchHandshakeTimeout(
+                journal
+                    .launch_ack_path
+                    .clone()
+                    .expect("launch ack path validated"),
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
 fn desktop_launch_spec(
     paths: &InstallationPaths,
     runtime: &crate::activation::RuntimePaths,
+    journal: &BootstrapJournal,
 ) -> DetachedLaunchSpec {
-    DetachedLaunchSpec::new(runtime.desktop_executable.clone())
+    let mut spec = DetachedLaunchSpec::new(runtime.desktop_executable.clone())
         .current_dir(runtime.version_dir.clone())
         .env("HARMONIA_RUNTIME_MODE", "installed")
         .env(
@@ -185,6 +291,21 @@ fn desktop_launch_spec(
             "HARMONIA_WORKSPACE",
             paths.user_data_root.display().to_string(),
         )
+        .env(
+            "HARMONIA_INSTALL_STATE_ROOT",
+            paths.state_root.display().to_string(),
+        );
+    if let (Some(ack_path), Some(nonce)) = (&journal.launch_ack_path, &journal.launch_nonce) {
+        spec = spec
+            .env("HARMONIA_LAUNCH_ACK", ack_path.display().to_string())
+            .env("HARMONIA_LAUNCH_OPERATION_ID", journal.operation_id.clone())
+            .env(
+                "HARMONIA_LAUNCH_COMMIT",
+                runtime.metadata.target_commit.clone(),
+            )
+            .env("HARMONIA_LAUNCH_NONCE", nonce.clone());
+    }
+    spec
 }
 
 fn reconcile_running_activation<L: DetachedLauncher>(
@@ -241,6 +362,7 @@ fn reconcile_running_activation<L: DetachedLauncher>(
     };
 
     journal.target_commit = Some(runtime.metadata.target_commit.clone());
+    ensure_launch_identity(paths, &mut journal)?;
     if journal.product_version.is_empty() {
         journal.product_version = runtime.metadata.product_version.clone();
     }
@@ -249,11 +371,70 @@ fn reconcile_running_activation<L: DetachedLauncher>(
     }
     journal.phase = BootstrapJournalPhase::Launching;
     persist_bootstrap_journal(paths, &journal)?;
-    let launch = desktop_launch_spec(paths, &runtime);
+    if read_matching_launch_ack(paths, &journal, &runtime.metadata.target_commit)? {
+        journal.launch_handoff_completed = true;
+        return finish_result(
+            paths,
+            logger,
+            &operation_id,
+            options,
+            started_at_ms,
+            journal,
+            BootstrapStatus::Installed {
+                commit: runtime.metadata.target_commit.clone(),
+                product_version: runtime.metadata.product_version,
+                version_dir: runtime.version_dir,
+            },
+            Some(runtime.metadata.target_commit),
+            runtime.metadata.toolchains,
+            true,
+            true,
+        );
+    }
+    let launch = desktop_launch_spec(paths, &runtime, &journal);
     journal.launch_attempted = true;
     persist_bootstrap_journal(paths, &journal)?;
-    if let Err(error) = launcher.launch(&launch) {
-        journal.failure = Some(error.to_string());
+    let launch_error = launcher.launch(&launch).err();
+    if let Some(error) = launch_error.as_ref() {
+        if !matches!(
+            error,
+            crate::detached::DetachedLaunchError::ExitedEarly { .. }
+        ) {
+            let reason = error.to_string();
+            journal.failure = Some(reason.clone());
+            return finish_result(
+                paths,
+                logger,
+                &operation_id,
+                options,
+                started_at_ms,
+                journal,
+                BootstrapStatus::LaunchFailed {
+                    reason,
+                    version_dir: runtime.version_dir,
+                },
+                Some(runtime.metadata.target_commit),
+                runtime.metadata.toolchains,
+                true,
+                false,
+            );
+        }
+    }
+    let timeout = if matches!(
+        launch_error.as_ref(),
+        Some(crate::detached::DetachedLaunchError::ExitedEarly { .. })
+    ) {
+        LAUNCH_ACK_AFTER_EARLY_EXIT_TIMEOUT
+    } else {
+        LAUNCH_ACK_TIMEOUT
+    };
+    if let Err(ack_error) =
+        wait_for_launch_ack(paths, &journal, &runtime.metadata.target_commit, timeout)
+    {
+        let reason = launch_error
+            .map(|error| format!("{error}; {ack_error}"))
+            .unwrap_or_else(|| ack_error.to_string());
+        journal.failure = Some(reason.clone());
         return finish_result(
             paths,
             logger,
@@ -262,7 +443,7 @@ fn reconcile_running_activation<L: DetachedLauncher>(
             started_at_ms,
             journal,
             BootstrapStatus::LaunchFailed {
-                reason: error.to_string(),
+                reason,
                 version_dir: runtime.version_dir,
             },
             Some(runtime.metadata.target_commit),
@@ -338,6 +519,10 @@ struct BootstrapJournal {
     launch_attempted: bool,
     #[serde(default)]
     launch_handoff_completed: bool,
+    #[serde(default)]
+    launch_ack_path: Option<PathBuf>,
+    #[serde(default)]
+    launch_nonce: Option<String>,
     failure: Option<String>,
 }
 
@@ -399,7 +584,7 @@ impl<D: DownloadClient, P: ProcessRunner, L: DetachedLauncher> BootstrapInstalle
         let previous_journal = load_bootstrap_journal(&paths)?;
         if let Err(error) = activation.recover_with_lock(&recovery_config, checker, &lock) {
             let journal = previous_journal.unwrap_or_else(|| {
-                new_bootstrap_journal(&options, Uuid::new_v4().simple().to_string())
+                new_bootstrap_journal(&paths, &options, Uuid::new_v4().simple().to_string())
             });
             let operation_id = journal.operation_id.clone();
             let started_at_ms = journal.started_at_ms;
@@ -455,7 +640,7 @@ impl<D: DownloadClient, P: ProcessRunner, L: DetachedLauncher> BootstrapInstalle
 
         let operation_id = Uuid::new_v4().simple().to_string();
         let started_at_ms = now_ms();
-        let mut journal = new_bootstrap_journal(&options, operation_id.clone());
+        let mut journal = new_bootstrap_journal(&paths, &options, operation_id.clone());
         persist_bootstrap_journal(&paths, &journal)?;
 
         store.initialize()?;
@@ -541,6 +726,7 @@ impl<D: DownloadClient, P: ProcessRunner, L: DetachedLauncher> BootstrapInstalle
         journal.target_commit = Some(build.target_commit.clone());
         journal.product_version = build.product_version.clone();
         journal.toolchains = build.toolchains.clone();
+        ensure_launch_identity(&paths, &mut journal)?;
         journal.phase = BootstrapJournalPhase::Activating;
         persist_bootstrap_journal(&paths, &journal)?;
         let result_path = pipeline.result_path_for(&build)?;
@@ -605,13 +791,72 @@ impl<D: DownloadClient, P: ProcessRunner, L: DetachedLauncher> BootstrapInstalle
         journal.activation_completed = true;
         journal.phase = BootstrapJournalPhase::Launching;
         persist_bootstrap_journal(&paths, &journal)?;
-        let launch = desktop_launch_spec(&paths, &runtime);
+        if read_matching_launch_ack(&paths, &journal, &build.target_commit)? {
+            journal.launch_handoff_completed = true;
+            let status = BootstrapStatus::Installed {
+                commit: build.target_commit.clone(),
+                product_version: build.product_version.clone(),
+                version_dir: runtime.version_dir,
+            };
+            return finish_result(
+                &paths,
+                logger.as_ref(),
+                &operation_id,
+                &options,
+                started_at_ms,
+                journal,
+                status,
+                Some(build.target_commit),
+                toolchain_ids,
+                true,
+                true,
+            );
+        }
+        let launch = desktop_launch_spec(&paths, &runtime, &journal);
         journal.launch_attempted = true;
         persist_bootstrap_journal(&paths, &journal)?;
-        if let Err(error) = launcher.launch(&launch) {
-            journal.failure = Some(error.to_string());
+        let launch_error = launcher.launch(&launch).err();
+        if let Some(error) = launch_error.as_ref() {
+            if !matches!(
+                error,
+                crate::detached::DetachedLaunchError::ExitedEarly { .. }
+            ) {
+                let reason = error.to_string();
+                journal.failure = Some(reason.clone());
+                return finish_result(
+                    &paths,
+                    logger.as_ref(),
+                    &operation_id,
+                    &options,
+                    started_at_ms,
+                    journal,
+                    BootstrapStatus::LaunchFailed {
+                        reason,
+                        version_dir: runtime.version_dir,
+                    },
+                    Some(build.target_commit),
+                    toolchain_ids,
+                    true,
+                    false,
+                );
+            }
+        }
+        let timeout = if matches!(
+            launch_error.as_ref(),
+            Some(crate::detached::DetachedLaunchError::ExitedEarly { .. })
+        ) {
+            LAUNCH_ACK_AFTER_EARLY_EXIT_TIMEOUT
+        } else {
+            LAUNCH_ACK_TIMEOUT
+        };
+        if let Err(ack_error) = wait_for_launch_ack(&paths, &journal, &build.target_commit, timeout)
+        {
+            let reason = launch_error
+                .map(|error| format!("{error}; {ack_error}"))
+                .unwrap_or_else(|| ack_error.to_string());
+            journal.failure = Some(reason.clone());
             let status = BootstrapStatus::LaunchFailed {
-                reason: error.to_string(),
+                reason,
                 version_dir: runtime.version_dir,
             };
             return finish_result(
@@ -1064,6 +1309,7 @@ mod tests {
     struct RecordingLauncher {
         last: Arc<Mutex<Option<DetachedLaunchSpec>>>,
         fail: bool,
+        early_exit: bool,
     }
 
     impl DetachedLauncher for RecordingLauncher {
@@ -1073,6 +1319,27 @@ mod tests {
                 return Err(DetachedLaunchError::Spawn {
                     program: spec.program.display().to_string(),
                     source: io::Error::other("controlled launch failure"),
+                });
+            }
+            let ack_path = spec.environment.get("HARMONIA_LAUNCH_ACK").unwrap();
+            let operation_id = spec
+                .environment
+                .get("HARMONIA_LAUNCH_OPERATION_ID")
+                .unwrap();
+            let target_commit = spec.environment.get("HARMONIA_LAUNCH_COMMIT").unwrap();
+            let nonce = spec.environment.get("HARMONIA_LAUNCH_NONCE").unwrap();
+            let acknowledgement = LaunchAcknowledgement {
+                schema_version: LAUNCH_ACK_SCHEMA_VERSION,
+                operation_id: operation_id.clone(),
+                target_commit: target_commit.clone(),
+                nonce: nonce.clone(),
+                acknowledged_at_ms: now_ms(),
+            };
+            crate::state::atomic_write_json(Path::new(ack_path), &acknowledgement).unwrap();
+            if self.early_exit {
+                return Err(DetachedLaunchError::ExitedEarly {
+                    program: spec.program.display().to_string(),
+                    status: Some(0),
                 });
             }
             Ok(DetachedLaunch { process_id: 7 })
@@ -1323,6 +1590,16 @@ mod tests {
             launch.environment.get("HARMONIA_WORKSPACE"),
             Some(&paths.user_data_root.display().to_string())
         );
+        assert_eq!(
+            launch.environment.get("HARMONIA_INSTALL_STATE_ROOT"),
+            Some(&paths.state_root.display().to_string())
+        );
+        assert!(launch.environment.contains_key("HARMONIA_LAUNCH_ACK"));
+        assert!(launch
+            .environment
+            .contains_key("HARMONIA_LAUNCH_OPERATION_ID"));
+        assert!(launch.environment.contains_key("HARMONIA_LAUNCH_COMMIT"));
+        assert!(launch.environment.contains_key("HARMONIA_LAUNCH_NONCE"));
         assert!(launch.program.is_file());
         assert_eq!(fs::read(&legacy_file).unwrap(), b"preserve");
 
@@ -1362,7 +1639,8 @@ mod tests {
         assert_eq!(terminal.status, BootstrapJournalStatus::Completed);
         assert_eq!(terminal.phase, BootstrapJournalPhase::Completed);
         assert!(terminal.launch_handoff_completed);
-        assert!(resumed_launcher.last.lock().unwrap().is_some());
+        assert!(resumed_launcher.last.lock().unwrap().is_none());
+        assert!(journal.launch_ack_path.unwrap().is_file());
     }
 
     #[test]
@@ -1401,6 +1679,68 @@ mod tests {
             .current_commit
             .is_none());
         assert_eq!(fs::read(user_file).unwrap(), b"keep");
+    }
+
+    #[test]
+    fn early_secondary_exit_is_successful_when_primary_acknowledges() {
+        let root = tempdir().unwrap();
+        let fixture = fixture_definition(root.path());
+        let launcher = RecordingLauncher {
+            early_exit: true,
+            ..RecordingLauncher::default()
+        };
+        let result = BootstrapInstaller::new(
+            fixture.paths.clone(),
+            fixture.downloader,
+            FixtureBuildRunner,
+            launcher,
+            None,
+        )
+        .install_with_descriptors(
+            BootstrapOptions {
+                remote_url: fixture.remote_url,
+                product_version: "fixture".to_owned(),
+            },
+            fixture.jdk,
+            fixture.node,
+            &HealthyFixture,
+        )
+        .unwrap();
+
+        assert!(matches!(result.status, BootstrapStatus::Installed { .. }));
+        assert!(result.launch_succeeded);
+    }
+
+    #[test]
+    fn stale_launch_ack_is_ignored() {
+        let root = tempdir().unwrap();
+        let paths = test_paths(root.path());
+        let mut journal =
+            new_bootstrap_journal(&paths, &BootstrapOptions::default(), "operation".to_owned());
+        let ack_path = journal.launch_ack_path.clone().unwrap();
+        let nonce = journal.launch_nonce.clone().unwrap();
+        let wrong = LaunchAcknowledgement {
+            schema_version: LAUNCH_ACK_SCHEMA_VERSION,
+            operation_id: "other-operation".to_owned(),
+            target_commit: "a".repeat(40),
+            nonce,
+            acknowledged_at_ms: now_ms(),
+        };
+        crate::state::atomic_write_json(&ack_path, &wrong).unwrap();
+        journal.target_commit = Some("a".repeat(40));
+        assert!(!read_matching_launch_ack(&paths, &journal, &"a".repeat(40)).unwrap());
+    }
+
+    #[test]
+    fn missing_launch_ack_fails_closed_after_timeout() {
+        let root = tempdir().unwrap();
+        let paths = test_paths(root.path());
+        let journal =
+            new_bootstrap_journal(&paths, &BootstrapOptions::default(), "operation".to_owned());
+        let error =
+            wait_for_launch_ack(&paths, &journal, &"a".repeat(40), Duration::from_millis(1))
+                .unwrap_err();
+        assert!(matches!(error, BootstrapError::LaunchHandshakeTimeout(_)));
     }
 
     #[test]

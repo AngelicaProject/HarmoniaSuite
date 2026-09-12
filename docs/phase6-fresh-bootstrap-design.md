@@ -70,10 +70,18 @@ Successful activation yields `RuntimePaths` from `resolve_current()`. The
 desktop is launched from that immutable directory with `HARMONIA_RUNTIME_MODE=installed`,
 `HARMONIA_ACTIVE_VERSION_DIR`, `HARMONIA_BACKEND_JAR`,
 `HARMONIA_JAVA_BINARY`, `HARMONIA_USER_DATA_ROOT`, and the exact workspace
-contract. The detached launcher uses a bounded startup grace: spawn failure or
-early child exit is `LaunchFailed`; a child still alive after the grace is a
-successful handoff. The setup process does not wait for the desktop after that
-boundary.
+contract. The detached launcher uses a bounded startup grace as a fast-failure
+signal, but the authoritative handoff boundary is an operation-bound
+acknowledgement. The journal persists a random nonce and an acknowledgement
+path under the installer-owned state root. Electron writes a durable atomic
+acknowledgement only after the local gateway is ready, the protocol is
+registered, and the initial window has loaded. The acknowledgement binds the
+operation id, exact target SHA, and nonce. If an already-running Electron
+primary receives a recovery request through `second-instance`, it writes the
+same acknowledgement; the short-lived secondary is therefore not treated as a
+failed launch. Setup reconciles a durable acknowledgement after a crash before
+attempting another launch, and a missing acknowledgement remains `LaunchFailed`
+after the bounded handshake timeout.
 
 ## Result contract
 
