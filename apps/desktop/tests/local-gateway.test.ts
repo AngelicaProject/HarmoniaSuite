@@ -81,4 +81,22 @@ describe("local gateway lifecycle", () => {
 
     await expect(gateway.start()).rejects.toThrow("exited before readiness");
   });
+
+  it("fails closed without managed Java in installed mode", async () => {
+    const jarPath = await fakeJar();
+    const previousMode = process.env.HARMONIA_RUNTIME_MODE;
+    const previousJava = process.env.HARMONIA_JAVA_BINARY;
+    process.env.HARMONIA_RUNTIME_MODE = "installed";
+    delete process.env.HARMONIA_JAVA_BINARY;
+    try {
+      await expect(new LocalGateway({ jarPath }).start()).rejects.toThrow(
+        "managed Java is required",
+      );
+    } finally {
+      if (previousMode === undefined) delete process.env.HARMONIA_RUNTIME_MODE;
+      else process.env.HARMONIA_RUNTIME_MODE = previousMode;
+      if (previousJava === undefined) delete process.env.HARMONIA_JAVA_BINARY;
+      else process.env.HARMONIA_JAVA_BINARY = previousJava;
+    }
+  });
 });

@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-use std::ffi::OsString;
 #[cfg(unix)]
 use std::fs::File;
 use std::fs::{self, OpenOptions};
@@ -19,8 +18,8 @@ use crate::lock::{InstallationLock, LockError};
 use crate::paths::InstallationPaths;
 use crate::process::{CommandSpec, ManagedProcess, ProcessError, ProcessRunner};
 use crate::state::{
-    InstallationState, OperationKind, StateError, StateStore, Transaction, TransactionPhase,
-    TransactionStatus,
+    validate_managed_path, InstallationState, OperationKind, StateError, StateStore, Transaction,
+    TransactionPhase, TransactionStatus,
 };
 
 const VERSION_METADATA_SCHEMA_VERSION: u32 = 1;
@@ -37,6 +36,7 @@ pub struct VersionComponent {
 pub struct RuntimeMetadata {
     pub desktop_executable: PathBuf,
     pub backend_jar: PathBuf,
+    pub managed_java_binary: PathBuf,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -58,6 +58,7 @@ pub struct RuntimePaths {
     pub metadata: VersionMetadata,
     pub desktop_executable: PathBuf,
     pub backend_jar: PathBuf,
+    pub java_binary: PathBuf,
 }
 
 #[derive(Clone, Debug)]
@@ -106,6 +107,21 @@ pub trait HealthChecker {
     ) -> Result<(), ActivationError>;
 }
 
+struct UnavailableHealthChecker;
+
+impl HealthChecker for UnavailableHealthChecker {
+    fn check(
+        &self,
+        _version_dir: &Path,
+        _metadata: &VersionMetadata,
+        _config: &ActivationConfig,
+    ) -> Result<(), ActivationError> {
+        Err(ActivationError::ReviewRequired(
+            "crash recovery requires a managed health checker".to_owned(),
+        ))
+    }
+}
+
 pub struct LocalBackendHealthChecker<R> {
     runner: R,
 }
@@ -133,6 +149,7 @@ impl<R: ProcessRunner> HealthChecker for LocalBackendHealthChecker<R> {
                 "--server.port=0".to_owned(),
                 format!("--harmonia.gateway-instance={instance}"),
                 format!("--harmonia.workspace={}", config.workspace.display()),
+                format!("--harmonia.db-path={}", config.database_path.display()),
             ])
             .env("HARMONIA_NO_BROWSER", "1")
             .current_dir(version_dir)
@@ -248,11 +265,12 @@ impl ActivationEngine {
         checker: &H,
     ) -> Result<RuntimePaths, ActivationError> {
         let _lock = InstallationLock::acquire(self.paths.lock_path(), "phase5-activate")?;
-        self.recover_locked()?;
+        self.recover_locked(config, checker)?;
         let result = self.load_build_result(result_path.as_ref())?;
         let candidate = self.validate_candidate(&result)?;
         let store = StateStore::new(self.paths.clone());
         let installation = store.load_installation()?;
+        validate_activation_path(&self.paths.user_data_root, &config.database_path)?;
         let mut transaction = Transaction::begin(
             store.clone(),
             OperationKind::Update,
@@ -260,6 +278,8 @@ impl ActivationEngine {
             Some(result.target_commit.clone()),
             Vec::new(),
         )?;
+        transaction.set_pre_activation_state(installation.clone())?;
+        transaction.set_database_path(config.database_path.clone())?;
         let activation = self.activate_transaction(
             &result,
             &candidate,
@@ -274,12 +294,12 @@ impl ActivationEngine {
                 if transaction.record().activation_started {
                     if !transaction.record().rollback_completed {
                         if let Err(rollback_error) =
-                            self.rollback_transaction(&mut transaction, config, &installation)
+                            self.rollback_transaction(&mut transaction, config, checker)
                         {
                             let reason = format!(
                                 "{error}; rollback failed and requires review: {rollback_error}"
                             );
-                            let _ = transaction.fail(reason.clone());
+                            let _ = transaction.mark_review_required(reason.clone());
                             return Err(ActivationError::ReviewRequired(reason));
                         }
                     }
@@ -304,7 +324,7 @@ impl ActivationEngine {
         transaction: &mut Transaction,
     ) -> Result<RuntimePaths, ActivationError> {
         transaction.transition(TransactionPhase::Staging)?;
-        let final_dir = self.stage_version(result, candidate, transaction)?;
+        let final_dir = self.stage_version(result, candidate, config, transaction)?;
         transaction.set_published_version(result.target_commit.clone())?;
         self.set_pending_version(&result.target_commit)?;
 
@@ -330,13 +350,15 @@ impl ActivationEngine {
 
         transaction.transition(TransactionPhase::HealthChecking)?;
         transaction.mark_process_started()?;
-        if let Err(error) = checker.check(
-            &final_dir,
-            &load_version_metadata(&final_dir.join("metadata.json"))?,
-            config,
-        ) {
+        let metadata = load_version_metadata(&final_dir.join("metadata.json"))?;
+        let staged_runtime_java = self
+            .paths
+            .app_root
+            .join(&metadata.runtime.managed_java_binary);
+        let mut health_config = config.clone();
+        health_config.java_binary = staged_runtime_java;
+        if let Err(error) = checker.check(&final_dir, &metadata, &health_config) {
             transaction.transition(TransactionPhase::RollingBack)?;
-            self.rollback_transaction(transaction, config, &installation)?;
             return Err(error);
         }
         transaction.mark_health_check_passed()?;
@@ -350,6 +372,7 @@ impl ActivationEngine {
         &self,
         result: &BuildResult,
         candidate: &Path,
+        config: &ActivationConfig,
         transaction: &mut Transaction,
     ) -> Result<PathBuf, ActivationError> {
         let final_dir = self.paths.versions_dir().join(&result.target_commit);
@@ -358,8 +381,8 @@ impl ActivationEngine {
             result.target_commit,
             transaction.record().id
         ));
-        validate_owned_path(&self.paths.versions_dir(), &final_dir)?;
-        validate_owned_path(&self.paths.versions_dir(), &staging_dir)?;
+        validate_activation_path(&self.paths.versions_dir(), &final_dir)?;
+        validate_activation_path(&self.paths.versions_dir(), &staging_dir)?;
         transaction.own_path(&staging_dir)?;
         if final_dir.exists() {
             if !self.version_matches_result(&final_dir, result)? {
@@ -400,6 +423,8 @@ impl ActivationEngine {
                 "desktop runtime executable is missing".to_owned(),
             ));
         }
+        require_executable(&executable)?;
+        let managed_java = validate_managed_java(&self.paths, &config.java_binary)?;
         let metadata = VersionMetadata {
             schema_version: VERSION_METADATA_SCHEMA_VERSION,
             target_commit: result.target_commit.clone(),
@@ -433,6 +458,7 @@ impl ActivationEngine {
                     },
                 ),
                 backend_jar: PathBuf::from("backend/harmonia-suite.jar"),
+                managed_java_binary: managed_java,
             },
         };
         crate::state::atomic_write_json(&staging_dir.join("metadata.json"), &metadata)?;
@@ -477,45 +503,35 @@ impl ActivationEngine {
     fn rollback_transaction(
         &self,
         transaction: &mut Transaction,
-        _config: &ActivationConfig,
-        installation_before: &InstallationState,
+        config: &ActivationConfig,
+        checker: &impl HealthChecker,
     ) -> Result<(), ActivationError> {
         let store = StateStore::new(self.paths.clone());
-        let mut current = store.load_installation()?;
-        let old_commit = transaction
+        let snapshot = transaction
             .record()
-            .current_commit
+            .pre_activation_state
             .clone()
-            .or_else(|| installation_before.current_commit.clone());
+            .ok_or_else(|| {
+                ActivationError::ReviewRequired(
+                    "transaction has no pre-activation installation snapshot".to_owned(),
+                )
+            })?;
         if let Some(backup) = transaction.record().db_backup_path.clone() {
             DatabaseSnapshot::restore(&backup, &self.paths.user_data_root)?;
         }
-        match old_commit {
-            Some(commit) => {
-                let runtime = self.resolve_version(&commit)?;
-                current.current_commit = Some(commit);
-                current.product_version = Some(runtime.metadata.product_version.clone());
-                current.current_toolchains = runtime.metadata.toolchains.clone();
-                current.components = runtime
-                    .metadata
-                    .component_paths
-                    .iter()
-                    .map(|(name, component)| (name.clone(), component.sha256.clone()))
-                    .collect();
-            }
-            None => {
-                current.current_commit = None;
-                current.product_version = None;
-                current.current_toolchains.clear();
-                current.components.clear();
+        store.save_installation(&snapshot)?;
+        if let Some(commit) = snapshot.current_commit.as_deref() {
+            let runtime = self.resolve_version(commit)?;
+            let mut health_config = config.clone();
+            health_config.java_binary = runtime.java_binary.clone();
+            if let Err(error) =
+                checker.check(&runtime.version_dir, &runtime.metadata, &health_config)
+            {
+                return Err(ActivationError::ReviewRequired(format!(
+                    "previous version health check failed: {error}"
+                )));
             }
         }
-        current.previous_commit = None;
-        current.previous_toolchains.clear();
-        current.staged_commit = None;
-        current.pending_commit = None;
-        current.activation_at_ms = Some(now_ms());
-        store.save_installation(&current)?;
         transaction.mark_rollback_completed()?;
         Ok(())
     }
@@ -545,14 +561,36 @@ impl ActivationEngine {
 
     pub fn recover(&self) -> Result<(), ActivationError> {
         let _lock = InstallationLock::acquire(self.paths.lock_path(), "phase5-recovery")?;
-        self.recover_locked()
+        let config = ActivationConfig::for_paths(&self.paths, PathBuf::new());
+        self.recover_locked(&config, &UnavailableHealthChecker)
     }
 
-    fn recover_locked(&self) -> Result<(), ActivationError> {
+    pub fn recover_with_health_checker<H: HealthChecker>(
+        &self,
+        config: &ActivationConfig,
+        checker: &H,
+    ) -> Result<(), ActivationError> {
+        let _lock = InstallationLock::acquire(self.paths.lock_path(), "phase5-recovery")?;
+        self.recover_locked(config, checker)
+    }
+
+    fn recover_locked<H: HealthChecker>(
+        &self,
+        config: &ActivationConfig,
+        checker: &H,
+    ) -> Result<(), ActivationError> {
         let store = StateStore::new(self.paths.clone());
         let Some(record) = store.load_transaction()? else {
             return Ok(());
         };
+        if record.status == TransactionStatus::ReviewRequired {
+            return Err(ActivationError::ReviewRequired(
+                record
+                    .failure
+                    .clone()
+                    .unwrap_or_else(|| "transaction requires explicit review".to_owned()),
+            ));
+        }
         if record.status != TransactionStatus::Running {
             return Ok(());
         }
@@ -585,13 +623,16 @@ impl ActivationEngine {
         }
         if record.db_backup_required && record.db_backup_path.is_none() && record.current_switched {
             let reason = "activation crossed pointer switch without a DB backup".to_owned();
-            let _ = transaction.fail(reason.clone());
+            let _ = transaction.mark_review_required(reason.clone());
             return Err(ActivationError::ReviewRequired(reason));
         }
-        let config = ActivationConfig::for_paths(&self.paths, PathBuf::new());
-        if let Err(error) = self.rollback_transaction(&mut transaction, &config, &installation) {
+        let mut recovery_config = config.clone();
+        if let Some(database_path) = record.database_path.clone() {
+            recovery_config.database_path = database_path;
+        }
+        if let Err(error) = self.rollback_transaction(&mut transaction, &recovery_config, checker) {
             let reason = format!("recovery rollback failed: {error}");
-            let _ = transaction.fail(reason.clone());
+            let _ = transaction.mark_review_required(reason.clone());
             return Err(ActivationError::ReviewRequired(reason));
         }
         transaction.fail("recovered activation by rolling back to previous version")?;
@@ -600,7 +641,7 @@ impl ActivationEngine {
 
     fn load_build_result(&self, path: &Path) -> Result<BuildResult, ActivationError> {
         let path = absolute_path(path)?;
-        validate_owned_path(&self.paths.build_results_dir(), &path)?;
+        validate_activation_path(&self.paths.build_results_dir(), &path)?;
         let result: BuildResult = serde_json::from_slice(&fs::read(path)?)?;
         if result.schema_version != BUILD_RESULT_SCHEMA_VERSION {
             return Err(ActivationError::UnsupportedBuildSchema(
@@ -634,7 +675,7 @@ impl ActivationEngine {
             .build_dir()
             .join("candidates")
             .join(&result.target_commit);
-        validate_owned_path(&candidate_root, &checkout)?;
+        validate_activation_path(&candidate_root, &checkout)?;
         if !checkout.is_dir() {
             return Err(ActivationError::InvalidCandidate(checkout));
         }
@@ -664,7 +705,7 @@ impl ActivationEngine {
         version_dir: &Path,
         result: &BuildResult,
     ) -> Result<bool, ActivationError> {
-        validate_owned_path(&self.paths.versions_dir(), version_dir)?;
+        validate_activation_path(&self.paths.versions_dir(), version_dir)?;
         if !version_dir.is_dir() {
             return Ok(false);
         }
@@ -693,7 +734,7 @@ impl ActivationEngine {
     pub fn resolve_version(&self, commit: &str) -> Result<RuntimePaths, ActivationError> {
         validate_sha(commit)?;
         let version_dir = self.paths.versions_dir().join(commit);
-        validate_owned_path(&self.paths.versions_dir(), &version_dir)?;
+        validate_activation_path(&self.paths.versions_dir(), &version_dir)?;
         let metadata = load_version_metadata(&version_dir.join("metadata.json"))?;
         if metadata.target_commit != commit {
             return Err(ActivationError::InvalidInput(
@@ -708,6 +749,10 @@ impl ActivationEngine {
         Ok(RuntimePaths {
             desktop_executable: version_dir.join(&metadata.runtime.desktop_executable),
             backend_jar: version_dir.join(&metadata.runtime.backend_jar),
+            java_binary: self
+                .paths
+                .app_root
+                .join(&metadata.runtime.managed_java_binary),
             version_dir,
             metadata,
         })
@@ -732,7 +777,16 @@ impl ActivationEngine {
             && version_dir
                 .join(&metadata.runtime.desktop_executable)
                 .is_file()
+            && require_executable_result(&version_dir.join(&metadata.runtime.desktop_executable))
             && version_dir.join(&metadata.runtime.backend_jar).is_file()
+            && validate_managed_java(
+                &self.paths,
+                &self
+                    .paths
+                    .app_root
+                    .join(&metadata.runtime.managed_java_binary),
+            )
+            .is_ok()
             && hash_directory(&version_dir.join("desktop"))
                 .map(|hash| hash == metadata.desktop_artifact_sha256)
                 .unwrap_or(false)
@@ -745,7 +799,14 @@ impl ActivationEngine {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct DatabaseManifest {
     database_relative: PathBuf,
-    files: Vec<PathBuf>,
+    files: Vec<DatabaseFileManifest>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct DatabaseFileManifest {
+    path: PathBuf,
+    size: u64,
+    sha256: String,
 }
 
 struct DatabaseSnapshot;
@@ -759,7 +820,7 @@ impl DatabaseSnapshot {
         if !database_path.exists() {
             return Ok(None);
         }
-        validate_owned_path(user_data_root, database_path)?;
+        validate_activation_path(user_data_root, database_path)?;
         let database_relative = database_path
             .strip_prefix(user_data_root)
             .map_err(|_| {
@@ -782,6 +843,7 @@ impl DatabaseSnapshot {
                 "database backup directory already exists".to_owned(),
             ));
         }
+        validate_activation_path(user_data_root, &directory)?;
         fs::create_dir_all(&directory)?;
         let mut files = Vec::new();
         for suffix in ["", "-wal", "-shm"] {
@@ -790,13 +852,21 @@ impl DatabaseSnapshot {
             } else {
                 PathBuf::from(format!("{}{}", database_path.display(), suffix))
             };
+            validate_activation_path(user_data_root, &source)?;
             if source.is_file() {
                 let name = source.file_name().ok_or_else(|| {
                     io::Error::new(io::ErrorKind::InvalidInput, "database filename")
                 })?;
                 let destination = directory.join(name);
                 copy_regular_file(&source, &destination)?;
-                files.push(PathBuf::from(name));
+                let copied_metadata = fs::metadata(&destination)?;
+                let sha256 = sha256_file(&destination)
+                    .map_err(|error| ActivationError::ReviewRequired(error.to_string()))?;
+                files.push(DatabaseFileManifest {
+                    path: PathBuf::from(name),
+                    size: copied_metadata.len(),
+                    sha256,
+                });
             }
         }
         if files.is_empty() {
@@ -816,16 +886,17 @@ impl DatabaseSnapshot {
     }
 
     fn restore(directory: &Path, user_data_root: &Path) -> Result<(), ActivationError> {
-        validate_owned_path(user_data_root, directory)?;
-        let manifest: DatabaseManifest =
-            serde_json::from_slice(&fs::read(directory.join("manifest.json"))?)?;
+        validate_activation_path(user_data_root, directory)?;
+        let manifest_path = directory.join("manifest.json");
+        validate_activation_path(directory, &manifest_path)?;
+        let manifest: DatabaseManifest = serde_json::from_slice(&fs::read(manifest_path)?)?;
         if !safe_relative(&manifest.database_relative) {
             return Err(ActivationError::ReviewRequired(
                 "database backup manifest contains unsafe database path".to_owned(),
             ));
         }
         let database_path = user_data_root.join(&manifest.database_relative);
-        validate_owned_path(user_data_root, &database_path)?;
+        validate_activation_path(user_data_root, &database_path)?;
         let database_parent = database_path.parent().ok_or_else(|| {
             ActivationError::ReviewRequired("database backup path has no parent".to_owned())
         })?;
@@ -834,38 +905,108 @@ impl DatabaseSnapshot {
             ActivationError::ReviewRequired("database backup path has no filename".to_owned())
         })?;
         let allowed_names = [
-            database_name.to_os_string(),
-            OsString::from(format!("{}-wal", database_name.to_string_lossy())),
-            OsString::from(format!("{}-shm", database_name.to_string_lossy())),
+            PathBuf::from(database_name.to_os_string()),
+            PathBuf::from(format!("{}-wal", database_name.to_string_lossy())),
+            PathBuf::from(format!("{}-shm", database_name.to_string_lossy())),
         ];
+        let mut names = std::collections::BTreeSet::new();
         for file in &manifest.files {
-            if !safe_relative(file)
-                || file.components().count() != 1
-                || !allowed_names
-                    .iter()
-                    .any(|allowed| file == Path::new(allowed))
+            if !safe_relative(&file.path)
+                || file.path.components().count() != 1
+                || !allowed_names.iter().any(|allowed| &file.path == allowed)
+                || !names.insert(file.path.clone())
+                || !valid_hash(&file.sha256)
             {
                 return Err(ActivationError::ReviewRequired(
                     "database backup manifest contains unsafe path".to_owned(),
                 ));
             }
-            let destination = database_parent.join(file);
-            validate_owned_path(user_data_root, &destination)?;
-            copy_regular_file(&directory.join(file), &destination)?;
-        }
-        for suffix in ["-wal", "-shm"] {
-            let name = format!("{}{suffix}", database_name.to_string_lossy());
-            if !manifest.files.iter().any(|file| file == Path::new(&name)) {
-                let sidecar = database_parent.join(&name);
-                validate_owned_path(user_data_root, &sidecar)?;
-                match fs::remove_file(sidecar) {
-                    Ok(()) => {}
-                    Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-                    Err(error) => return Err(error.into()),
-                }
+            let source = directory.join(&file.path);
+            validate_activation_path(directory, &source)?;
+            let metadata = fs::symlink_metadata(&source).map_err(|error| {
+                ActivationError::ReviewRequired(format!(
+                    "database backup file is missing: {} ({error})",
+                    source.display()
+                ))
+            })?;
+            if metadata.file_type().is_symlink()
+                || !metadata.is_file()
+                || metadata.len() != file.size
+            {
+                return Err(ActivationError::ReviewRequired(format!(
+                    "database backup file metadata mismatch: {}",
+                    source.display()
+                )));
+            }
+            let actual = sha256_file(&source)
+                .map_err(|error| ActivationError::ReviewRequired(error.to_string()))?;
+            if actual != file.sha256.to_ascii_lowercase() {
+                return Err(ActivationError::ReviewRequired(format!(
+                    "database backup checksum mismatch: {}",
+                    source.display()
+                )));
             }
         }
-        sync_directory(database_parent)?;
+        let database_name = PathBuf::from(database_name.to_os_string());
+        if !names.contains(&database_name) {
+            return Err(ActivationError::ReviewRequired(
+                "database backup does not contain the primary database".to_owned(),
+            ));
+        }
+
+        let restore_staging = database_parent.join(format!(
+            ".{}.restore.{}",
+            database_name.to_string_lossy(),
+            Uuid::new_v4()
+        ));
+        validate_activation_path(user_data_root, &restore_staging)?;
+        fs::create_dir_all(&restore_staging)?;
+        let restore_result = (|| -> Result<(), ActivationError> {
+            for file in &manifest.files {
+                let staged = restore_staging.join(&file.path);
+                copy_regular_file(&directory.join(&file.path), &staged)?;
+                let staged_metadata = fs::metadata(&staged)?;
+                let staged_hash = sha256_file(&staged)
+                    .map_err(|error| ActivationError::ReviewRequired(error.to_string()))?;
+                if staged_metadata.len() != file.size
+                    || staged_hash != file.sha256.to_ascii_lowercase()
+                {
+                    return Err(ActivationError::ReviewRequired(
+                        "staged database restore failed integrity verification".to_owned(),
+                    ));
+                }
+            }
+            for file in &manifest.files {
+                let staged = restore_staging.join(&file.path);
+                let destination = database_parent.join(&file.path);
+                validate_activation_path(user_data_root, &destination)?;
+                crate::state::durable_replace_file(&staged, &destination)?;
+            }
+            for suffix in ["-wal", "-shm"] {
+                let name = format!("{}{suffix}", database_name.to_string_lossy());
+                if !names.contains(Path::new(&name)) {
+                    let sidecar = database_parent.join(&name);
+                    validate_activation_path(user_data_root, &sidecar)?;
+                    match fs::remove_file(sidecar) {
+                        Ok(()) => {}
+                        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                        Err(error) => return Err(error.into()),
+                    }
+                }
+            }
+            sync_directory(database_parent)?;
+            Ok(())
+        })();
+        let cleanup = fs::remove_dir_all(&restore_staging);
+        if let Err(error) = restore_result {
+            if let Err(cleanup_error) = cleanup {
+                return Err(ActivationError::ReviewRequired(format!(
+                    "database restore failed and staging cleanup failed: {error}; {cleanup_error}"
+                )));
+            }
+            return Err(error);
+        }
+        cleanup?;
         Ok(())
     }
 }
@@ -884,6 +1025,7 @@ fn load_version_metadata(path: &Path) -> Result<VersionMetadata, ActivationError
     validate_sha(&metadata.target_commit)?;
     if !safe_relative(&metadata.runtime.desktop_executable)
         || !safe_relative(&metadata.runtime.backend_jar)
+        || !safe_relative(&metadata.runtime.managed_java_binary)
         || metadata
             .component_paths
             .values()
@@ -1008,6 +1150,55 @@ fn safe_relative(path: &Path) -> bool {
             .all(|component| matches!(component, Component::Normal(_)))
 }
 
+fn require_executable(path: &Path) -> Result<(), ActivationError> {
+    if require_executable_result(path) {
+        Ok(())
+    } else {
+        Err(ActivationError::ArtifactVerification(format!(
+            "desktop runtime is not executable: {}",
+            path.display()
+        )))
+    }
+}
+
+fn require_executable_result(path: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::metadata(path)
+            .map(|metadata| metadata.permissions().mode() & 0o111 != 0)
+            .unwrap_or(false)
+    }
+    #[cfg(not(unix))]
+    {
+        path.is_file()
+    }
+}
+
+fn validate_managed_java(
+    paths: &InstallationPaths,
+    java_binary: &Path,
+) -> Result<PathBuf, ActivationError> {
+    let java_binary = absolute_path(java_binary)?;
+    let jdk_root = paths.toolchain_dir().join("jdk");
+    validate_activation_path(&jdk_root, &java_binary)?;
+    if !java_binary.is_file() {
+        return Err(ActivationError::InvalidInput(
+            "managed JDK binary is missing".to_owned(),
+        ));
+    }
+    #[cfg(unix)]
+    if !require_executable_result(&java_binary) {
+        return Err(ActivationError::InvalidInput(
+            "managed JDK binary is not executable".to_owned(),
+        ));
+    }
+    java_binary
+        .strip_prefix(&paths.app_root)
+        .map(PathBuf::from)
+        .map_err(|_| ActivationError::InvalidInput("managed JDK is outside app root".to_owned()))
+}
+
 fn absolute_path(path: &Path) -> Result<PathBuf, ActivationError> {
     if path.is_absolute() {
         Ok(path.to_path_buf())
@@ -1016,63 +1207,12 @@ fn absolute_path(path: &Path) -> Result<PathBuf, ActivationError> {
     }
 }
 
-fn validate_owned_path(root: &Path, path: &Path) -> Result<(), ActivationError> {
+fn validate_activation_path(root: &Path, path: &Path) -> Result<(), ActivationError> {
     let root = absolute_path(root)?;
     let path = absolute_path(path)?;
-    if !path.starts_with(&root) || has_link_ancestor(&root, &path)? {
-        return Err(ActivationError::InvalidCandidate(path));
-    }
-    Ok(())
-}
-
-fn has_link_ancestor(root: &Path, path: &Path) -> io::Result<bool> {
-    let relative = path
-        .strip_prefix(root)
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "path outside root"))?;
-    if !root.is_absolute() || !path.is_absolute() {
-        return Ok(true);
-    }
-    match fs::symlink_metadata(root) {
-        Ok(_) if is_link_or_reparse(root)? => return Ok(true),
-        Ok(_) => {}
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error),
-    }
-    let mut current = root.to_path_buf();
-    for component in relative.components() {
-        if !matches!(component, Component::Normal(_)) {
-            return Ok(true);
-        }
-        current.push(component.as_os_str());
-        match fs::symlink_metadata(&current) {
-            Ok(_) if is_link_or_reparse(&current)? => return Ok(true),
-            Ok(_) => {}
-            Err(error) if error.kind() == io::ErrorKind::NotFound => break,
-            Err(error) => return Err(error),
-        }
-    }
-    Ok(false)
-}
-
-fn is_link_or_reparse(path: &Path) -> io::Result<bool> {
-    let metadata = fs::symlink_metadata(path)?;
-    if metadata.file_type().is_symlink() {
-        return Ok(true);
-    }
-    is_reparse_point(path)
-}
-
-#[cfg(not(windows))]
-fn is_reparse_point(_path: &Path) -> io::Result<bool> {
-    Ok(false)
-}
-
-#[cfg(windows)]
-fn is_reparse_point(path: &Path) -> io::Result<bool> {
-    use std::os::windows::fs::MetadataExt;
-    use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
-
-    Ok(fs::symlink_metadata(path)?.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0)
+    validate_managed_path(&root, &path)
+        .map(|_| ())
+        .map_err(ActivationError::State)
 }
 
 fn sync_directory(path: &Path) -> io::Result<()> {
@@ -1156,11 +1296,72 @@ mod tests {
     }
 
     #[test]
+    fn corrupt_database_snapshot_fails_before_live_db_write() {
+        let root = tempdir().unwrap();
+        let user_data = root.path().join("user-data");
+        let database = user_data.join("data/harmonia.db");
+        fs::create_dir_all(database.parent().unwrap()).unwrap();
+        fs::write(&database, b"before").unwrap();
+        let snapshot = DatabaseSnapshot::create(&user_data, &database, "tx-corrupt")
+            .unwrap()
+            .unwrap();
+        fs::write(&database, b"live-after").unwrap();
+        let manifest_path = snapshot.directory.join("manifest.json");
+        let mut manifest: DatabaseManifest =
+            serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+        manifest.files[0].sha256 = "0".repeat(SHA256_LENGTH);
+        fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        assert!(matches!(
+            DatabaseSnapshot::restore(&snapshot.directory, &user_data),
+            Err(ActivationError::ReviewRequired(_))
+        ));
+        assert_eq!(fs::read(&database).unwrap(), b"live-after");
+    }
+
+    #[test]
+    fn non_default_database_path_is_journaled_and_used_by_health_check() {
+        let root = tempdir().unwrap();
+        let paths = paths(root.path());
+        let custom_database = paths.user_data_root.join("workspace/custom.sqlite");
+        fs::create_dir_all(custom_database.parent().unwrap()).unwrap();
+        fs::write(&custom_database, b"database").unwrap();
+        let (result_path, _) = fixture_result(&paths, &"a".repeat(40), "tx-db");
+        let mut config = fixture_config(&paths);
+        config.database_path = custom_database.clone();
+        let mut hooks = NoopActivationHooks;
+        ActivationEngine::new(paths.clone())
+            .activate(
+                result_path,
+                &config,
+                &mut hooks,
+                &DatabasePathHealthChecker {
+                    expected: custom_database.clone(),
+                },
+            )
+            .unwrap();
+        let transaction = StateStore::new(paths.clone())
+            .load_transaction()
+            .unwrap()
+            .unwrap();
+        assert_eq!(transaction.database_path, Some(custom_database.clone()));
+        let backup = transaction.db_backup_path.unwrap();
+        let manifest: DatabaseManifest =
+            serde_json::from_slice(&fs::read(backup.join("manifest.json")).unwrap()).unwrap();
+        assert_eq!(
+            manifest.database_relative,
+            custom_database
+                .strip_prefix(&paths.user_data_root)
+                .unwrap()
+                .to_path_buf()
+        );
+    }
+
+    #[test]
     fn managed_candidate_path_rejects_traversal() {
         let root = tempdir().unwrap();
         let managed = root.path().join("build/candidates/commit");
         let escaped = root.path().join("build/candidates/commit/../outside");
-        assert!(validate_owned_path(&managed, &escaped).is_err());
+        assert!(validate_activation_path(&managed, &escaped).is_err());
     }
 
     #[cfg(unix)]
@@ -1175,21 +1376,67 @@ mod tests {
         fs::create_dir_all(&external).unwrap();
         symlink(&external, managed.join("alias")).unwrap();
         let escaped = managed.join("alias/version");
-        assert!(validate_owned_path(&managed, &escaped).is_err());
+        assert!(validate_activation_path(&managed, &escaped).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn managed_roots_reject_symlink_ancestors_above_each_root() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempdir().unwrap();
+        let external = root.path().join("external");
+        fs::create_dir_all(&external).unwrap();
+        let link = root.path().join("managed-link");
+        symlink(&external, &link).unwrap();
+
+        for relative in [
+            PathBuf::from("build/candidates/commit/tx/commit"),
+            PathBuf::from("versions/commit"),
+            PathBuf::from("user-data/backups/installer/tx"),
+        ] {
+            let managed_root = link.join(relative.parent().unwrap());
+            let candidate = link.join(relative);
+            assert!(validate_activation_path(&managed_root, &candidate).is_err());
+        }
     }
 
     struct FixtureHealthChecker {
         healthy: bool,
+        fail_commit: Option<String>,
+    }
+
+    struct DatabasePathHealthChecker {
+        expected: PathBuf,
+    }
+
+    impl HealthChecker for DatabasePathHealthChecker {
+        fn check(
+            &self,
+            _version_dir: &Path,
+            _metadata: &VersionMetadata,
+            config: &ActivationConfig,
+        ) -> Result<(), ActivationError> {
+            if config.database_path == self.expected {
+                Ok(())
+            } else {
+                Err(ActivationError::HealthCheck(format!(
+                    "unexpected database path: {}",
+                    config.database_path.display()
+                )))
+            }
+        }
     }
 
     impl HealthChecker for FixtureHealthChecker {
         fn check(
             &self,
             _version_dir: &Path,
-            _metadata: &VersionMetadata,
+            metadata: &VersionMetadata,
             _config: &ActivationConfig,
         ) -> Result<(), ActivationError> {
-            if self.healthy {
+            if self.healthy && self.fail_commit.as_deref() != Some(metadata.target_commit.as_str())
+            {
                 Ok(())
             } else {
                 Err(ActivationError::HealthCheck(
@@ -1219,6 +1466,12 @@ mod tests {
         fs::write(frontend.join("index.html"), b"frontend").unwrap();
         fs::write(&backend, b"backend").unwrap();
         fs::write(desktop.join("electron"), b"electron").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(desktop.join("electron"), fs::Permissions::from_mode(0o755))
+                .unwrap();
+        }
         fs::write(desktop.join("resources/app/package.json"), b"{}\n").unwrap();
         fs::write(desktop.join("resources/app/dist/main.js"), b"main").unwrap();
         let frontend_hash = hash_directory(&frontend).unwrap();
@@ -1263,7 +1516,15 @@ mod tests {
     }
 
     fn fixture_config(paths: &InstallationPaths) -> ActivationConfig {
-        ActivationConfig::for_paths(paths, paths.app_root.join("toolchain/jdk/bin/java"))
+        let java = paths.app_root.join("toolchain/jdk/bin/java");
+        fs::create_dir_all(java.parent().unwrap()).unwrap();
+        fs::write(&java, b"managed-java").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&java, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        ActivationConfig::for_paths(paths, java)
     }
 
     #[test]
@@ -1278,7 +1539,10 @@ mod tests {
                 result_path,
                 &fixture_config(&paths),
                 &mut hooks,
-                &FixtureHealthChecker { healthy: true },
+                &FixtureHealthChecker {
+                    healthy: true,
+                    fail_commit: None,
+                },
             )
             .unwrap();
         let state = StateStore::new(paths.clone()).load_installation().unwrap();
@@ -1299,6 +1563,36 @@ mod tests {
         assert!(!runtime.version_dir.join("source").exists());
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn resolve_version_rejects_desktop_runtime_without_execute_bit() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = tempdir().unwrap();
+        let paths = paths(root.path());
+        let (result_path, result) = fixture_result(&paths, &"a".repeat(40), "tx-a");
+        let engine = ActivationEngine::new(paths.clone());
+        let mut hooks = NoopActivationHooks;
+        engine
+            .activate(
+                result_path,
+                &fixture_config(&paths),
+                &mut hooks,
+                &FixtureHealthChecker {
+                    healthy: true,
+                    fail_commit: None,
+                },
+            )
+            .unwrap();
+        let runtime = engine.resolve_version(&result.target_commit).unwrap();
+        fs::set_permissions(
+            &runtime.desktop_executable,
+            fs::Permissions::from_mode(0o644),
+        )
+        .unwrap();
+        assert!(engine.resolve_version(&result.target_commit).is_err());
+    }
+
     #[test]
     fn failed_health_check_rolls_back_and_keeps_failed_version_for_diagnostics() {
         let root = tempdir().unwrap();
@@ -1311,7 +1605,10 @@ mod tests {
                 first_path,
                 &fixture_config(&paths),
                 &mut hooks,
-                &FixtureHealthChecker { healthy: true },
+                &FixtureHealthChecker {
+                    healthy: true,
+                    fail_commit: None,
+                },
             )
             .unwrap();
         let (second_path, second) = fixture_result(&paths, &"b".repeat(40), "tx-b");
@@ -1320,7 +1617,10 @@ mod tests {
                 second_path,
                 &fixture_config(&paths),
                 &mut hooks,
-                &FixtureHealthChecker { healthy: false },
+                &FixtureHealthChecker {
+                    healthy: true,
+                    fail_commit: Some(second.target_commit.clone()),
+                },
             )
             .unwrap_err();
         assert!(matches!(error, ActivationError::HealthCheck(_)));
@@ -1338,6 +1638,118 @@ mod tests {
                 .target_commit,
             "a".repeat(40)
         );
+    }
+
+    #[test]
+    fn rollback_failure_is_durable_and_blocks_next_activation() {
+        let root = tempdir().unwrap();
+        let paths = paths(root.path());
+        let engine = ActivationEngine::new(paths.clone());
+        let mut hooks = NoopActivationHooks;
+        let (first_path, first) = fixture_result(&paths, &"a".repeat(40), "tx-a");
+        engine
+            .activate(
+                first_path,
+                &fixture_config(&paths),
+                &mut hooks,
+                &FixtureHealthChecker {
+                    healthy: true,
+                    fail_commit: None,
+                },
+            )
+            .unwrap();
+        let (second_path, second) = fixture_result(&paths, &"b".repeat(40), "tx-b");
+        let error = engine
+            .activate(
+                second_path,
+                &fixture_config(&paths),
+                &mut hooks,
+                &FixtureHealthChecker {
+                    healthy: false,
+                    fail_commit: None,
+                },
+            )
+            .unwrap_err();
+        assert!(matches!(error, ActivationError::ReviewRequired(_)));
+        assert_eq!(
+            StateStore::new(paths.clone())
+                .load_transaction()
+                .unwrap()
+                .unwrap()
+                .status,
+            TransactionStatus::ReviewRequired
+        );
+
+        let (third_path, _) = fixture_result(&paths, &"c".repeat(40), "tx-c");
+        let blocked = engine.activate(
+            third_path,
+            &fixture_config(&paths),
+            &mut hooks,
+            &FixtureHealthChecker {
+                healthy: true,
+                fail_commit: None,
+            },
+        );
+        assert!(matches!(blocked, Err(ActivationError::ReviewRequired(_))));
+        assert_eq!(
+            StateStore::new(paths)
+                .load_installation()
+                .unwrap()
+                .current_commit,
+            Some(first.target_commit)
+        );
+        assert_eq!(second.target_commit, "b".repeat(40));
+    }
+
+    #[test]
+    fn rollback_restores_exact_pre_activation_state_snapshot() {
+        let root = tempdir().unwrap();
+        let paths = paths(root.path());
+        let engine = ActivationEngine::new(paths.clone());
+        let mut hooks = NoopActivationHooks;
+        let (p_path, p) = fixture_result(&paths, &"d".repeat(40), "tx-p");
+        engine
+            .activate(
+                p_path,
+                &fixture_config(&paths),
+                &mut hooks,
+                &FixtureHealthChecker {
+                    healthy: true,
+                    fail_commit: None,
+                },
+            )
+            .unwrap();
+        let (a_path, a) = fixture_result(&paths, &"a".repeat(40), "tx-a");
+        engine
+            .activate(
+                a_path,
+                &fixture_config(&paths),
+                &mut hooks,
+                &FixtureHealthChecker {
+                    healthy: true,
+                    fail_commit: None,
+                },
+            )
+            .unwrap();
+        let store = StateStore::new(paths.clone());
+        let before = store.load_installation().unwrap();
+        assert_eq!(before.current_commit, Some(a.target_commit.clone()));
+        assert_eq!(before.previous_commit, Some(p.target_commit));
+
+        let (b_path, b) = fixture_result(&paths, &"b".repeat(40), "tx-b");
+        let error = engine
+            .activate(
+                b_path,
+                &fixture_config(&paths),
+                &mut hooks,
+                &FixtureHealthChecker {
+                    healthy: true,
+                    fail_commit: Some(b.target_commit.clone()),
+                },
+            )
+            .unwrap_err();
+        assert!(matches!(error, ActivationError::HealthCheck(_)));
+        assert_eq!(store.load_installation().unwrap(), before);
     }
 
     #[test]
@@ -1360,7 +1772,10 @@ mod tests {
                 result_path,
                 &fixture_config(&paths),
                 &mut hooks,
-                &FixtureHealthChecker { healthy: true },
+                &FixtureHealthChecker {
+                    healthy: true,
+                    fail_commit: None
+                },
             ),
             Err(ActivationError::ArtifactVerification(_))
         ));
@@ -1400,7 +1815,10 @@ mod tests {
                 first_path,
                 &fixture_config(&paths),
                 &mut hooks,
-                &FixtureHealthChecker { healthy: true },
+                &FixtureHealthChecker {
+                    healthy: true,
+                    fail_commit: None,
+                },
             )
             .unwrap();
         let (_, second) = fixture_result(&paths, &"f".repeat(40), "tx-f");
@@ -1413,9 +1831,15 @@ mod tests {
             Vec::new(),
         )
         .unwrap();
+        crashed
+            .set_pre_activation_state(store.load_installation().unwrap())
+            .unwrap();
+        crashed
+            .set_database_path(fixture_config(&paths).database_path)
+            .unwrap();
         crashed.transition(TransactionPhase::Staging).unwrap();
         engine
-            .stage_version(&second, &candidate, &mut crashed)
+            .stage_version(&second, &candidate, &fixture_config(&paths), &mut crashed)
             .unwrap();
         crashed
             .set_published_version(second.target_commit.clone())
@@ -1429,7 +1853,15 @@ mod tests {
         store.save_installation(&switched).unwrap();
         crashed.mark_current_switched().unwrap();
         drop(crashed);
-        engine.recover().unwrap();
+        engine
+            .recover_with_health_checker(
+                &fixture_config(&paths),
+                &FixtureHealthChecker {
+                    healthy: true,
+                    fail_commit: None,
+                },
+            )
+            .unwrap();
         let recovered = store.load_installation().unwrap();
         assert_eq!(recovered.current_commit, Some(first.target_commit));
         assert!(paths.versions_dir().join(second.target_commit).is_dir());

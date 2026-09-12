@@ -192,6 +192,15 @@ export function defaultGatewayJar(): string | undefined {
 }
 
 function defaultJavaBinary(): string {
+  if (process.env.HARMONIA_RUNTIME_MODE === "installed") {
+    const managed = process.env.HARMONIA_JAVA_BINARY;
+    if (!managed) {
+      throw new Error(
+        "managed Java is required in installed runtime mode; set HARMONIA_JAVA_BINARY",
+      );
+    }
+    return managed;
+  }
   const javaHome = process.env.JAVA_HOME;
   if (javaHome) {
     return join(javaHome, "bin", process.platform === "win32" ? "java.exe" : "java");

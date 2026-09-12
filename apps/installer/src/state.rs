@@ -42,6 +42,8 @@ pub enum StateError {
     },
     #[error("transaction {0} is still running")]
     ActiveTransaction(String),
+    #[error("transaction {0} requires explicit review before another operation")]
+    ReviewRequiredTransaction(String),
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -82,6 +84,7 @@ pub enum TransactionStatus {
     Running,
     Completed,
     Failed,
+    ReviewRequired,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -156,6 +159,10 @@ pub struct TransactionRecord {
     pub db_backup_required: bool,
     #[serde(default)]
     pub rollback_completed: bool,
+    #[serde(default)]
+    pub database_path: Option<PathBuf>,
+    #[serde(default)]
+    pub pre_activation_state: Option<InstallationState>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -248,7 +255,10 @@ impl StateStore {
             .cloned()
             .collect::<BTreeSet<_>>();
         if let Some(transaction) = self.load_transaction()? {
-            if transaction.status == TransactionStatus::Running {
+            if matches!(
+                transaction.status,
+                TransactionStatus::Running | TransactionStatus::ReviewRequired
+            ) {
                 protected.extend(transaction.toolchain_refs.values().cloned());
             }
         }
@@ -259,6 +269,12 @@ impl StateStore {
         let Some(transaction) = self.load_transaction()? else {
             return Ok(RecoveryAction::None);
         };
+        if transaction.status == TransactionStatus::ReviewRequired {
+            return Ok(RecoveryAction::ReviewRequired {
+                transaction_id: transaction.id,
+                phase: transaction.phase,
+            });
+        }
         if transaction.status != TransactionStatus::Running
             || matches!(
                 transaction.phase,
@@ -296,6 +312,9 @@ impl StateStore {
         let Some(mut transaction) = self.load_transaction()? else {
             return Ok(());
         };
+        if transaction.status == TransactionStatus::ReviewRequired {
+            return Err(StateError::ReviewRequiredTransaction(transaction.id));
+        }
         if transaction.status != TransactionStatus::Running
             || transaction.phase == TransactionPhase::Completed
             || transaction.phase == TransactionPhase::Failed
@@ -373,6 +392,27 @@ impl StateStore {
         Ok(())
     }
 
+    /// Explicit operator action to clear a durable review block after the caller has
+    /// repaired or otherwise verified the installation. Normal recovery never calls this.
+    pub fn resolve_review(&self, transaction_id: &str) -> Result<(), StateError> {
+        let Some(mut transaction) = self.load_transaction()? else {
+            return Err(StateError::ReviewRequiredTransaction(
+                transaction_id.to_owned(),
+            ));
+        };
+        if transaction.id != transaction_id
+            || transaction.status != TransactionStatus::ReviewRequired
+        {
+            return Err(StateError::ReviewRequiredTransaction(
+                transaction_id.to_owned(),
+            ));
+        }
+        transaction.status = TransactionStatus::Failed;
+        transaction.phase = TransactionPhase::Failed;
+        transaction.finished_at_ms = Some(now_ms());
+        self.write_transaction(&transaction)
+    }
+
     fn write_transaction(&self, transaction: &TransactionRecord) -> Result<(), StateError> {
         self.initialize()?;
         atomic_write_json(&self.paths.transaction_path(), transaction)?;
@@ -418,8 +458,14 @@ impl Transaction {
         owned_paths: Vec<PathBuf>,
     ) -> Result<Self, StateError> {
         if let Some(existing) = store.load_transaction()? {
-            if existing.status == TransactionStatus::Running {
-                return Err(StateError::ActiveTransaction(existing.id));
+            match existing.status {
+                TransactionStatus::Running => {
+                    return Err(StateError::ActiveTransaction(existing.id));
+                }
+                TransactionStatus::ReviewRequired => {
+                    return Err(StateError::ReviewRequiredTransaction(existing.id));
+                }
+                _ => {}
             }
         }
         let record = TransactionRecord {
@@ -446,6 +492,8 @@ impl Transaction {
             db_backup_path: None,
             db_backup_required: false,
             rollback_completed: false,
+            database_path: None,
+            pre_activation_state: None,
         };
         store.write_transaction(&record)?;
         Ok(Self { store, record })
@@ -484,6 +532,11 @@ impl Transaction {
         self.record
             .toolchain_refs
             .insert(kind.into(), toolchain_id.into());
+        self.store.write_transaction(&self.record)
+    }
+
+    pub fn set_pre_activation_state(&mut self, state: InstallationState) -> Result<(), StateError> {
+        self.record.pre_activation_state = Some(state);
         self.store.write_transaction(&self.record)
     }
 
@@ -542,6 +595,32 @@ impl Transaction {
 
     pub fn mark_rollback_completed(&mut self) -> Result<(), StateError> {
         self.record.rollback_completed = true;
+        self.store.write_transaction(&self.record)
+    }
+
+    pub fn set_database_path(&mut self, path: impl Into<PathBuf>) -> Result<(), StateError> {
+        self.record.database_path = Some(path.into());
+        self.store.write_transaction(&self.record)
+    }
+
+    pub fn mark_review_required(&mut self, reason: impl Into<String>) -> Result<(), StateError> {
+        self.record.status = TransactionStatus::ReviewRequired;
+        self.record.failure = Some(reason.into());
+        self.record.finished_at_ms = Some(now_ms());
+        self.store.write_transaction(&self.record)
+    }
+
+    /// Clear a durable review block only after an explicit operator repair/recovery action.
+    pub fn resolve_review(&mut self) -> Result<(), StateError> {
+        if self.record.status != TransactionStatus::ReviewRequired {
+            return Err(StateError::InvalidTransition {
+                from: self.record.phase.clone(),
+                to: TransactionPhase::Failed,
+            });
+        }
+        self.record.status = TransactionStatus::Failed;
+        self.record.phase = TransactionPhase::Failed;
+        self.record.finished_at_ms = Some(now_ms());
         self.store.write_transaction(&self.record)
     }
 
@@ -622,6 +701,20 @@ fn normalize(path: &Path) -> Result<PathBuf, StateError> {
     Ok(std::env::current_dir()?.join(path))
 }
 
+/// Validate a path that the installer may create, read, replace, or remove.
+///
+/// This is deliberately shared by recovery and activation code. It rejects parent
+/// traversal, paths outside the declared root, and symlink/reparse ancestors all
+/// the way above that root.
+pub(crate) fn validate_managed_path(root: &Path, path: &Path) -> Result<PathBuf, StateError> {
+    let root = normalize(root)?;
+    let path = normalize(path)?;
+    if !path.starts_with(&root) || has_unsafe_ancestor(&root, &path)? {
+        return Err(StateError::UnsafeRecoveryPath(path));
+    }
+    Ok(path)
+}
+
 fn managed_root(paths: &InstallationPaths, candidate: &Path) -> Option<PathBuf> {
     [
         paths.app_root.clone(),
@@ -670,30 +763,17 @@ fn is_link_or_reparse(path: &Path) -> io::Result<bool> {
     if metadata.file_type().is_symlink() {
         return Ok(true);
     }
-    is_reparse_point(path)
-}
-
-#[cfg(not(windows))]
-fn is_reparse_point(_path: &Path) -> io::Result<bool> {
-    Ok(false)
-}
-
-#[cfg(windows)]
-fn is_reparse_point(path: &Path) -> io::Result<bool> {
-    use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::Storage::FileSystem::{
-        GetFileAttributesW, FILE_ATTRIBUTE_REPARSE_POINT, INVALID_FILE_ATTRIBUTES,
-    };
-    let wide: Vec<u16> = path
-        .as_os_str()
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect();
-    let attributes = unsafe { GetFileAttributesW(wide.as_ptr()) };
-    if attributes == INVALID_FILE_ATTRIBUTES {
-        return Err(io::Error::last_os_error());
+    #[cfg(not(windows))]
+    {
+        Ok(false)
     }
-    Ok(attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0)
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
+
+        Ok(metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0)
+    }
 }
 
 pub(crate) fn atomic_write_json<T: Serialize>(path: &Path, value: &T) -> Result<(), StateError> {
@@ -718,6 +798,14 @@ pub(crate) fn atomic_write_json<T: Serialize>(path: &Path, value: &T) -> Result<
     }
     replace_file(&temporary, path)?;
     sync_parent(parent);
+    Ok(())
+}
+
+pub(crate) fn durable_replace_file(temporary: &Path, destination: &Path) -> Result<(), StateError> {
+    replace_file(temporary, destination)?;
+    if let Some(parent) = destination.parent() {
+        sync_parent(parent);
+    }
     Ok(())
 }
 

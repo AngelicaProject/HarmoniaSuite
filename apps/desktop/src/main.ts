@@ -71,6 +71,7 @@ if (!hasLock) {
 
   async function startLocalGateway(): Promise<string> {
     localGateway = new LocalGateway({
+      javaBinary: process.env.HARMONIA_JAVA_BINARY,
       workspace: process.env.HARMONIA_WORKSPACE || app.getPath("userData"),
       log: (message) => console.log(message),
     });
