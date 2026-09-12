@@ -158,19 +158,16 @@ impl<D: DownloadClient, P: ProcessRunner> RepairEngine<D, P> {
                 },
             });
         };
-        match activation.resolve_current() {
-            Ok(Some(runtime)) => {
-                return Ok(RepairResult {
-                    operation_id: "repair".to_owned(),
-                    target_commit: Some(commit),
-                    toolchains: runtime.metadata.toolchains,
-                    status: RepairStatus::Healthy {
-                        commit: runtime.metadata.target_commit,
-                        version_dir: runtime.version_dir,
-                    },
-                });
-            }
-            Ok(None) | Err(_) => {}
+        if let Ok(Some(runtime)) = activation.resolve_current() {
+            return Ok(RepairResult {
+                operation_id: "repair".to_owned(),
+                target_commit: Some(commit),
+                toolchains: runtime.metadata.toolchains,
+                status: RepairStatus::Healthy {
+                    commit: runtime.metadata.target_commit,
+                    version_dir: runtime.version_dir,
+                },
+            });
         }
 
         let operation_id = uuid::Uuid::new_v4().simple().to_string();
