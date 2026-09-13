@@ -118,6 +118,7 @@ jobs:
       - run: ./mvnw -B -q test
       - run: node --test tools/test-release-notes.mjs
       - run: node --test tools/version/test-versions.mjs
+      - run: node --test tools/release/test-release-workflow.mjs
       - run: node --test tools/release/test-manifest.mjs
       - run: node --test tools/release/test-rolling-policy.mjs
       - run: node --test tools/release/test-rolling-publication.mjs
