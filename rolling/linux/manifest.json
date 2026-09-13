@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "channel": "rolling",
+  "generation": 1,
+  "productVersion": "1.0.11-SNAPSHOT",
+  "targetCommit": "50f513e80f167077687b133690c0f7c8d8e0c6b9",
+  "minInstallerVersion": "0.1.0",
+  "jdk": {
+    "kind": "jdk",
+    "version": "21.0.12+8",
+    "platform": "Linux",
+    "architecture": "X64",
+    "url": "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.12%2B8/OpenJDK21U-jdk_x64_linux_hotspot_21.0.12_8.tar.gz",
+    "sha256": "e4446ff06a276155697597cc0f1b15da004ff083f4964a35271ecee567177370",
+    "archive": "tar.gz",
+    "homeDir": "jdk-21.0.12+8",
+    "executables": {
+      "java": "jdk-21.0.12+8/bin/java"
+    }
+  },
+  "node": {
+    "kind": "node",
+    "version": "24.15.0",
+    "platform": "Linux",
+    "architecture": "X64",
+    "url": "https://nodejs.org/download/release/v24.15.0/node-v24.15.0-linux-x64.tar.gz",
+    "sha256": "44836872d9aec49f1e6b52a9a922872db9a2b02d235a616a5681b6a85fec8d89",
+    "archive": "tar.gz",
+    "homeDir": "node-v24.15.0-linux-x64",
+    "executables": {
+      "node": "node-v24.15.0-linux-x64/bin/node",
+      "npm": "node-v24.15.0-linux-x64/bin/npm",
+      "npx": "node-v24.15.0-linux-x64/bin/npx"
+    }
+  }
+}
