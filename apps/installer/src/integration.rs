@@ -97,13 +97,12 @@ fn windows_registry_complete(paths: &InstallationPaths) -> bool {
     if result != 0 {
         return false;
     }
-    let product_version = installed_product_version(paths);
+    let Some(product_version) = installed_product_version(paths) else {
+        return false;
+    };
     let expected = [
         ("DisplayName", "HarmoniaSuite".to_owned()),
-        (
-            "DisplayVersion",
-            product_version.unwrap_or_else(|| crate::DEFAULT_PRODUCT_VERSION.to_owned()),
-        ),
+        ("DisplayVersion", product_version.clone()),
         ("Publisher", "AngelicaProject".to_owned()),
         ("InstallLocation", paths.app_root.display().to_string()),
         (
@@ -495,13 +494,15 @@ fn write_windows_registry(paths: &InstallationPaths) -> Result<(), IntegrationEr
     if result != 0 {
         return Err(IntegrationError::Registry(result));
     }
+    let product_version = installed_product_version(paths).ok_or_else(|| {
+        IntegrationError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "installation product version is missing",
+        ))
+    })?;
     let values = [
         ("DisplayName", "HarmoniaSuite".to_owned()),
-        (
-            "DisplayVersion",
-            installed_product_version(paths)
-                .unwrap_or_else(|| crate::DEFAULT_PRODUCT_VERSION.to_owned()),
-        ),
+        ("DisplayVersion", product_version),
         ("Publisher", "AngelicaProject".to_owned()),
         ("InstallLocation", paths.app_root.display().to_string()),
         (

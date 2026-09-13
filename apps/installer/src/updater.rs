@@ -510,17 +510,26 @@ impl<D: DownloadClient, P: ProcessRunner> UpdateEngine<D, P> {
                 journal.phase = UpdateJournalPhase::Failed;
                 journal.failure = Some(error.to_string());
                 finish_journal(&self.paths, &mut journal)?;
-                return Ok(result_from_journal(
-                    &journal,
+                let status = if matches!(&error, BuildError::CanonicalVersionMismatch { .. }) {
+                    UpdateStatus::TrustFailure {
+                        reason: error.to_string(),
+                    }
+                } else {
                     UpdateStatus::UpdateBuildFailed {
                         reason: error.to_string(),
-                    },
-                ));
+                    }
+                };
+                return Ok(result_from_journal(&journal, status));
             }
         };
         if build.target_commit != manifest.target_commit {
             return Err(UpdateError::TrustFailure(
                 "build result target differs from signed manifest".to_owned(),
+            ));
+        }
+        if build.product_version != manifest.product_version {
+            return Err(UpdateError::TrustFailure(
+                "build result application version differs from signed manifest".to_owned(),
             ));
         }
         journal.phase = UpdateJournalPhase::WaitingForShutdown;
@@ -1346,6 +1355,16 @@ mod tests {
                     timed_out: false,
                 });
             }
+            if is_maven && command.args.iter().any(|arg| arg == "help:evaluate") {
+                let marker = fs::read_to_string(directory.join("build-marker.txt"))?;
+                return Ok(ProcessOutput {
+                    status: Some(0),
+                    stdout: format!("{}\n", ab_version(marker.trim())),
+                    stderr: String::new(),
+                    duration_ms: 1,
+                    timed_out: false,
+                });
+            }
             if is_build {
                 let output = directory.join("dist");
                 fs::create_dir_all(&output)?;
@@ -1666,9 +1685,13 @@ mod tests {
         root.insert("frontend", frontend, 0o040000).unwrap();
         root.insert("apps", apps, 0o040000).unwrap();
         root.insert(".mvn", dot_mvn, 0o040000).unwrap();
+        let pom = format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<project xmlns=\"http://maven.apache.org/POM/4.0.0\">\n  <modelVersion>4.0.0</modelVersion>\n  <groupId>com.example</groupId>\n  <artifactId>fixture</artifactId>\n  <version>{}</version>\n</project>\n",
+            ab_version(marker)
+        );
         root.insert(
             "pom.xml",
-            repository.blob(b"<project/>\n").unwrap(),
+            repository.blob(pom.as_bytes()).unwrap(),
             0o100644,
         )
         .unwrap();
@@ -1718,6 +1741,15 @@ mod tests {
                 .unwrap();
         }
         tree.write().unwrap()
+    }
+
+    fn ab_version(marker: &str) -> &'static str {
+        match marker {
+            "A" => "1.0.0",
+            "B" => "1.0.1",
+            "C" => "1.0.2",
+            _ => "1.0.0",
+        }
     }
 
     fn ab_children(repository: &Repository, children: &[(&str, Oid)]) -> Oid {

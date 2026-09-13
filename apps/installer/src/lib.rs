@@ -28,7 +28,7 @@ pub use activation::{
 };
 pub use bootstrap::{
     stable_runtime_launch_spec, BootstrapError, BootstrapInstaller, BootstrapOptions,
-    BootstrapResult, BootstrapStatus, DEFAULT_PRODUCT_VERSION, DEFAULT_REMOTE_URL,
+    BootstrapResult, BootstrapStatus, DEFAULT_REMOTE_URL,
 };
 pub use build::{BuildArtifact, BuildConfig, BuildError, BuildPipeline, BuildResult, BuildStatus};
 pub use catalog::{production_catalog, production_descriptors, PRODUCTION_CATALOG_SCHEMA_VERSION};

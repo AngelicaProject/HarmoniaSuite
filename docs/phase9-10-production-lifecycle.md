@@ -47,6 +47,18 @@ is the exact commit object ID plus generation. `productVersion` is the canonical
 The installer engine version is the Cargo package version and is used independently for
 `minInstallerVersion`. Portable ZIP/MSI and macOS artifacts are intentionally out of scope.
 
+Every fresh install, rolling update, and rebuild/repair resolves the application identity from
+`project.version` in the exact checkout by invoking the managed Maven Wrapper
+`help:evaluate -Dexpression=project.version -DforceStdout`. Fresh install and repair accept that
+source-derived value; a signed rolling manifest supplies an expected value that must match it.
+The bootstrap/installer package version is never used as the installed application version.
+
+Repair replacement uses a durable two-step journal. It first persists `Prepared`, renames the
+immutable version directory to its quarantine name, then persists `Quarantined`. Recovery treats
+`Prepared + final-only` as a crash before rename and leaves the final version untouched, while
+`Prepared + quarantine-only` proves the rename happened and restores the final name. Both paths
+present, or both absent, are ambiguous and become `ReviewRequired` rather than being guessed.
+
 The Electron desktop payload is the product runtime. An XivExdUnpacker is not required by this
 architecture and is deliberately unsupported; introducing one would require a separately reviewed
 source, digest, and format contract.

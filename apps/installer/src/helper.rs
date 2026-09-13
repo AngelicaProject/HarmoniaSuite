@@ -307,10 +307,16 @@ fn helper_metadata(
 }
 
 fn current_product_version(paths: &InstallationPaths) -> Result<String, HelperError> {
-    Ok(crate::state::StateStore::new(paths.clone())
+    crate::state::StateStore::new(paths.clone())
         .load_installation()?
         .product_version
-        .unwrap_or_else(|| crate::DEFAULT_PRODUCT_VERSION.to_owned()))
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| {
+            HelperError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "installation product version is missing",
+            ))
+        })
 }
 
 fn same_file_path(left: &Path, right: &Path) -> bool {

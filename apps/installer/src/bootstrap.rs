@@ -37,19 +37,15 @@ fn now_ms() -> u128 {
         .unwrap_or_default()
         .as_millis()
 }
-pub const DEFAULT_PRODUCT_VERSION: &str = "1.0.11-SNAPSHOT";
-
 #[derive(Clone, Debug)]
 pub struct BootstrapOptions {
     remote_url: String,
-    product_version: String,
 }
 
 impl Default for BootstrapOptions {
     fn default() -> Self {
         Self {
             remote_url: DEFAULT_REMOTE_URL.to_owned(),
-            product_version: DEFAULT_PRODUCT_VERSION.to_owned(),
         }
     }
 }
@@ -126,7 +122,7 @@ pub enum BootstrapError {
 
 fn new_bootstrap_journal(
     paths: &InstallationPaths,
-    options: &BootstrapOptions,
+    _options: &BootstrapOptions,
     operation_id: String,
 ) -> BootstrapJournal {
     let launch_nonce = Uuid::new_v4().simple().to_string();
@@ -139,7 +135,7 @@ fn new_bootstrap_journal(
         finished_at_ms: None,
         phase: BootstrapJournalPhase::Recovering,
         target_commit: None,
-        product_version: options.product_version.clone(),
+        product_version: String::new(),
         toolchains: BTreeMap::new(),
         activation_completed: false,
         launch_attempted: false,
@@ -835,12 +831,7 @@ impl<D: DownloadClient, P: ProcessRunner, L: DetachedLauncher> BootstrapInstalle
 
         journal.phase = BootstrapJournalPhase::Building;
         persist_bootstrap_journal(&paths, &journal)?;
-        let build_config = BuildConfig::new(
-            options.remote_url.clone(),
-            options.product_version.clone(),
-            jdk,
-            node,
-        );
+        let build_config = BuildConfig::fresh(options.remote_url.clone(), jdk, node);
         let pipeline = BuildPipeline::new(paths.clone(), downloader, runner, logger.clone());
         let build = match pipeline.run_with_lock(&build_config, &lock) {
             Ok(result) => result,
@@ -1101,7 +1092,7 @@ fn finish_result(
     paths: &InstallationPaths,
     logger: Option<&DiagnosticLogger>,
     operation_id: &str,
-    options: &BootstrapOptions,
+    _options: &BootstrapOptions,
     started_at_ms: u128,
     mut journal: BootstrapJournal,
     status: BootstrapStatus,
@@ -1129,9 +1120,6 @@ fn finish_result(
     journal.toolchains = toolchains.clone();
     journal.activation_completed |= activation_succeeded;
     journal.launch_handoff_completed |= launch_succeeded;
-    if journal.product_version.is_empty() {
-        journal.product_version = options.product_version.clone();
-    }
     if journal.failure.is_none() {
         journal.failure = match &status {
             BootstrapStatus::Installed { .. } | BootstrapStatus::AlreadyInstalled { .. } => None,
@@ -1297,10 +1285,9 @@ mod tests {
     }
 
     #[test]
-    fn default_options_are_public_repository_and_product_version() {
+    fn default_options_use_the_public_repository_without_an_application_version_override() {
         let options = BootstrapOptions::default();
         assert_eq!(options.remote_url, DEFAULT_REMOTE_URL);
-        assert_eq!(options.product_version, DEFAULT_PRODUCT_VERSION);
     }
 
     #[test]
@@ -1744,15 +1731,7 @@ mod tests {
             launcher.clone(),
             None,
         )
-        .install_with_descriptors(
-            BootstrapOptions {
-                remote_url,
-                product_version: "fixture".to_owned(),
-            },
-            jdk,
-            node,
-            &HealthyFixture,
-        )
+        .install_with_descriptors(BootstrapOptions { remote_url }, jdk, node, &HealthyFixture)
         .unwrap();
         assert!(matches!(result.status, BootstrapStatus::Installed { .. }));
         assert_eq!(
@@ -1853,7 +1832,6 @@ mod tests {
         .install_with_descriptors(
             BootstrapOptions {
                 remote_url: fixture.remote_url,
-                product_version: "fixture".to_owned(),
             },
             fixture.jdk,
             fixture.node,
@@ -1891,7 +1869,6 @@ mod tests {
         .install_with_descriptors(
             BootstrapOptions {
                 remote_url: fixture.remote_url,
-                product_version: "fixture".to_owned(),
             },
             fixture.jdk,
             fixture.node,
@@ -1953,7 +1930,6 @@ mod tests {
         .install_with_descriptors(
             BootstrapOptions {
                 remote_url: fixture.remote_url,
-                product_version: "fixture".to_owned(),
             },
             fixture.jdk,
             fixture.node,

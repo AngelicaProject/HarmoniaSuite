@@ -32,6 +32,12 @@ rolling publication identity, and `minInstallerVersion` is derived from the inst
 package version unless a separately reviewed compatibility floor is introduced. Generation and
 commit values are never embedded into the canonical application version.
 
+The canonical application version is resolved during every production build from the exact
+checkout with the managed Maven Wrapper (`help:evaluate -Dexpression=project.version
+-DforceStdout`). Fresh install and repair use the resolved value directly; a rolling manifest
+must match it exactly or the update fails closed. The installer Cargo version is separate and is
+used only for installer compatibility metadata.
+
 The updater uses only the compiled platform-specific HTTPS Pages endpoint and the signed
 `channel: rolling` contract. It does not use GitHub `releases/latest/download` as an application
 update source. The installer has no XivExdUnpacker dependency: Electron's verified runnable

@@ -212,16 +212,8 @@ impl<D: DownloadClient, P: ProcessRunner> RepairEngine<D, P> {
         }
 
         let operation_id = uuid::Uuid::new_v4().simple().to_string();
-        let config = BuildConfig::new(
-            DEFAULT_REMOTE_URL,
-            installation
-                .product_version
-                .clone()
-                .unwrap_or_else(|| crate::DEFAULT_PRODUCT_VERSION.to_owned()),
-            jdk,
-            node,
-        )
-        .with_target_commit(commit.clone());
+        let config =
+            BuildConfig::fresh(DEFAULT_REMOTE_URL, jdk, node).with_target_commit(commit.clone());
         let pipeline = BuildPipeline::new(paths.clone(), downloader, runner, logger);
         let build = match pipeline.run_with_lock(&config, &lock) {
             Ok(result) => result,
