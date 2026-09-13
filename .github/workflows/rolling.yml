@@ -5,19 +5,22 @@ on:
     workflows: [CI]
     types: [completed]
 
-permissions:
-  contents: write
+permissions: {}
 
 concurrency:
   group: rolling-main-publication
   cancel-in-progress: false
 
 jobs:
-  publish:
+  publish-ledger:
     if: >-
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.head_branch == 'main'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      ledger_sha: ${{ steps.ledger-state.outputs.ledger_sha }}
     steps:
       - name: Checkout the exact green CI commit
         uses: actions/checkout@v4
@@ -136,3 +139,62 @@ jobs:
             git -C rolling-site commit -m "publish rolling generation ${{ steps.generation.outputs.generation }}"
             git -C rolling-site push origin HEAD:gh-pages
           fi
+      - name: Resolve exact committed ledger state
+        id: ledger-state
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ledger_sha="$(git -C rolling-site rev-parse HEAD)"
+          remote_ledger_sha="$(git -C rolling-site ls-remote origin refs/heads/gh-pages | awk '{print $1}')"
+          test -n "$remote_ledger_sha" || { echo "gh-pages ledger branch is missing after publication" >&2; exit 1; }
+          test "$ledger_sha" = "$remote_ledger_sha" || {
+            echo "local ledger commit $ledger_sha differs from remote gh-pages commit $remote_ledger_sha" >&2
+            exit 1
+          }
+          echo "ledger_sha=$ledger_sha" >> "$GITHUB_OUTPUT"
+
+  deploy-pages:
+    needs: publish-ledger
+    if: needs.publish-ledger.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+      - name: Checkout exact committed ledger state
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.publish-ledger.outputs.ledger_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          path: rolling-site
+      - name: Prepare clean Pages artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -d rolling-site/rolling || { echo "committed gh-pages ledger is missing rolling/" >&2; exit 1; }
+          mkdir -p pages-root
+          cp -R rolling-site/rolling pages-root/rolling
+          test -f pages-root/rolling/generations/index.json
+          generation_dir="$(find pages-root/rolling/generations -mindepth 1 -maxdepth 1 -type d -print -quit)"
+          test -n "$generation_dir" || { echo "Pages artifact is missing immutable generation history" >&2; exit 1; }
+          for platform in windows linux; do
+            test -f "pages-root/rolling/$platform/manifest.json"
+            test -f "pages-root/rolling/$platform/manifest.json.sig"
+          done
+          test ! -e pages-root/rolling/.git || { echo "Pages artifact must not contain .git" >&2; exit 1; }
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: pages-root
+      - name: Deploy Pages artifact
+        id: deployment
+        uses: actions/deploy-pages@v4

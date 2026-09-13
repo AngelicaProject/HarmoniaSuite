@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { access, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 
@@ -19,17 +19,46 @@ const sha = values.get("sha")?.toLowerCase();
 if (!root) throw new Error("--root is required");
 const indexPath = join(root, "rolling", "generations", "index.json");
 
+async function pathExists(path) {
+  try {
+    await access(path);
+    return true;
+  } catch (error) {
+    if (error.code === "ENOENT") return false;
+    throw error;
+  }
+}
+
+async function hasRollingHistory() {
+  try {
+    const entries = await readdir(join(root, "rolling", "generations"));
+    if (entries.some((entry) => entry !== "index.json")) return true;
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+
+  const stableFiles = await Promise.all(
+    ["windows", "linux"].flatMap((platform) =>
+      ["manifest.json", "manifest.json.sig"].map((name) => pathExists(join(root, "rolling", platform, name))),
+    ),
+  );
+  return stableFiles.some(Boolean);
+}
+
 async function readIndex() {
   try {
     return JSON.parse(await readFile(indexPath, "utf8"));
   } catch (error) {
-    if (error.code === "ENOENT") return { schemaVersion: 1, latestGeneration: 0, commits: {} };
+    if (error.code === "ENOENT") {
+      if (await hasRollingHistory()) throw new Error("rolling ledger is inconsistent / index missing");
+      return { schemaVersion: 1, latestGeneration: 0, commits: {} };
+    }
     throw error;
   }
 }
 
 const index = await readIndex();
-if (index.schemaVersion !== 1 || typeof index.commits !== "object") throw new Error("rolling index schema is invalid");
+if (index.schemaVersion !== 1 || !index.commits || typeof index.commits !== "object") throw new Error("rolling index schema is invalid");
 
 function latestCommit(value) {
   return Object.entries(value.commits)
