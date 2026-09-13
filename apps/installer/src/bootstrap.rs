@@ -3,6 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use semver::Version;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use thiserror::Error;
@@ -47,6 +48,52 @@ impl Default for BootstrapOptions {
         Self {
             remote_url: DEFAULT_REMOTE_URL.to_owned(),
         }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ReleaseSeed {
+    commit: String,
+    product_version: String,
+}
+
+fn embedded_release_seed() -> Result<Option<ReleaseSeed>, BootstrapError> {
+    parse_release_seed(
+        option_env!("HARMONIA_RELEASE_SEED_COMMIT"),
+        option_env!("HARMONIA_RELEASE_PRODUCT_VERSION"),
+    )
+}
+
+fn parse_release_seed(
+    commit: Option<&str>,
+    product_version: Option<&str>,
+) -> Result<Option<ReleaseSeed>, BootstrapError> {
+    match (commit, product_version) {
+        (None, None) => Ok(None),
+        (Some(commit), Some(product_version)) => {
+            if commit.len() != 40 || !commit.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                return Err(BootstrapError::InvalidReleaseSeed(
+                    "seed commit must be a full 40-character hexadecimal commit".to_owned(),
+                ));
+            }
+            let parsed = Version::parse(product_version).map_err(|_| {
+                BootstrapError::InvalidReleaseSeed(
+                    "seed product version must be valid SemVer".to_owned(),
+                )
+            })?;
+            if !parsed.pre.is_empty() {
+                return Err(BootstrapError::InvalidReleaseSeed(
+                    "seed product version must be stable SemVer".to_owned(),
+                ));
+            }
+            Ok(Some(ReleaseSeed {
+                commit: commit.to_ascii_lowercase(),
+                product_version: product_version.to_owned(),
+            }))
+        }
+        _ => Err(BootstrapError::InvalidReleaseSeed(
+            "seed commit and product version must be embedded together".to_owned(),
+        )),
     }
 }
 
@@ -112,6 +159,8 @@ pub enum BootstrapError {
     Diagnostics(#[from] DiagnosticError),
     #[error("bootstrap toolchain catalog failed: {0}")]
     Toolchain(#[from] ToolchainError),
+    #[error("release bootstrap seed is invalid: {0}")]
+    InvalidReleaseSeed(String),
     #[error("bootstrap build failed: {0}")]
     Build(#[from] BuildError),
     #[error("desktop launch acknowledgement path is invalid: {0}")]
@@ -668,17 +717,30 @@ impl<D: DownloadClient, P: ProcessRunner, L: DetachedLauncher> BootstrapInstalle
     pub fn install(self, options: BootstrapOptions) -> Result<BootstrapResult, BootstrapError> {
         let (jdk, node) = production_descriptors(self.paths.platform, &self.paths.architecture)?;
         let health_checker = LocalBackendHealthChecker::new(SystemProcessRunner::default());
-        self.install_with_descriptors(options, jdk, node, &health_checker)
+        let release_seed = embedded_release_seed()?;
+        self.install_with_descriptors_and_seed(options, jdk, node, &health_checker, release_seed)
     }
 
     /// Test and controlled-fixture seam. Production callers must use
     /// `install`, which always selects the checked-in catalog.
+    #[cfg(test)]
     pub(crate) fn install_with_descriptors<H: HealthChecker>(
         self,
         options: BootstrapOptions,
         jdk: crate::toolchain::ToolchainDescriptor,
         node: crate::toolchain::ToolchainDescriptor,
         checker: &H,
+    ) -> Result<BootstrapResult, BootstrapError> {
+        self.install_with_descriptors_and_seed(options, jdk, node, checker, None)
+    }
+
+    fn install_with_descriptors_and_seed<H: HealthChecker>(
+        self,
+        options: BootstrapOptions,
+        jdk: crate::toolchain::ToolchainDescriptor,
+        node: crate::toolchain::ToolchainDescriptor,
+        checker: &H,
+        release_seed: Option<ReleaseSeed>,
     ) -> Result<BootstrapResult, BootstrapError> {
         let BootstrapInstaller {
             paths,
@@ -831,7 +893,13 @@ impl<D: DownloadClient, P: ProcessRunner, L: DetachedLauncher> BootstrapInstalle
 
         journal.phase = BootstrapJournalPhase::Building;
         persist_bootstrap_journal(&paths, &journal)?;
-        let build_config = BuildConfig::fresh(options.remote_url.clone(), jdk, node);
+        let build_config = if let Some(seed) = release_seed {
+            BuildConfig::fresh(options.remote_url.clone(), jdk, node)
+                .with_target_commit(seed.commit)
+                .with_expected_product_version(seed.product_version)
+        } else {
+            BuildConfig::fresh(options.remote_url.clone(), jdk, node)
+        };
         let pipeline = BuildPipeline::new(paths.clone(), downloader, runner, logger.clone());
         let build = match pipeline.run_with_lock(&build_config, &lock) {
             Ok(result) => result,
@@ -1219,10 +1287,15 @@ mod tests {
     use crate::download::{
         DownloadClient, DownloadError, DownloadReceipt, DownloadRequest, HttpDownloader,
     };
+    use crate::manifest::{
+        ManifestError, ManifestFetcher, ManifestSignature, ManifestVerifier, RollingManifest,
+    };
     use crate::paths::{PathEnvironment, Platform, TargetArchitecture};
     use crate::process::{CommandSpec, ProcessError, ProcessOutput, ProcessRunner};
     use crate::toolchain::ToolchainManager;
+    use crate::updater::{UpdateEngine, UpdateStatus};
     use crate::{DetachedLaunch, DetachedLaunchError, DetachedLaunchSpec, DetachedLauncher};
+    use ed25519_dalek::{Signer, SigningKey};
     use flate2::write::GzEncoder;
     use flate2::Compression;
     use git2::{IndexAddOption, Repository, Signature};
@@ -1288,6 +1361,26 @@ mod tests {
     fn default_options_use_the_public_repository_without_an_application_version_override() {
         let options = BootstrapOptions::default();
         assert_eq!(options.remote_url, DEFAULT_REMOTE_URL);
+    }
+
+    #[test]
+    fn embedded_release_seed_validation_is_fail_closed() {
+        let commit = "A".repeat(40);
+        assert_eq!(
+            parse_release_seed(Some(&commit), Some("1.0.11")).unwrap(),
+            Some(ReleaseSeed {
+                commit: "a".repeat(40),
+                product_version: "1.0.11".to_owned(),
+            })
+        );
+        assert!(matches!(
+            parse_release_seed(Some(&commit), None),
+            Err(BootstrapError::InvalidReleaseSeed(_))
+        ));
+        assert!(matches!(
+            parse_release_seed(Some(&commit), Some("1.0.11-SNAPSHOT")),
+            Err(BootstrapError::InvalidReleaseSeed(_))
+        ));
     }
 
     #[test]
@@ -1455,7 +1548,7 @@ mod tests {
             {
                 return Ok(ProcessOutput {
                     status: Some(0),
-                    stdout: "1.0.12-SNAPSHOT\n".to_owned(),
+                    stdout: "1.0.11\n".to_owned(),
                     stderr: String::new(),
                     duration_ms: 1,
                     timed_out: false,
@@ -1576,12 +1669,12 @@ mod tests {
         for (relative, contents) in [
             (
                 "frontend/package.json",
-                br#"{"version":"1.0.12-SNAPSHOT","scripts":{"build":"vite build"}}"#.as_slice(),
+                br#"{"version":"1.0.11","scripts":{"build":"vite build"}}"#.as_slice(),
             ),
             ("frontend/package-lock.json", br#"{"lockfileVersion":3}"#.as_slice()),
             (
                 "apps/desktop/package.json",
-                br#"{"version":"1.0.12-SNAPSHOT","scripts":{"build":"tsc","package":"node package"}}"#.as_slice(),
+                br#"{"version":"1.0.11","scripts":{"build":"tsc","package":"node package"}}"#.as_slice(),
             ),
             (
                 "apps/desktop/package-lock.json",
@@ -1590,7 +1683,7 @@ mod tests {
             ("pom.xml", b"<project/>".as_slice()),
             (
                 "versions.json",
-                br#"{"schemaVersion":1,"productVersion":"1.0.12-SNAPSHOT","installerVersion":"0.1.0","minimumInstallerVersion":"0.1.0"}"#.as_slice(),
+                br#"{"schemaVersion":1,"productVersion":"1.0.11","installerVersion":"0.1.0","minimumInstallerVersion":"0.1.0"}"#.as_slice(),
             ),
             (
                 ".mvn/wrapper/maven-wrapper.properties",
@@ -1663,6 +1756,220 @@ mod tests {
         }
     }
 
+    fn advance_fixture_main(root: &Path) -> String {
+        let repository = Repository::open(root.join("remote")).unwrap();
+        fs::write(root.join("remote/main-marker.txt"), b"descendant").unwrap();
+        let mut index = repository.index().unwrap();
+        index.add_all(["."], IndexAddOption::DEFAULT, None).unwrap();
+        let tree_id = index.write_tree().unwrap();
+        let tree = repository.find_tree(tree_id).unwrap();
+        let signature = Signature::now("Harmonia test", "test@example.invalid").unwrap();
+        let parent = repository
+            .find_reference("refs/heads/main")
+            .unwrap()
+            .peel_to_commit()
+            .unwrap();
+        repository
+            .commit(
+                Some("refs/heads/main"),
+                &signature,
+                &signature,
+                "bootstrap fixture descendant",
+                &tree,
+                &[&parent],
+            )
+            .unwrap()
+            .to_string()
+    }
+
+    #[derive(Clone)]
+    struct SeedManifestFetcher {
+        manifest: Vec<u8>,
+        signature: Vec<u8>,
+    }
+
+    impl ManifestFetcher for SeedManifestFetcher {
+        fn fetch(&self, url: &str) -> Result<Vec<u8>, ManifestError> {
+            if url.ends_with(".sig") {
+                Ok(self.signature.clone())
+            } else {
+                Ok(self.manifest.clone())
+            }
+        }
+    }
+
+    fn signed_seed_manifest(
+        target_commit: String,
+        jdk: crate::ToolchainDescriptor,
+        node: crate::ToolchainDescriptor,
+    ) -> (SeedManifestFetcher, ManifestVerifier) {
+        let manifest = RollingManifest {
+            schema_version: 1,
+            channel: "rolling".to_owned(),
+            generation: 1,
+            product_version: "1.0.11".to_owned(),
+            target_commit,
+            min_installer_version: Some("0.1.0".to_owned()),
+            jdk,
+            node,
+        };
+        let manifest_bytes = serde_json::to_vec(&manifest).unwrap();
+        let signing_key = SigningKey::from_bytes(&[7; 32]);
+        let signature = signing_key.sign(&manifest_bytes);
+        let signature_bytes = serde_json::to_vec(&ManifestSignature {
+            schema_version: 1,
+            key_id: "test".to_owned(),
+            signature_hex: signature
+                .to_bytes()
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect(),
+        })
+        .unwrap();
+        (
+            SeedManifestFetcher {
+                manifest: manifest_bytes,
+                signature: signature_bytes,
+            },
+            ManifestVerifier::with_keys(BTreeMap::from([(
+                "test".to_owned(),
+                signing_key.verifying_key().to_bytes(),
+            )])),
+        )
+    }
+
+    #[test]
+    fn release_seed_installs_exact_seed_commit_when_main_has_advanced() {
+        let root = tempdir().unwrap();
+        let fixture = fixture_definition(root.path());
+        let seed_commit = fixture.target.clone();
+        let descendant_commit = advance_fixture_main(root.path());
+        let paths = fixture.paths.clone();
+        let result = BootstrapInstaller::new(
+            paths.clone(),
+            fixture.downloader.clone(),
+            FixtureBuildRunner,
+            RecordingLauncher::default(),
+            None,
+        )
+        .install_with_descriptors_and_seed(
+            BootstrapOptions {
+                remote_url: fixture.remote_url.clone(),
+            },
+            fixture.jdk.clone(),
+            fixture.node.clone(),
+            &HealthyFixture,
+            Some(ReleaseSeed {
+                commit: seed_commit.clone(),
+                product_version: "1.0.11".to_owned(),
+            }),
+        )
+        .unwrap();
+
+        assert!(matches!(result.status, BootstrapStatus::Installed { .. }));
+        assert_eq!(result.target_commit.as_deref(), Some(seed_commit.as_str()));
+        assert_ne!(seed_commit, descendant_commit);
+        assert_eq!(
+            StateStore::new(paths)
+                .load_installation()
+                .unwrap()
+                .current_commit,
+            Some(seed_commit),
+        );
+    }
+
+    #[test]
+    fn release_seed_product_mismatch_fails_closed_before_activation() {
+        let root = tempdir().unwrap();
+        let fixture = fixture_definition(root.path());
+        let paths = fixture.paths.clone();
+        let result = BootstrapInstaller::new(
+            paths.clone(),
+            fixture.downloader,
+            FixtureBuildRunner,
+            RecordingLauncher::default(),
+            None,
+        )
+        .install_with_descriptors_and_seed(
+            BootstrapOptions {
+                remote_url: fixture.remote_url,
+            },
+            fixture.jdk,
+            fixture.node,
+            &HealthyFixture,
+            Some(ReleaseSeed {
+                commit: fixture.target,
+                product_version: "1.0.12".to_owned(),
+            }),
+        )
+        .unwrap();
+
+        assert!(matches!(
+            result.status,
+            BootstrapStatus::BuildFailed { reason }
+                if reason.contains("canonical application version mismatch")
+        ));
+        assert!(StateStore::new(paths)
+            .load_installation()
+            .unwrap()
+            .current_commit
+            .is_none());
+    }
+
+    #[test]
+    fn rolling_update_to_seed_descendant_works_after_seed_install() {
+        let root = tempdir().unwrap();
+        let fixture = fixture_definition(root.path());
+        let seed_commit = fixture.target.clone();
+        let descendant_commit = advance_fixture_main(root.path());
+        let paths = fixture.paths.clone();
+        BootstrapInstaller::new(
+            paths.clone(),
+            fixture.downloader.clone(),
+            FixtureBuildRunner,
+            RecordingLauncher::default(),
+            None,
+        )
+        .install_with_descriptors_and_seed(
+            BootstrapOptions {
+                remote_url: fixture.remote_url.clone(),
+            },
+            fixture.jdk.clone(),
+            fixture.node.clone(),
+            &HealthyFixture,
+            Some(ReleaseSeed {
+                commit: seed_commit.clone(),
+                product_version: "1.0.11".to_owned(),
+            }),
+        )
+        .unwrap();
+
+        let (fetcher, verifier) =
+            signed_seed_manifest(descendant_commit.clone(), fixture.jdk, fixture.node);
+        let mut hooks = NoopActivationHooks;
+        let result = UpdateEngine::new(paths.clone(), fixture.downloader, FixtureBuildRunner, None)
+            .update_with_sources_for_test(
+                &fetcher,
+                &verifier,
+                "https://fixture.invalid/manifest.json",
+                "https://fixture.invalid/manifest.json.sig",
+                &fixture.remote_url,
+                &mut hooks,
+                &HealthyFixture,
+                &RecordingLauncher::default(),
+            )
+            .unwrap();
+
+        assert!(matches!(result.status, UpdateStatus::Updated { .. }));
+        assert_eq!(
+            StateStore::new(paths)
+                .load_installation()
+                .unwrap()
+                .current_commit,
+            Some(descendant_commit),
+        );
+    }
+
     #[test]
     fn controlled_local_git_fixture_completes_fresh_install_and_handoff() {
         let root = tempdir().unwrap();
@@ -1677,18 +1984,18 @@ mod tests {
         for (relative, contents) in [
             (
                 "frontend/package.json",
-                br#"{"version":"1.0.12-SNAPSHOT","scripts":{"build":"vite build"}}"#.as_slice(),
+                br#"{"version":"1.0.11","scripts":{"build":"vite build"}}"#.as_slice(),
             ),
             ("frontend/package-lock.json", br#"{"lockfileVersion":3}"#.as_slice()),
             (
                 "apps/desktop/package.json",
-                br#"{"version":"1.0.12-SNAPSHOT","scripts":{"build":"tsc","package":"node package"}}"#.as_slice(),
+                br#"{"version":"1.0.11","scripts":{"build":"tsc","package":"node package"}}"#.as_slice(),
             ),
             ("apps/desktop/package-lock.json", br#"{"lockfileVersion":3}"#.as_slice()),
             ("pom.xml", b"<project/>".as_slice()),
             (
                 "versions.json",
-                br#"{"schemaVersion":1,"productVersion":"1.0.12-SNAPSHOT","installerVersion":"0.1.0","minimumInstallerVersion":"0.1.0"}"#.as_slice(),
+                br#"{"schemaVersion":1,"productVersion":"1.0.11","installerVersion":"0.1.0","minimumInstallerVersion":"0.1.0"}"#.as_slice(),
             ),
             (
                 ".mvn/wrapper/maven-wrapper.properties",

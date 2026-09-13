@@ -273,7 +273,7 @@ impl<D: DownloadClient, P: ProcessRunner> UpdateEngine<D, P> {
 
     #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
-    fn update_with_sources_for_test<
+    pub(crate) fn update_with_sources_for_test<
         F: ManifestFetcher,
         H: HealthChecker,
         A: ActivationHooks,

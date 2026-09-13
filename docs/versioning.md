@@ -71,6 +71,12 @@ Every tagged release also publishes `release-metadata.json`:
 This records which installer engine was shipped with the product release without exposing any
 secrets.
 
+The release workflow also embeds the exact tag commit and stable product version into the
+installer at compile time. A fresh install from that tagged installer builds only that immutable
+seed commit and fails closed if its `versions.json` product version differs. These values are not
+runtime CLI or environment overrides; after the seed is installed, normal signed rolling updates
+continue to select later exact commits.
+
 ## Lifecycle examples
 
 Product release lifecycle:

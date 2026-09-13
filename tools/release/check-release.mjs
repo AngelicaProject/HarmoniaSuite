@@ -71,6 +71,12 @@ export function validateInstallerReleaseBump(current, previous, changed) {
   }
 }
 
+export function validateProductReleaseProgression(current, previous) {
+  if (compareSemVer(current, previous) <= 0) {
+    throw new Error(`productVersion ${current} is not greater than previous product release ${previous}`);
+  }
+}
+
 export async function validateRelease(root = SCRIPT_ROOT, tag, { checkPrevious = true } = {}) {
   const contract = await assertVersions(root);
   validateReleaseTag(tag, contract);
@@ -81,6 +87,7 @@ export async function validateRelease(root = SCRIPT_ROOT, tag, { checkPrevious =
   if (checkPrevious) {
     const previous = previousProductTag(root, tag);
     if (previous) {
+      validateProductReleaseProgression(contract.productVersion, previous.contract.productVersion);
       validateInstallerReleaseBump(
         contract.installerVersion,
         previous.contract.installerVersion,

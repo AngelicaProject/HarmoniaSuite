@@ -11,8 +11,10 @@ import {
   checkVersions,
   compareSemVer,
 } from "./check-versions.mjs";
+import { setVersion } from "./set-version.mjs";
 import {
   validateInstallerReleaseBump,
+  validateProductReleaseProgression,
   validateReleaseTag,
 } from "../release/check-release.mjs";
 
@@ -94,6 +96,18 @@ test("changed installer source requires a higher engine version", () => {
   assert.doesNotThrow(() => validateInstallerReleaseBump("0.1.0", "0.1.0", false));
 });
 
+test("product releases must progress beyond the previous product release", () => {
+  for (const current of ["1.0.12", "1.1.0", "2.0.0"]) {
+    assert.doesNotThrow(() => validateProductReleaseProgression(current, "1.0.11"));
+  }
+  for (const current of ["1.0.11", "1.0.10"]) {
+    assert.throws(
+      () => validateProductReleaseProgression(current, "1.0.11"),
+      /not greater/,
+    );
+  }
+});
+
 test("version setters update only their contract domain", async () => {
   const root = await fixture();
   const script = join(repo, "tools/version/set-version.mjs");
@@ -121,6 +135,39 @@ test("lockfile package metadata is optional when absent", async () => {
     root,
   ], { cwd: repo });
   assert.equal((await assertVersions(root)).productVersion, "1.0.13-SNAPSHOT");
+});
+
+test("version transactions roll back every domain after injected failures", async () => {
+  const files = [
+    "versions.json",
+    "pom.xml",
+    "frontend/package.json",
+    "frontend/package-lock.json",
+    "apps/desktop/package.json",
+    "apps/desktop/package-lock.json",
+    "apps/installer/Cargo.toml",
+    "apps/installer/Cargo.lock",
+  ];
+  const cases = [
+    { kind: "product", version: "1.0.13-SNAPSHOT", failAfterReplacement: 0 },
+    { kind: "product", version: "1.0.13-SNAPSHOT", failAfterReplacement: 3 },
+    { kind: "installer", version: "0.2.0", failAfterReplacement: 1 },
+    { kind: "minimum-installer", version: "0.1.0", failAfterReplacement: 0 },
+    { kind: "minimum-installer", version: "0.1.0", failAfterReplacement: 1 },
+  ];
+  for (const transactionCase of cases) {
+    const root = await fixture();
+    const before = new Map(
+      await Promise.all(files.map(async (file) => [file, await readFile(join(root, file), "utf8")])),
+    );
+    await assert.rejects(
+      () => setVersion(root, transactionCase.kind, transactionCase.version, transactionCase),
+      /injected version transaction failure/,
+    );
+    for (const file of files) assert.equal(await readFile(join(root, file), "utf8"), before.get(file));
+    await setVersion(root, transactionCase.kind, transactionCase.version);
+    await assertVersions(root);
+  }
 });
 
 test("release metadata records product, engine, and exact commit", async () => {
