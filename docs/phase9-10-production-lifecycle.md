@@ -42,8 +42,10 @@ uses an exact green commit from `main`, a monotonic immutable generation history
 updated last at `angelicaproject.github.io/HarmoniaSuite/rolling/{windows,linux}`. Each candidate
 must remain in `main` history and be equal to or a descendant of the latest published target;
 late ancestor completions are no-ops, so the alias never moves backward. Update identity
-is the exact commit object ID plus generation; the display product version is only a snapshot
-label. Portable ZIP/MSI and macOS artifacts are intentionally out of scope.
+is the exact commit object ID plus generation. `productVersion` is the canonical Maven
+`project.version` from that exact checkout; it is not a generated generation/SHA display label.
+The installer engine version is the Cargo package version and is used independently for
+`minInstallerVersion`. Portable ZIP/MSI and macOS artifacts are intentionally out of scope.
 
 The Electron desktop payload is the product runtime. An XivExdUnpacker is not required by this
 architecture and is deliberately unsupported; introducing one would require a separately reviewed

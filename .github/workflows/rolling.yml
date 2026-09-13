@@ -33,6 +33,30 @@ jobs:
           candidate="${{ github.event.workflow_run.head_sha }}"
           git cat-file -e "$candidate^{commit}"
           git merge-base --is-ancestor "$candidate" origin/main
+      - uses: dtolnay/rust-toolchain@1.89.0
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: frontend/.node-version
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Resolve canonical application and installer versions
+        id: versions
+        shell: bash
+        run: |
+          set -euo pipefail
+          application_version="$(./mvnw -B -q help:evaluate -Dexpression=project.version -DforceStdout | tr -d '\r')"
+          [[ "$(printf '%s\n' "$application_version" | wc -l)" -eq 1 ]]
+          [[ "$application_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]
+          metadata="$RUNNER_TEMP/harmonia-cargo-metadata.json"
+          cargo metadata --manifest-path apps/installer/Cargo.toml --no-deps --format-version 1 > "$metadata"
+          installer_version="$(node -e 'const fs=require("node:fs"); const d=JSON.parse(fs.readFileSync(process.argv[1], "utf8")); const p=d.packages.find((x)=>x.name==="harmonia-installer"); if (!p) process.exit(1); process.stdout.write(p.version);' "$metadata")"
+          [[ "$installer_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]
+          echo "application_version=$application_version" >> "$GITHUB_OUTPUT"
+          echo "installer_version=$installer_version" >> "$GITHUB_OUTPUT"
       - name: Prepare rolling history checkout
         shell: bash
         env:
@@ -84,9 +108,8 @@ jobs:
           printf '%s\n' "$MANIFEST_KEY" > "$key"
           trap 'rm -f "$key"' EXIT
           sha="${{ github.event.workflow_run.head_sha }}"
-          version="0.2.0-main.${{ steps.generation.outputs.generation }}+${sha:0:8}"
           for platform in linux windows; do
-            node tools/release/create-manifest.mjs --platform "$platform" --target-commit "$sha" --product-version "$version" --min-installer-version 0.1.0 --generation "${{ steps.generation.outputs.generation }}" --out "$RUNNER_TEMP/manifest-$platform.json"
+            node tools/release/create-manifest.mjs --platform "$platform" --target-commit "$sha" --product-version "${{ steps.versions.outputs.application_version }}" --min-installer-version "${{ steps.versions.outputs.installer_version }}" --generation "${{ steps.generation.outputs.generation }}" --out "$RUNNER_TEMP/manifest-$platform.json"
             HARMONIA_MANIFEST_SIGNING_KEY_FILE="$key" node tools/release/sign-manifest.mjs "$RUNNER_TEMP/manifest-$platform.json" "$RUNNER_TEMP/manifest-$platform.json.sig" primary-2026
             cargo run --quiet --manifest-path apps/installer/Cargo.toml --bin harmonia-manifest-verify -- "$platform" "$RUNNER_TEMP/manifest-$platform.json" "$RUNNER_TEMP/manifest-$platform.json.sig"
           done

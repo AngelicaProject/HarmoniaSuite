@@ -27,13 +27,18 @@ jobs:
       - name: Verify exact release commit
         shell: bash
         run: test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+      - uses: dtolnay/rust-toolchain@1.89.0
       - uses: actions/setup-node@v4
         with:
-          node-version: 24.15.0
+          node-version-file: frontend/.node-version
           cache: npm
           cache-dependency-path: |
             frontend/package-lock.json
             apps/desktop/package-lock.json
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
       - name: Verify frontend
         run: npm ci
         working-directory: frontend

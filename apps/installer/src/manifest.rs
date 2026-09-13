@@ -308,8 +308,10 @@ fn decode_hex<const N: usize>(value: &str) -> Option<[u8; N]> {
         return None;
     }
     let mut bytes = [0u8; N];
-    for (index, pair) in value.as_bytes().chunks_exact(2).enumerate() {
-        bytes[index] = (hex_nibble(pair[0])? << 4) | hex_nibble(pair[1])?;
+    for (index, byte) in bytes.iter_mut().enumerate() {
+        let offset = index * 2;
+        *byte = (hex_nibble(value.as_bytes()[offset])? << 4)
+            | hex_nibble(value.as_bytes()[offset + 1])?;
     }
     Some(bytes)
 }
@@ -534,7 +536,7 @@ mod tests {
                     "--target-commit",
                     target,
                     "--product-version",
-                    "0.2.0-main.1+01234567",
+                    "1.0.11-SNAPSHOT",
                     "--min-installer-version",
                     "0.1.0",
                     "--generation",

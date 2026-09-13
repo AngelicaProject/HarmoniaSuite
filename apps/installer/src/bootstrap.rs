@@ -601,9 +601,10 @@ enum BootstrapJournalStatus {
     Failed,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "PascalCase")]
 enum BootstrapJournalPhase {
+    #[default]
     Recovering,
     Detecting,
     Building,
@@ -611,12 +612,6 @@ enum BootstrapJournalPhase {
     Launching,
     Completed,
     Failed,
-}
-
-impl Default for BootstrapJournalPhase {
-    fn default() -> Self {
-        Self::Recovering
-    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

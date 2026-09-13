@@ -72,6 +72,8 @@ struct RepairJournal {
     target_commit: String,
     quarantine: PathBuf,
     phase: RepairJournalPhase,
+    #[serde(default)]
+    activation_transaction_id: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -84,7 +86,9 @@ struct ActivationOperationScope<'a> {
 #[serde(rename_all = "PascalCase")]
 enum RepairJournalPhase {
     Quarantined,
+    ActivationStarted,
     ActivationCompleted,
+    ReviewRequired,
 }
 
 #[derive(Clone, Debug)]
@@ -370,6 +374,19 @@ impl ActivationEngine {
         if let Some(operation_id) = operation_scope.external_operation_id {
             transaction.set_external_operation_id(operation_id)?;
         }
+        if let Some(operation_id) = operation_scope.active_repair_operation_id {
+            if operation_scope.external_operation_id != Some(operation_id) {
+                transaction.set_external_operation_id(operation_id)?;
+            }
+            if let Err(error) = self.link_repair_transaction(operation_id, &transaction.record().id)
+            {
+                let reason = format!(
+                    "failed to correlate repair journal with activation transaction: {error}"
+                );
+                let _ = transaction.mark_review_required(reason.clone());
+                return Err(ActivationError::ReviewRequired(reason));
+            }
+        }
         transaction.set_pre_activation_state(installation.clone())?;
         transaction.set_workspace_path(workspace)?;
         transaction.set_database_path(database_path)?;
@@ -532,6 +549,7 @@ impl ActivationEngine {
                 target_commit: current.clone(),
                 quarantine: quarantine.clone(),
                 phase: RepairJournalPhase::Quarantined,
+                activation_transaction_id: None,
             };
             crate::state::atomic_write_json(&self.paths.repair_operation_path(), &journal)?;
             Some(journal)
@@ -548,7 +566,9 @@ impl ActivationEngine {
             checker,
             lock,
             ActivationOperationScope {
-                external_operation_id: None,
+                external_operation_id: repair_journal
+                    .as_ref()
+                    .map(|journal| journal.operation_id.as_str()),
                 active_repair_operation_id: repair_journal
                     .as_ref()
                     .map(|journal| journal.operation_id.as_str()),
@@ -557,14 +577,16 @@ impl ActivationEngine {
         match result {
             Ok(runtime) => {
                 if let Some(repair_journal) = repair_journal.as_ref() {
-                    let completed_journal = RepairJournal {
-                        phase: RepairJournalPhase::ActivationCompleted,
-                        ..repair_journal.clone()
-                    };
-                    crate::state::atomic_write_json(
-                        &self.paths.repair_operation_path(),
-                        &completed_journal,
-                    )?;
+                    let journal_path = self.paths.repair_operation_path();
+                    let mut completed_journal: RepairJournal =
+                        serde_json::from_slice(&fs::read(&journal_path)?)?;
+                    if completed_journal.operation_id != repair_journal.operation_id {
+                        return Err(ActivationError::ReviewRequired(
+                            "repair journal operation identity changed after activation".to_owned(),
+                        ));
+                    }
+                    completed_journal.phase = RepairJournalPhase::ActivationCompleted;
+                    crate::state::atomic_write_json(&journal_path, &completed_journal)?;
                 }
                 if quarantine.exists() {
                     fs::remove_dir_all(&quarantine)?;
@@ -575,6 +597,17 @@ impl ActivationEngine {
                 Ok(runtime)
             }
             Err(error) => {
+                let transaction = StateStore::new(self.paths.clone()).load_transaction()?;
+                if transaction.as_ref().is_some_and(|record| {
+                    record.external_operation_id.as_deref()
+                        == repair_journal
+                            .as_ref()
+                            .map(|journal| journal.operation_id.as_str())
+                        && record.current_switched
+                        && record.status == TransactionStatus::ReviewRequired
+                }) {
+                    return Err(error);
+                }
                 let restore = (|| -> Result<(), ActivationError> {
                     let replacement = self.paths.versions_dir().join(&current);
                     if replacement.exists() {
@@ -933,7 +966,7 @@ impl ActivationEngine {
         active_repair_operation_id: Option<&str>,
     ) -> Result<(), ActivationError> {
         let store = StateStore::new(self.paths.clone());
-        self.recover_repair_journal(&store, active_repair_operation_id)?;
+        self.recover_repair_journal(&store, active_repair_operation_id, config, checker)?;
         let Some(record) = store.load_transaction()? else {
             return Ok(());
         };
@@ -1024,6 +1057,8 @@ impl ActivationEngine {
         &self,
         store: &StateStore,
         active_operation_id: Option<&str>,
+        config: &ActivationConfig,
+        checker: &impl HealthChecker,
     ) -> Result<(), ActivationError> {
         let path = self.paths.repair_operation_path();
         if !path.is_file() {
@@ -1047,41 +1082,333 @@ impl ActivationEngine {
         validate_activation_path(&self.paths.versions_dir(), &final_dir)?;
         let installation = store.load_installation()?;
         let transaction = store.load_transaction()?;
-        let completed = installation.current_commit.as_deref() == Some(&journal.target_commit)
-            && transaction.as_ref().is_some_and(|record| {
-                record.target_commit.as_deref() == Some(&journal.target_commit)
-                    && record.current_switched
-                    && record.health_check_passed
-                    && record.status == TransactionStatus::Completed
-            })
-            && self.resolve_current()?.is_some();
-        if completed {
-            if journal.quarantine.exists() {
-                fs::remove_dir_all(&journal.quarantine)?;
-            }
-            remove_repair_journal(&self.paths)?;
-            return Ok(());
-        }
-        if !journal.quarantine.exists() {
-            if final_dir.exists()
-                && installation.current_commit.as_deref() == Some(&journal.target_commit)
+        let related = transaction.filter(|record| {
+            record.target_commit.as_deref() == Some(&journal.target_commit)
+                && record.external_operation_id.as_deref() == Some(journal.operation_id.as_str())
+                && journal
+                    .activation_transaction_id
+                    .as_deref()
+                    .is_none_or(|id| id == record.id)
+        });
+
+        let Some(mut transaction) =
+            related.map(|record| Transaction::resume_existing(store.clone(), record))
+        else {
+            if matches!(journal.phase, RepairJournalPhase::Quarantined)
+                && !final_dir.exists()
+                && journal.quarantine.exists()
             {
+                fs::rename(&journal.quarantine, &final_dir)?;
                 remove_repair_journal(&self.paths)?;
                 return Ok(());
             }
             return Err(ActivationError::ReviewRequired(
-                "repair journal has no quarantined original version".to_owned(),
+                "repair journal has no matching activation transaction".to_owned(),
+            ));
+        };
+
+        if transaction.record().status == TransactionStatus::ReviewRequired {
+            return Err(ActivationError::ReviewRequired(
+                transaction
+                    .record()
+                    .failure
+                    .clone()
+                    .unwrap_or_else(|| "repair activation requires review".to_owned()),
             ));
         }
-        if final_dir.exists() {
-            fs::remove_dir_all(&final_dir)?;
+
+        if transaction.record().status == TransactionStatus::Completed {
+            return self.finish_recovered_repair(&mut transaction, &journal, &installation);
         }
-        fs::rename(&journal.quarantine, &final_dir)?;
-        if installation.current_commit.as_deref() != Some(&journal.target_commit) {
-            remove_repair_journal(&self.paths)?;
+
+        if !transaction.record().activation_started || !transaction.record().current_switched {
+            if !journal.quarantine.exists() {
+                return Err(self.require_repair_review(
+                    &mut transaction,
+                    &journal,
+                    "repair quarantine is missing before activation boundary".to_owned(),
+                ));
+            }
+            if let Err(error) = transaction.cleanup_owned_paths() {
+                return Err(self.require_repair_review(
+                    &mut transaction,
+                    &journal,
+                    format!("repair pre-activation cleanup failed: {error}"),
+                ));
+            }
+            if let Err(error) = self.clear_pending_version(Some(&journal.target_commit)) {
+                return Err(self.require_repair_review(
+                    &mut transaction,
+                    &journal,
+                    format!("repair pending-state cleanup failed: {error}"),
+                ));
+            }
+            if journal.quarantine.exists() {
+                if final_dir.exists() {
+                    if let Err(error) = fs::remove_dir_all(&final_dir) {
+                        return Err(self.require_repair_review(
+                            &mut transaction,
+                            &journal,
+                            format!("repair replacement cleanup failed: {error}"),
+                        ));
+                    }
+                }
+                if let Err(error) = fs::rename(&journal.quarantine, &final_dir) {
+                    return Err(self.require_repair_review(
+                        &mut transaction,
+                        &journal,
+                        format!("repair quarantine restore failed: {error}"),
+                    ));
+                }
+            }
+            if let Err(error) =
+                transaction.fail("recovered interrupted repair before activation boundary")
+            {
+                return Err(self.require_repair_review(
+                    &mut transaction,
+                    &journal,
+                    format!("repair transaction finalization failed: {error}"),
+                ));
+            }
+            if let Err(error) = remove_repair_journal(&self.paths) {
+                return Err(self.require_repair_review(
+                    &mut transaction,
+                    &journal,
+                    format!("repair journal cleanup failed: {error}"),
+                ));
+            }
             return Ok(());
         }
-        remove_repair_journal(&self.paths)?;
+
+        let runtime = match self.resolve_version(&journal.target_commit) {
+            Ok(runtime) => runtime,
+            Err(error) => {
+                return Err(self.require_repair_review(
+                    &mut transaction,
+                    &journal,
+                    format!("repair replacement failed verification during recovery: {error}"),
+                ));
+            }
+        };
+        if installation.current_commit.as_deref() != Some(&journal.target_commit) {
+            return Err(self.require_repair_review(
+                &mut transaction,
+                &journal,
+                "repair activation transaction crossed the boundary but current does not match target"
+                    .to_owned(),
+            ));
+        }
+
+        if transaction.record().phase == TransactionPhase::RollingBack {
+            return Err(self.require_repair_review(
+                &mut transaction,
+                &journal,
+                "repair recovery found an interrupted rollback after current switch".to_owned(),
+            ));
+        }
+        if transaction.record().phase == TransactionPhase::Activating {
+            transaction.transition(TransactionPhase::HealthChecking)?;
+        }
+
+        if !transaction.record().health_check_passed {
+            let mut health_config = self.recovery_config(config, transaction.record())?;
+            health_config.java_binary = runtime.java_binary.clone();
+            if let Err(error) =
+                checker.check(&runtime.version_dir, &runtime.metadata, &health_config)
+            {
+                let database_error = self
+                    .restore_database_pre_state(&transaction, &health_config)
+                    .err();
+                let reason = match database_error {
+                    Some(database_error) => format!(
+                        "repair replacement health check failed: {error}; database restore failed: {database_error}"
+                    ),
+                    None => format!(
+                        "repair replacement health check failed; corrupted quarantine is not a rollback target: {error}"
+                    ),
+                };
+                return Err(self.require_repair_review(&mut transaction, &journal, reason));
+            }
+            transaction.mark_health_check_passed()?;
+        }
+
+        if let Err(error) = self.clear_pending_version(Some(&journal.target_commit)) {
+            return Err(self.require_repair_review(
+                &mut transaction,
+                &journal,
+                format!("repair pending-state cleanup failed after health check: {error}"),
+            ));
+        }
+        if let Err(error) = transaction.complete() {
+            return Err(self.require_repair_review(
+                &mut transaction,
+                &journal,
+                format!("repair transaction completion failed: {error}"),
+            ));
+        }
+        let mut completed = journal.clone();
+        completed.phase = RepairJournalPhase::ActivationCompleted;
+        if let Err(error) =
+            crate::state::atomic_write_json(&self.paths.repair_operation_path(), &completed)
+        {
+            return Err(self.require_repair_review(
+                &mut transaction,
+                &journal,
+                format!("repair completion journal write failed: {error}"),
+            ));
+        }
+        if journal.quarantine.exists() {
+            if let Err(error) = fs::remove_dir_all(&journal.quarantine) {
+                return Err(self.require_repair_review(
+                    &mut transaction,
+                    &journal,
+                    format!("repair quarantine cleanup failed: {error}"),
+                ));
+            }
+        }
+        if let Err(error) = remove_repair_journal(&self.paths) {
+            return Err(self.require_repair_review(
+                &mut transaction,
+                &journal,
+                format!("repair journal cleanup failed: {error}"),
+            ));
+        }
+        Ok(())
+    }
+
+    fn link_repair_transaction(
+        &self,
+        operation_id: &str,
+        transaction_id: &str,
+    ) -> Result<(), ActivationError> {
+        let path = self.paths.repair_operation_path();
+        let mut journal: RepairJournal = serde_json::from_slice(&fs::read(&path)?)?;
+        if journal.operation_id != operation_id {
+            return Err(ActivationError::ReviewRequired(
+                "repair operation identity changed while activation was starting".to_owned(),
+            ));
+        }
+        journal.activation_transaction_id = Some(transaction_id.to_owned());
+        journal.phase = RepairJournalPhase::ActivationStarted;
+        crate::state::atomic_write_json(&path, &journal)?;
+        Ok(())
+    }
+
+    fn finish_recovered_repair(
+        &self,
+        transaction: &mut Transaction,
+        journal: &RepairJournal,
+        installation: &InstallationState,
+    ) -> Result<(), ActivationError> {
+        if !transaction.record().current_switched
+            || !transaction.record().health_check_passed
+            || installation.current_commit.as_deref() != Some(&journal.target_commit)
+            || self.resolve_version(&journal.target_commit).is_err()
+        {
+            return Err(self.require_repair_review(
+                transaction,
+                journal,
+                "completed repair transaction does not prove a verified replacement".to_owned(),
+            ));
+        }
+        let mut completed = journal.clone();
+        completed.phase = RepairJournalPhase::ActivationCompleted;
+        if let Err(error) =
+            crate::state::atomic_write_json(&self.paths.repair_operation_path(), &completed)
+        {
+            return Err(self.require_repair_review(
+                transaction,
+                journal,
+                format!("repair completion journal write failed: {error}"),
+            ));
+        }
+        if journal.quarantine.exists() {
+            if let Err(error) = fs::remove_dir_all(&journal.quarantine) {
+                return Err(self.require_repair_review(
+                    transaction,
+                    journal,
+                    format!("repair quarantine cleanup failed: {error}"),
+                ));
+            }
+        }
+        if let Err(error) = remove_repair_journal(&self.paths) {
+            return Err(self.require_repair_review(
+                transaction,
+                journal,
+                format!("repair journal cleanup failed: {error}"),
+            ));
+        }
+        Ok(())
+    }
+
+    fn require_repair_review(
+        &self,
+        transaction: &mut Transaction,
+        journal: &RepairJournal,
+        reason: String,
+    ) -> ActivationError {
+        let mut review_journal = journal.clone();
+        review_journal.phase = RepairJournalPhase::ReviewRequired;
+        let journal_error =
+            crate::state::atomic_write_json(&self.paths.repair_operation_path(), &review_journal)
+                .err()
+                .map(|error| error.to_string());
+        let transaction_error = transaction
+            .mark_review_required(reason.clone())
+            .err()
+            .map(|error| error.to_string());
+        let mut reason = reason;
+        if let Some(error) = journal_error {
+            reason.push_str(&format!(
+                "; repair journal review persistence failed: {error}"
+            ));
+        }
+        if let Some(error) = transaction_error {
+            reason.push_str(&format!("; transaction review persistence failed: {error}"));
+        }
+        ActivationError::ReviewRequired(reason)
+    }
+
+    fn recovery_config(
+        &self,
+        config: &ActivationConfig,
+        record: &crate::state::TransactionRecord,
+    ) -> Result<ActivationConfig, ActivationError> {
+        let mut recovery = config.clone();
+        if let Some(workspace) = record.workspace_path.clone() {
+            recovery.workspace =
+                validate_activation_path_value(&self.paths.user_data_root, &workspace)?;
+        }
+        if let Some(database_path) = record.database_path.clone() {
+            recovery.database_path =
+                validate_activation_path_value(&self.paths.user_data_root, &database_path)?;
+        }
+        Ok(recovery)
+    }
+
+    fn restore_database_pre_state(
+        &self,
+        transaction: &Transaction,
+        config: &ActivationConfig,
+    ) -> Result<(), ActivationError> {
+        let database_path = transaction
+            .record()
+            .database_path
+            .clone()
+            .unwrap_or_else(|| config.database_path.clone());
+        match transaction.record().database_pre_state.clone() {
+            Some(DatabasePreState::Snapshot(backup)) => {
+                DatabaseSnapshot::restore(&backup, &self.paths.user_data_root)?;
+            }
+            Some(DatabasePreState::Absent) => {
+                remove_database_files(&self.paths.user_data_root, &database_path)?;
+            }
+            None => {
+                if let Some(backup) = transaction.record().db_backup_path.clone() {
+                    DatabaseSnapshot::restore(&backup, &self.paths.user_data_root)?;
+                }
+            }
+        }
         Ok(())
     }
 
@@ -1840,11 +2167,20 @@ mod tests {
             target_commit: target,
             quarantine: quarantine.clone(),
             phase: RepairJournalPhase::Quarantined,
+            activation_transaction_id: None,
         };
         crate::state::atomic_write_json(&paths.repair_operation_path(), &journal).unwrap();
 
         ActivationEngine::new(paths.clone())
-            .recover_repair_journal(&store, Some("active-repair"))
+            .recover_repair_journal(
+                &store,
+                Some("active-repair"),
+                &fixture_config(&paths),
+                &FixtureHealthChecker {
+                    healthy: true,
+                    fail_commit: None,
+                },
+            )
             .unwrap();
         assert!(quarantine.is_dir());
         assert!(paths.repair_operation_path().is_file());
@@ -1868,11 +2204,20 @@ mod tests {
             target_commit: target.clone(),
             quarantine: quarantine.clone(),
             phase: RepairJournalPhase::Quarantined,
+            activation_transaction_id: None,
         };
         crate::state::atomic_write_json(&paths.repair_operation_path(), &journal).unwrap();
 
         ActivationEngine::new(paths.clone())
-            .recover_repair_journal(&store, None)
+            .recover_repair_journal(
+                &store,
+                None,
+                &fixture_config(&paths),
+                &FixtureHealthChecker {
+                    healthy: true,
+                    fail_commit: None,
+                },
+            )
             .unwrap();
         assert!(!quarantine.exists());
         assert_eq!(
@@ -2169,6 +2514,247 @@ mod tests {
                     "fixture backend is unhealthy".to_owned(),
                 ))
             }
+        }
+    }
+
+    #[derive(Clone, Copy)]
+    enum RepairRecoveryStage {
+        BeforeActivation,
+        SwitchedBeforeHealth,
+        HealthPassed,
+        Completed,
+    }
+
+    fn prepare_repair_recovery(
+        paths: &InstallationPaths,
+        stage: RepairRecoveryStage,
+        operation_id: &str,
+    ) -> (ActivationEngine, RepairJournal, String) {
+        let engine = ActivationEngine::new(paths.clone());
+        let (base_path, base) = fixture_result(paths, &"a".repeat(40), "repair-crash-base");
+        let mut hooks = NoopActivationHooks;
+        engine
+            .activate(
+                base_path,
+                &fixture_config(paths),
+                &mut hooks,
+                &FixtureHealthChecker {
+                    healthy: true,
+                    fail_commit: None,
+                },
+            )
+            .unwrap();
+        let final_dir = paths.versions_dir().join(&base.target_commit);
+        fs::write(
+            final_dir.join("backend/harmonia-suite.jar"),
+            b"corrupted-original",
+        )
+        .unwrap();
+        let quarantine = paths
+            .versions_dir()
+            .join(format!(".{}.repair-old-crash", base.target_commit));
+        fs::rename(&final_dir, &quarantine).unwrap();
+
+        let (_replacement_path, replacement) =
+            fixture_result(paths, &base.target_commit, "repair-crash-replacement");
+        let store = StateStore::new(paths.clone());
+        let mut transaction = Transaction::begin(
+            store.clone(),
+            OperationKind::Update,
+            Some(base.target_commit.clone()),
+            Some(base.target_commit.clone()),
+            Vec::new(),
+        )
+        .unwrap();
+        transaction.set_external_operation_id(operation_id).unwrap();
+        transaction
+            .set_pre_activation_state(store.load_installation().unwrap())
+            .unwrap();
+        transaction
+            .set_workspace_path(fixture_config(paths).workspace)
+            .unwrap();
+        transaction
+            .set_database_path(fixture_config(paths).database_path)
+            .unwrap();
+        transaction.transition(TransactionPhase::Staging).unwrap();
+        engine
+            .stage_version(
+                &replacement,
+                &paths.app_root.join(&replacement.checkout_dir),
+                &fixture_config(paths),
+                &mut transaction,
+            )
+            .unwrap();
+        transaction
+            .set_published_version(base.target_commit.clone())
+            .unwrap();
+        engine.set_pending_version(&base.target_commit).unwrap();
+
+        if !matches!(stage, RepairRecoveryStage::BeforeActivation) {
+            transaction
+                .transition(TransactionPhase::WaitingForShutdown)
+                .unwrap();
+            transaction
+                .transition(TransactionPhase::Activating)
+                .unwrap();
+            transaction.mark_current_switched().unwrap();
+        }
+        if matches!(
+            stage,
+            RepairRecoveryStage::HealthPassed | RepairRecoveryStage::Completed
+        ) {
+            transaction
+                .transition(TransactionPhase::HealthChecking)
+                .unwrap();
+            transaction.mark_process_started().unwrap();
+            transaction.mark_health_check_passed().unwrap();
+        }
+        if matches!(stage, RepairRecoveryStage::Completed) {
+            transaction.complete().unwrap();
+        }
+        let transaction_id = transaction.record().id.clone();
+        let journal = RepairJournal {
+            schema_version: REPAIR_JOURNAL_SCHEMA_VERSION,
+            operation_id: operation_id.to_owned(),
+            target_commit: base.target_commit,
+            quarantine,
+            phase: RepairJournalPhase::ActivationStarted,
+            activation_transaction_id: Some(transaction_id),
+        };
+        crate::state::atomic_write_json(&paths.repair_operation_path(), &journal).unwrap();
+        (engine, journal, replacement.target_commit)
+    }
+
+    #[test]
+    fn repair_crash_before_activation_restores_corrupted_original_and_cleans_journal() {
+        let root = tempdir().unwrap();
+        let paths = paths(root.path());
+        let (engine, journal, target) = prepare_repair_recovery(
+            &paths,
+            RepairRecoveryStage::BeforeActivation,
+            "repair-before-activation",
+        );
+        let store = StateStore::new(paths.clone());
+        engine
+            .recover_with_health_checker(
+                &fixture_config(&paths),
+                &FixtureHealthChecker {
+                    healthy: true,
+                    fail_commit: None,
+                },
+            )
+            .unwrap();
+        assert!(paths
+            .versions_dir()
+            .join(&target)
+            .join("metadata.json")
+            .is_file());
+        assert!(!journal.quarantine.exists());
+        assert!(!paths.repair_operation_path().exists());
+        assert_eq!(
+            store.load_transaction().unwrap().unwrap().status,
+            TransactionStatus::Failed
+        );
+        assert_eq!(
+            fs::read(
+                paths
+                    .versions_dir()
+                    .join(target)
+                    .join("backend/harmonia-suite.jar")
+            )
+            .unwrap(),
+            b"corrupted-original"
+        );
+    }
+
+    #[test]
+    fn repair_crash_after_switch_rechecks_replacement_health_and_completes() {
+        let root = tempdir().unwrap();
+        let paths = paths(root.path());
+        let (engine, journal, target) = prepare_repair_recovery(
+            &paths,
+            RepairRecoveryStage::SwitchedBeforeHealth,
+            "repair-after-switch",
+        );
+        let store = StateStore::new(paths.clone());
+        engine
+            .recover_with_health_checker(
+                &fixture_config(&paths),
+                &FixtureHealthChecker {
+                    healthy: true,
+                    fail_commit: None,
+                },
+            )
+            .unwrap();
+        assert!(engine.resolve_version(&target).is_ok());
+        assert!(!journal.quarantine.exists());
+        assert!(!paths.repair_operation_path().exists());
+        assert_eq!(
+            store.load_transaction().unwrap().unwrap().status,
+            TransactionStatus::Completed
+        );
+    }
+
+    #[test]
+    fn repair_crash_after_switch_health_failure_never_restores_corrupted_version() {
+        let root = tempdir().unwrap();
+        let paths = paths(root.path());
+        let (engine, journal, target) = prepare_repair_recovery(
+            &paths,
+            RepairRecoveryStage::SwitchedBeforeHealth,
+            "repair-health-failure",
+        );
+        let store = StateStore::new(paths.clone());
+        let error = engine
+            .recover_with_health_checker(
+                &fixture_config(&paths),
+                &FixtureHealthChecker {
+                    healthy: false,
+                    fail_commit: Some(target.clone()),
+                },
+            )
+            .unwrap_err();
+        assert!(matches!(error, ActivationError::ReviewRequired(_)));
+        assert_eq!(
+            store.load_transaction().unwrap().unwrap().status,
+            TransactionStatus::ReviewRequired
+        );
+        assert!(journal.quarantine.exists());
+        assert!(paths
+            .versions_dir()
+            .join(target)
+            .join("metadata.json")
+            .is_file());
+        assert!(paths.repair_operation_path().is_file());
+    }
+
+    #[test]
+    fn repair_crash_after_health_pass_or_transaction_complete_is_idempotent() {
+        for stage in [
+            RepairRecoveryStage::HealthPassed,
+            RepairRecoveryStage::Completed,
+        ] {
+            let root = tempdir().unwrap();
+            let paths = paths(root.path());
+            let (engine, journal, target) =
+                prepare_repair_recovery(&paths, stage, "repair-post-health");
+            let store = StateStore::new(paths.clone());
+            engine
+                .recover_with_health_checker(
+                    &fixture_config(&paths),
+                    &FixtureHealthChecker {
+                        healthy: true,
+                        fail_commit: None,
+                    },
+                )
+                .unwrap();
+            assert!(engine.resolve_version(&target).is_ok());
+            assert!(!journal.quarantine.exists());
+            assert!(!paths.repair_operation_path().exists());
+            assert_eq!(
+                store.load_transaction().unwrap().unwrap().status,
+                TransactionStatus::Completed
+            );
         }
     }
 

@@ -26,6 +26,12 @@ ancestor completions as no-ops. It persists SHA-to-generation mapping under
 `rolling/generations`, invokes the Rust production verifier, and updates stable aliases last. A
 rerun for the same SHA is idempotent; a generation collision with different bytes is fatal.
 
+The rolling manifest keeps three version identities separate: `productVersion` is the Maven
+`project.version` read from the exact candidate checkout, `targetCommit` plus `generation` is the
+rolling publication identity, and `minInstallerVersion` is derived from the installer Cargo
+package version unless a separately reviewed compatibility floor is introduced. Generation and
+commit values are never embedded into the canonical application version.
+
 The updater uses only the compiled platform-specific HTTPS Pages endpoint and the signed
 `channel: rolling` contract. It does not use GitHub `releases/latest/download` as an application
 update source. The installer has no XivExdUnpacker dependency: Electron's verified runnable
