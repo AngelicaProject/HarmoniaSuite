@@ -56,6 +56,41 @@ pub fn remove(paths: &InstallationPaths) -> Result<(), IntegrationError> {
     Ok(())
 }
 
+/// Checks the durable integration surface without modifying it. Repair uses this alongside
+/// immutable version validation so a missing shortcut, desktop file, or icon is observable as
+/// degraded installation state rather than silently reported as healthy.
+pub fn is_complete(paths: &InstallationPaths) -> bool {
+    match paths.platform {
+        Platform::Linux => {
+            paths.linux_desktop_entry_path().is_file() && paths.linux_icon_path().is_file()
+        }
+        Platform::Windows => {
+            paths.windows_start_menu_shortcut_path().is_file() && windows_registry_complete(paths)
+        }
+    }
+}
+
+#[cfg(windows)]
+fn windows_registry_complete(paths: &InstallationPaths) -> bool {
+    use windows_sys::Win32::System::Registry::{
+        RegCloseKey, RegOpenKeyExW, HKEY_CURRENT_USER, KEY_READ,
+    };
+    let key = to_wide(paths.windows_uninstall_registry_key());
+    let mut handle = std::ptr::null_mut();
+    let result =
+        unsafe { RegOpenKeyExW(HKEY_CURRENT_USER, key.as_ptr(), 0, KEY_READ, &mut handle) };
+    if result != 0 {
+        return false;
+    }
+    unsafe { RegCloseKey(handle) };
+    true
+}
+
+#[cfg(not(windows))]
+fn windows_registry_complete(_paths: &InstallationPaths) -> bool {
+    true
+}
+
 fn install_linux(paths: &InstallationPaths) -> Result<(), IntegrationError> {
     let launcher = paths.stable_launcher_path();
     let icon = paths.linux_icon_path();
@@ -84,10 +119,10 @@ fn install_linux(paths: &InstallationPaths) -> Result<(), IntegrationError> {
             .ok_or_else(|| IntegrationError::InvalidPath(entry.clone()))?,
     )?;
     let content = format!(
-        "[Desktop Entry]\nType=Application\nName=HarmoniaSuite\nExec={} %U\nTryExec={}\nIcon={}\nCategories=AudioVideo;\nTerminal=false\n",
-        escape_desktop_field(&launcher.display().to_string()),
-        escape_desktop_field(&launcher.display().to_string()),
-        escape_desktop_field(&icon.display().to_string()),
+        "[Desktop Entry]\nType=Application\nName=HarmoniaSuite\nExec={}\nTryExec={}\nIcon={}\nCategories=AudioVideo;\nTerminal=false\n",
+        desktop_exec_path(&launcher.display().to_string()),
+        desktop_exec_path(&launcher.display().to_string()),
+        desktop_exec_path(&icon.display().to_string()),
     );
     crate::state::atomic_write_bytes(&entry, content.as_bytes())?;
     Ok(())
@@ -228,7 +263,7 @@ fn write_windows_shortcut(
 #[cfg(windows)]
 fn write_windows_registry(paths: &InstallationPaths) -> Result<(), IntegrationError> {
     use windows_sys::Win32::System::Registry::{
-        RegCloseKey, RegCreateKeyExW, RegSetValueExW, HKEY_CURRENT_USER, KEY_WRITE,
+        RegCloseKey, RegCreateKeyExW, RegSetValueExW, HKEY_CURRENT_USER, KEY_WRITE, REG_DWORD,
         REG_OPTION_NON_VOLATILE, REG_SZ,
     };
     let key = to_wide(paths.windows_uninstall_registry_key());
@@ -251,12 +286,19 @@ fn write_windows_registry(paths: &InstallationPaths) -> Result<(), IntegrationEr
     }
     let values = [
         ("DisplayName", "HarmoniaSuite".to_owned()),
+        ("DisplayVersion", crate::DEFAULT_PRODUCT_VERSION.to_owned()),
+        ("Publisher", "AngelicaProject".to_owned()),
+        ("InstallLocation", paths.app_root.display().to_string()),
         (
             "DisplayIcon",
             paths.stable_launcher_path().display().to_string(),
         ),
         (
             "UninstallString",
+            format!("\"{}\" uninstall", paths.installer_binary_path().display()),
+        ),
+        (
+            "QuietUninstallString",
             format!("\"{}\" uninstall", paths.installer_binary_path().display()),
         ),
     ];
@@ -279,6 +321,22 @@ fn write_windows_registry(paths: &InstallationPaths) -> Result<(), IntegrationEr
             }
             return Err(IntegrationError::Registry(result));
         }
+    }
+    let no_modify = to_wide("NoModify");
+    let no_modify_value: u32 = 1;
+    let result = unsafe {
+        RegSetValueExW(
+            handle,
+            no_modify.as_ptr(),
+            0,
+            REG_DWORD,
+            &no_modify_value as *const u32 as *const u8,
+            std::mem::size_of::<u32>() as u32,
+        )
+    };
+    if result != 0 {
+        unsafe { RegCloseKey(handle) };
+        return Err(IntegrationError::Registry(result));
     }
     unsafe {
         RegCloseKey(handle);
@@ -307,8 +365,8 @@ fn to_wide(value: impl AsRef<std::ffi::OsStr>) -> Vec<u16> {
         .collect()
 }
 
-fn escape_desktop_field(value: &str) -> String {
-    value.replace('\\', "\\\\").replace(' ', "\\ ")
+fn desktop_exec_path(value: &str) -> String {
+    format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
 #[cfg(test)]
@@ -337,9 +395,10 @@ mod tests {
         install(&paths, false).unwrap();
         let entry = fs::read_to_string(paths.linux_desktop_entry_path()).unwrap();
         assert!(entry.contains("Name=HarmoniaSuite"));
-        assert!(entry.contains(&escape_desktop_field(
+        assert!(entry.contains(&desktop_exec_path(
             &paths.stable_launcher_path().display().to_string(),
         )));
+        assert!(!entry.contains("%U"));
         assert!(paths.linux_icon_path().is_file());
         remove(&paths).unwrap();
         assert!(!paths.linux_desktop_entry_path().exists());

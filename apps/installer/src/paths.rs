@@ -203,17 +203,17 @@ impl InstallationPaths {
     }
 
     pub fn linux_desktop_entry_path(&self) -> PathBuf {
-        self.app_root
+        self.user_data_root
             .parent()
-            .unwrap_or(&self.app_root)
+            .unwrap_or(&self.user_data_root)
             .join("applications")
             .join("harmoniasuite.desktop")
     }
 
     pub fn linux_icon_path(&self) -> PathBuf {
-        self.app_root
+        self.user_data_root
             .parent()
-            .unwrap_or(&self.app_root)
+            .unwrap_or(&self.user_data_root)
             .join("icons")
             .join("hicolor")
             .join("scalable")
@@ -222,6 +222,12 @@ impl InstallationPaths {
     }
 
     pub fn windows_start_menu_shortcut_path(&self) -> PathBuf {
+        #[cfg(windows)]
+        if let Some(path) =
+            windows_known_folder_path(windows_sys::Win32::UI::Shell::FOLDERID_StartMenu)
+        {
+            return path.join("Programs").join("HarmoniaSuite.lnk");
+        }
         self.app_data_root()
             .join("Microsoft")
             .join("Windows")
@@ -231,6 +237,12 @@ impl InstallationPaths {
     }
 
     pub fn windows_desktop_shortcut_path(&self) -> PathBuf {
+        #[cfg(windows)]
+        if let Some(path) =
+            windows_known_folder_path(windows_sys::Win32::UI::Shell::FOLDERID_Desktop)
+        {
+            return path.join("HarmoniaSuite.lnk");
+        }
         self.home_root().join("Desktop").join("HarmoniaSuite.lnk")
     }
 
@@ -274,6 +286,10 @@ impl InstallationPaths {
         self.state_root.join("transaction.json")
     }
 
+    pub fn repair_operation_path(&self) -> PathBuf {
+        self.state_root.join("repair-operation.json")
+    }
+
     pub fn bootstrap_operation_path(&self) -> PathBuf {
         self.state_root.join("bootstrap-operation.json")
     }
@@ -308,13 +324,11 @@ impl InstallationPaths {
     }
 
     pub fn update_manifest_cache_path(&self) -> PathBuf {
-        self.cache_root.join("manifests").join("rolling-main.json")
+        self.cache_root.join("manifests").join("rolling.json")
     }
 
     pub fn update_manifest_signature_cache_path(&self) -> PathBuf {
-        self.cache_root
-            .join("manifests")
-            .join("rolling-main.json.sig")
+        self.cache_root.join("manifests").join("rolling.json.sig")
     }
 
     pub fn toolchain_state_path(&self) -> PathBuf {
@@ -369,6 +383,29 @@ impl InstallationPaths {
             .unwrap_or(&self.user_data_root)
             .to_path_buf()
     }
+}
+
+#[cfg(windows)]
+fn windows_known_folder_path(folder: &windows_sys::core::GUID) -> Option<PathBuf> {
+    use std::os::windows::ffi::OsStringExt;
+    use windows_sys::Win32::Foundation::S_OK;
+    use windows_sys::Win32::System::Com::CoTaskMemFree;
+    use windows_sys::Win32::UI::Shell::SHGetKnownFolderPath;
+
+    let mut raw = std::ptr::null_mut();
+    let result = unsafe { SHGetKnownFolderPath(folder, 0, std::ptr::null_mut(), &mut raw) };
+    if result != S_OK || raw.is_null() {
+        return None;
+    }
+    let mut length = 0;
+    while unsafe { *raw.add(length) } != 0 {
+        length += 1;
+    }
+    let value = PathBuf::from(std::ffi::OsString::from_wide(unsafe {
+        std::slice::from_raw_parts(raw, length)
+    }));
+    unsafe { CoTaskMemFree(raw as *mut _) };
+    Some(value)
 }
 
 fn configured_or_home(

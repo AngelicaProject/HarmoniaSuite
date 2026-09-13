@@ -93,11 +93,13 @@ fn main() -> ExitCode {
         if matches!(cli.command, Command::CheckUpdate) {
             let fetcher = HttpManifestFetcher::default();
             let verifier = ManifestVerifier::production();
+            let (manifest_url, signature_url) =
+                harmonia_installer::manifest::production_manifest_urls(paths.platform);
             return match updater.check_for_update(
                 &fetcher,
                 &verifier,
-                harmonia_installer::manifest::DEFAULT_MANIFEST_URL,
-                harmonia_installer::manifest::DEFAULT_MANIFEST_SIGNATURE_URL,
+                &manifest_url,
+                &signature_url,
             ) {
                 Ok(result) => report_update_result(cli.json, result),
                 Err(error) => report_error(cli.json, EXIT_INTERNAL, &error.to_string()),

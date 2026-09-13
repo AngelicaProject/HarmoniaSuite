@@ -115,6 +115,7 @@ jobs:
         working-directory: frontend
       - run: ./mvnw -B -q test
       - run: node --test tools/test-release-notes.mjs
+      - run: node --test tools/release/test-manifest.mjs
       - uses: codecov/codecov-action@v5
         with:
           use_oidc: true

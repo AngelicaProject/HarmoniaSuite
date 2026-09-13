@@ -17,7 +17,8 @@ Repair rebuilds the exact trusted current commit and never follows a moving bran
 first requests the current desktop session to stop, waits for the matching session to disappear,
 then removes only validated installer-owned roots. User data is preserved by default and can be
 removed only with the explicit `--remove-user-data` operation. If a durable review block exists,
-the operation fails closed.
+update/install/repair fail closed; uninstall may still remove known application roots after
+stopping the desktop, but ambiguous user-data removal remains blocked.
 
 The stable launcher is installed as `bin/HarmoniaSuite.exe` on Windows and
 `bin/harmonia-suite` on Linux. It resolves `current` through `ActivationEngine`, constructs the
@@ -33,9 +34,15 @@ and an application icon below the user's XDG data root. All integration files ar
 
 ## Release contract
 
-Release CI targets Windows x64 and Linux x64 only. It builds from an exact commit, runs the full
-Rust/desktop verification matrix, produces `HarmoniaSetup.exe`/`harmonia-setup` and the stable
-launchers, hashes every published artifact, and creates the signed manifest only after artifact
-publication inputs are complete. Missing signing credentials or failed signature verification are
-fatal; no unsigned manifest is published. Portable ZIP/MSI and macOS artifacts are intentionally
-out of scope.
+Release CI targets Windows x64 and Linux x64 only. Tagged releases publish only the installer and
+stable launcher distribution; they do not drive the rolling application target. Authenticode is
+optional and the published Windows metadata says whether binaries are signed. Ed25519 signing of
+rolling manifests is mandatory and fail-closed. The separate `workflow_run` rolling publication
+uses the exact green `main` commit, a monotonic immutable generation history, and stable aliases
+updated last at `angelicaproject.github.io/HarmoniaSuite/rolling/{windows,linux}`. Update identity
+is the exact commit object ID plus generation; the display product version is only a snapshot
+label. Portable ZIP/MSI and macOS artifacts are intentionally out of scope.
+
+The Electron desktop payload is the product runtime. An XivExdUnpacker is not required by this
+architecture and is deliberately unsupported; introducing one would require a separately reviewed
+source, digest, and format contract.

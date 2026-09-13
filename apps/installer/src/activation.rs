@@ -62,6 +62,23 @@ pub struct RuntimePaths {
     pub java_binary: PathBuf,
 }
 
+const REPAIR_JOURNAL_SCHEMA_VERSION: u32 = 1;
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct RepairJournal {
+    schema_version: u32,
+    target_commit: String,
+    quarantine: PathBuf,
+    phase: RepairJournalPhase,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "PascalCase")]
+enum RepairJournalPhase {
+    Quarantined,
+    ActivationCompleted,
+}
+
 #[derive(Clone, Debug)]
 pub struct ActivationConfig {
     pub java_binary: PathBuf,
@@ -478,6 +495,18 @@ impl ActivationEngine {
             .versions_dir()
             .join(format!(".{current}.repair-old-{}", Uuid::new_v4().simple()));
         validate_activation_path(&self.paths.versions_dir(), &quarantine)?;
+        let repair_journal = if final_dir.exists() {
+            let journal = RepairJournal {
+                schema_version: REPAIR_JOURNAL_SCHEMA_VERSION,
+                target_commit: current.clone(),
+                quarantine: quarantine.clone(),
+                phase: RepairJournalPhase::Quarantined,
+            };
+            crate::state::atomic_write_json(&self.paths.repair_operation_path(), &journal)?;
+            Some(journal)
+        } else {
+            None
+        };
         if final_dir.exists() {
             fs::rename(&final_dir, &quarantine)?;
         }
@@ -485,8 +514,21 @@ impl ActivationEngine {
             self.activate_with_lock_for_operation(result_path, config, hooks, checker, lock, None);
         match result {
             Ok(runtime) => {
+                if let Some(repair_journal) = repair_journal.as_ref() {
+                    let completed_journal = RepairJournal {
+                        phase: RepairJournalPhase::ActivationCompleted,
+                        ..repair_journal.clone()
+                    };
+                    crate::state::atomic_write_json(
+                        &self.paths.repair_operation_path(),
+                        &completed_journal,
+                    )?;
+                }
                 if quarantine.exists() {
                     fs::remove_dir_all(&quarantine)?;
+                }
+                if repair_journal.is_some() {
+                    remove_repair_journal(&self.paths)?;
                 }
                 Ok(runtime)
             }
@@ -506,6 +548,9 @@ impl ActivationEngine {
                     return Err(ActivationError::ReviewRequired(format!(
                         "repair failed and quarantined version could not be restored: {restore_error}; original: {error}"
                     )));
+                }
+                if repair_journal.is_some() {
+                    remove_repair_journal(&self.paths)?;
                 }
                 Err(error)
             }
@@ -845,6 +890,7 @@ impl ActivationEngine {
         checker: &H,
     ) -> Result<(), ActivationError> {
         let store = StateStore::new(self.paths.clone());
+        self.recover_repair_journal(&store)?;
         let Some(record) = store.load_transaction()? else {
             return Ok(());
         };
@@ -928,6 +974,62 @@ impl ActivationEngine {
             return Err(ActivationError::ReviewRequired(reason));
         }
         transaction.fail("recovered activation by rolling back to previous version")?;
+        Ok(())
+    }
+
+    fn recover_repair_journal(&self, store: &StateStore) -> Result<(), ActivationError> {
+        let path = self.paths.repair_operation_path();
+        if !path.is_file() {
+            return Ok(());
+        }
+        let journal: RepairJournal = serde_json::from_slice(&fs::read(&path)?)?;
+        if journal.schema_version != REPAIR_JOURNAL_SCHEMA_VERSION
+            || journal.target_commit.len() != 40
+        {
+            return Err(ActivationError::ReviewRequired(
+                "repair journal schema or target is invalid".to_owned(),
+            ));
+        }
+        validate_activation_path(&self.paths.versions_dir(), &journal.quarantine)?;
+        let final_dir = self.paths.versions_dir().join(&journal.target_commit);
+        validate_activation_path(&self.paths.versions_dir(), &final_dir)?;
+        let installation = store.load_installation()?;
+        let transaction = store.load_transaction()?;
+        let completed = installation.current_commit.as_deref() == Some(&journal.target_commit)
+            && transaction.as_ref().is_some_and(|record| {
+                record.target_commit.as_deref() == Some(&journal.target_commit)
+                    && record.current_switched
+                    && record.health_check_passed
+                    && record.status == TransactionStatus::Completed
+            })
+            && self.resolve_current()?.is_some();
+        if completed {
+            if journal.quarantine.exists() {
+                fs::remove_dir_all(&journal.quarantine)?;
+            }
+            remove_repair_journal(&self.paths)?;
+            return Ok(());
+        }
+        if !journal.quarantine.exists() {
+            if final_dir.exists()
+                && installation.current_commit.as_deref() == Some(&journal.target_commit)
+            {
+                remove_repair_journal(&self.paths)?;
+                return Ok(());
+            }
+            return Err(ActivationError::ReviewRequired(
+                "repair journal has no quarantined original version".to_owned(),
+            ));
+        }
+        if final_dir.exists() {
+            fs::remove_dir_all(&final_dir)?;
+        }
+        fs::rename(&journal.quarantine, &final_dir)?;
+        if installation.current_commit.as_deref() != Some(&journal.target_commit) {
+            remove_repair_journal(&self.paths)?;
+            return Ok(());
+        }
+        remove_repair_journal(&self.paths)?;
         Ok(())
     }
 
@@ -1051,6 +1153,71 @@ impl ActivationEngine {
         })
     }
 
+    /// Remove immutable version directories that are no longer part of the recoverable state.
+    /// Current, previous, and every target referenced by a running/review transaction are kept.
+    pub fn collect_old_versions_with_lock(
+        &self,
+        lock: &InstallationLock,
+    ) -> Result<Vec<PathBuf>, ActivationError> {
+        if lock.path() != self.paths.lock_path() {
+            return Err(ActivationError::InvalidInput(
+                "caller lock does not belong to this installation".to_owned(),
+            ));
+        }
+        let store = StateStore::new(self.paths.clone());
+        let installation = store.load_installation()?;
+        let mut protected = std::collections::BTreeSet::new();
+        protected.extend(
+            [installation.current_commit, installation.previous_commit]
+                .into_iter()
+                .flatten(),
+        );
+        if let Some(transaction) = store.load_transaction()? {
+            if matches!(
+                transaction.status,
+                TransactionStatus::Running | TransactionStatus::ReviewRequired
+            ) {
+                protected.extend(
+                    [transaction.target_commit, transaction.published_version]
+                        .into_iter()
+                        .flatten(),
+                );
+                if let Some(snapshot) = transaction.pre_activation_state {
+                    protected.extend(
+                        [snapshot.current_commit, snapshot.previous_commit]
+                            .into_iter()
+                            .flatten(),
+                    );
+                }
+            }
+        }
+        let mut removed = Vec::new();
+        if !self.paths.versions_dir().is_dir() {
+            return Ok(removed);
+        }
+        for entry in fs::read_dir(self.paths.versions_dir())? {
+            let entry = entry?;
+            let path = entry.path();
+            let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
+                continue;
+            };
+            if name.starts_with('.')
+                || name.len() != 40
+                || !name.bytes().all(|byte| byte.is_ascii_hexdigit())
+                || protected.contains(name)
+            {
+                continue;
+            }
+            if !path.is_dir() {
+                continue;
+            }
+            validate_activation_path(&self.paths.versions_dir(), &path)?;
+            fs::remove_dir_all(&path)?;
+            removed.push(path);
+        }
+        Ok(removed)
+    }
+
     fn version_complete(&self, version_dir: &Path, metadata: &VersionMetadata) -> bool {
         metadata.component_paths.values().all(|component| {
             if !safe_relative(&component.path) || !valid_hash(&component.sha256) {
@@ -1079,6 +1246,14 @@ impl ActivationEngine {
             && sha256_file(version_dir.join(&metadata.runtime.backend_jar))
                 .map(|hash| hash == metadata.backend_artifact_sha256)
                 .unwrap_or(false)
+    }
+}
+
+fn remove_repair_journal(paths: &InstallationPaths) -> Result<(), ActivationError> {
+    match fs::remove_file(paths.repair_operation_path()) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.into()),
     }
 }
 

@@ -130,7 +130,7 @@ impl InstallationState {
             product_version: None,
             current_commit: None,
             previous_commit: None,
-            channel: "rolling-main".to_owned(),
+            channel: "rolling".to_owned(),
             platform: paths.platform.as_str().to_owned(),
             arch: paths.architecture.as_str().to_owned(),
             components: BTreeMap::new(),

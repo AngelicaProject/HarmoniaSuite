@@ -1,0 +1,96 @@
+name: Publish rolling main manifests
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: rolling-main-publication
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout the exact green CI commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Reject stale workflow completion
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main --no-tags
+          test "$(git rev-parse HEAD)" = "${{ github.event.workflow_run.head_sha }}"
+          test "$(git rev-parse origin/main)" = "${{ github.event.workflow_run.head_sha }}"
+      - name: Prepare rolling history checkout
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if git ls-remote --exit-code origin refs/heads/gh-pages >/dev/null 2>&1; then
+            git clone --depth 1 --branch gh-pages "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" rolling-site
+          else
+            mkdir rolling-site
+            git -C rolling-site init
+            git -C rolling-site checkout --orphan gh-pages
+            git -C rolling-site remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+            git -C rolling-site config user.name github-actions[bot]
+            git -C rolling-site config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          fi
+      - name: Allocate durable generation
+        id: generation
+        shell: bash
+        run: |
+          set -euo pipefail
+          generation=$(node tools/release/publish-rolling.mjs allocate --root rolling-site --sha "${{ github.event.workflow_run.head_sha }}")
+          echo "generation=$generation" >> "$GITHUB_OUTPUT"
+      - name: Create and sign manifests
+        shell: bash
+        env:
+          MANIFEST_KEY: ${{ secrets.HARMONIA_MANIFEST_SIGNING_KEY_PEM }}
+          PUBLIC_KEY: ${{ secrets.HARMONIA_MANIFEST_PUBLIC_KEY_HEX }}
+        run: |
+          set -euo pipefail
+          test -n "$MANIFEST_KEY" || { echo "rolling Ed25519 signing key is not configured" >&2; exit 1; }
+          test "$PUBLIC_KEY" = "ee7809268d92d5a832ae8fb03f7d090123073a4833cb7f1f725babfe74ff192" || { echo "production public key secret does not match installer trust root" >&2; exit 1; }
+          key="$RUNNER_TEMP/harmonia-manifest-key.pem"
+          printf '%s\n' "$MANIFEST_KEY" > "$key"
+          trap 'rm -f "$key"' EXIT
+          sha="${{ github.event.workflow_run.head_sha }}"
+          version="0.2.0-main.${{ steps.generation.outputs.generation }}+${sha:0:8}"
+          for platform in linux windows; do
+            node tools/release/create-manifest.mjs --platform "$platform" --target-commit "$sha" --product-version "$version" --min-installer-version 0.1.0 --generation "${{ steps.generation.outputs.generation }}" --out "$RUNNER_TEMP/manifest-$platform.json"
+            HARMONIA_MANIFEST_SIGNING_KEY_FILE="$key" node tools/release/sign-manifest.mjs "$RUNNER_TEMP/manifest-$platform.json" "$RUNNER_TEMP/manifest-$platform.json.sig" primary-2026
+            cargo run --quiet --manifest-path apps/installer/Cargo.toml --bin harmonia-manifest-verify -- "$platform" "$RUNNER_TEMP/manifest-$platform.json" "$RUNNER_TEMP/manifest-$platform.json.sig"
+          done
+          node tools/release/publish-rolling.mjs publish --root rolling-site --sha "$sha" --generation "${{ steps.generation.outputs.generation }}" \
+            --linux-manifest "$RUNNER_TEMP/manifest-linux.json" --linux-signature "$RUNNER_TEMP/manifest-linux.json.sig" \
+            --windows-manifest "$RUNNER_TEMP/manifest-windows.json" --windows-signature "$RUNNER_TEMP/manifest-windows.json.sig"
+      - name: Publish immutable history and stable aliases
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git fetch origin main --no-tags
+          test "$(git rev-parse origin/main)" = "${{ github.event.workflow_run.head_sha }}"
+          git -C rolling-site config user.name github-actions[bot]
+          git -C rolling-site config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git -C rolling-site add rolling
+          if git -C rolling-site diff --cached --quiet; then
+            echo "rolling publication is idempotent; no changes"
+          else
+            git -C rolling-site commit -m "publish rolling generation ${{ steps.generation.outputs.generation }}"
+            git -C rolling-site push origin HEAD:gh-pages
+          fi

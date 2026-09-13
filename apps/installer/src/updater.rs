@@ -23,8 +23,8 @@ use crate::diagnostics::{DiagnosticError, DiagnosticLogger};
 use crate::download::DownloadClient;
 use crate::lock::{InstallationLock, LockError};
 use crate::manifest::{
-    HttpManifestFetcher, ManifestError, ManifestFetcher, ManifestVerifier, SignedManifest,
-    DEFAULT_MANIFEST_SIGNATURE_URL, DEFAULT_MANIFEST_URL,
+    production_manifest_urls, HttpManifestFetcher, ManifestError, ManifestFetcher,
+    ManifestVerifier, SignedManifest,
 };
 use crate::paths::InstallationPaths;
 use crate::process::ProcessRunner;
@@ -227,11 +227,12 @@ impl<D: DownloadClient, P: ProcessRunner> UpdateEngine<D, P> {
     ) -> Result<UpdateResult, UpdateError> {
         let fetcher = HttpManifestFetcher::default();
         let verifier = ManifestVerifier::production();
+        let (manifest_url, signature_url) = production_manifest_urls(self.paths.platform);
         self.update_with_sources(
             &fetcher,
             &verifier,
-            DEFAULT_MANIFEST_URL,
-            DEFAULT_MANIFEST_SIGNATURE_URL,
+            &manifest_url,
+            &signature_url,
             hooks,
             checker,
             launcher,
@@ -640,6 +641,7 @@ impl<D: DownloadClient, P: ProcessRunner> UpdateEngine<D, P> {
             );
         }
         journal.launch_handoff_completed = true;
+        let _ = activation.collect_old_versions_with_lock(lock);
         journal.status = UpdateJournalStatus::Completed;
         journal.phase = UpdateJournalPhase::Completed;
         finish_journal(&self.paths, &mut journal)?;

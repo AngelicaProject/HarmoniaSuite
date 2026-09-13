@@ -1065,6 +1065,7 @@ impl<D: DownloadClient, P: ProcessRunner, L: DetachedLauncher> BootstrapInstalle
         }
 
         journal.launch_handoff_completed = true;
+        let _ = activation.collect_old_versions_with_lock(&lock);
         let status = BootstrapStatus::Installed {
             commit: build.target_commit.clone(),
             product_version: build.product_version.clone(),

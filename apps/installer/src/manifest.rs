@@ -21,10 +21,18 @@ use crate::paths::{Platform, TargetArchitecture};
 use crate::toolchain::{ToolchainDescriptor, ToolchainError, ToolchainKind};
 
 pub const MANIFEST_SCHEMA_VERSION: u32 = 1;
-pub const DEFAULT_MANIFEST_URL: &str =
-    "https://github.com/AngelicaProject/HarmoniaSuite/releases/latest/download/harmonia-manifest.json";
-pub const DEFAULT_MANIFEST_SIGNATURE_URL: &str =
-    "https://github.com/AngelicaProject/HarmoniaSuite/releases/latest/download/harmonia-manifest.json.sig";
+pub const ROLLING_MANIFEST_BASE_URL: &str =
+    "https://angelicaproject.github.io/HarmoniaSuite/rolling";
+
+pub fn production_manifest_urls(platform: Platform) -> (String, String) {
+    let base = format!(
+        "{}/{}/manifest.json",
+        ROLLING_MANIFEST_BASE_URL,
+        platform.as_str()
+    );
+    let signature = format!("{}.sig", base);
+    (base, signature)
+}
 
 // Release infrastructure owns the corresponding private key outside this repository. Replacing
 // this trust root requires a reviewed installer release. The private key is never accepted from
@@ -34,6 +42,7 @@ const PRIMARY_PUBLIC_KEY_HEX: &str =
 const MAX_MANIFEST_BYTES: usize = 1024 * 1024;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RollingManifest {
     pub schema_version: u32,
     pub channel: String,
@@ -470,6 +479,22 @@ mod tests {
         value.min_installer_version = Some("0.1.0".to_owned());
         let document = serde_json::to_value(value).unwrap();
         assert_eq!(document["channel"], "rolling");
+    }
+
+    #[test]
+    fn production_urls_are_platform_specific_pages_endpoints() {
+        let (windows, windows_sig) = production_manifest_urls(Platform::Windows);
+        let (linux, linux_sig) = production_manifest_urls(Platform::Linux);
+        assert_eq!(
+            windows,
+            "https://angelicaproject.github.io/HarmoniaSuite/rolling/windows/manifest.json"
+        );
+        assert_eq!(
+            linux,
+            "https://angelicaproject.github.io/HarmoniaSuite/rolling/linux/manifest.json"
+        );
+        assert!(windows_sig.ends_with("/manifest.json.sig"));
+        assert!(linux_sig.ends_with("/manifest.json.sig"));
     }
 
     #[test]

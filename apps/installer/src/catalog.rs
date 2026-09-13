@@ -6,19 +6,22 @@
 
 use crate::paths::{Platform, TargetArchitecture};
 use crate::toolchain::{
-    ArchiveFormat, OfficialToolchainCatalog, ToolchainDescriptor, ToolchainError, ToolchainKind,
+    OfficialToolchainCatalog, ToolchainDescriptor, ToolchainError, ToolchainKind,
     TOOLCHAIN_CATALOG_SCHEMA_VERSION,
 };
+use serde::Deserialize;
 
 pub const PRODUCTION_CATALOG_SCHEMA_VERSION: u32 = TOOLCHAIN_CATALOG_SCHEMA_VERSION;
 pub const PRODUCTION_NODE_VERSION: &str = "24.15.0";
 pub const PRODUCTION_JDK_VERSION: &str = "21.0.12+8";
 
-const NODE_LINUX_SHA256: &str = "44836872d9aec49f1e6b52a9a922872db9a2b02d235a616a5681b6a85fec8d89";
-const NODE_WINDOWS_SHA256: &str =
-    "cc5149eabd53779ce1e7bdc5401643622d0c7e6800ade18928a767e940bb0e62";
-const JDK_LINUX_SHA256: &str = "e4446ff06a276155697597cc0f1b15da004ff083f4964a35271ecee567177370";
-const JDK_WINDOWS_SHA256: &str = "9ba963ee2371874a74185d18bc7bb2ab9407df7683300855ed7606e0662321d0";
+#[derive(Debug, Deserialize)]
+struct ProductionCatalogFile {
+    #[serde(rename = "schemaVersion")]
+    schema_version: u32,
+    descriptors:
+        std::collections::BTreeMap<String, std::collections::BTreeMap<String, ToolchainDescriptor>>,
+}
 
 pub fn production_catalog(
     platform: Platform,
@@ -33,60 +36,39 @@ pub fn production_catalog(
         });
     }
 
-    let (jdk, node) = match platform {
-        Platform::Linux => (
-            ToolchainDescriptor::new(
-                ToolchainKind::Jdk,
-                PRODUCTION_JDK_VERSION,
-                platform,
-                TargetArchitecture::X64,
-                "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.12%2B8/OpenJDK21U-jdk_x64_linux_hotspot_21.0.12_8.tar.gz",
-                JDK_LINUX_SHA256,
-                ArchiveFormat::TarGz,
-            )
-            .home_dir("jdk-21.0.12+8")
-            .executable("java", "jdk-21.0.12+8/bin/java"),
-            ToolchainDescriptor::new(
-                ToolchainKind::Node,
-                PRODUCTION_NODE_VERSION,
-                platform,
-                TargetArchitecture::X64,
-                "https://nodejs.org/download/release/v24.15.0/node-v24.15.0-linux-x64.tar.gz",
-                NODE_LINUX_SHA256,
-                ArchiveFormat::TarGz,
-            )
-            .home_dir("node-v24.15.0-linux-x64")
-            .executable("node", "node-v24.15.0-linux-x64/bin/node")
-            .executable("npm", "node-v24.15.0-linux-x64/bin/npm")
-            .executable("npx", "node-v24.15.0-linux-x64/bin/npx"),
-        ),
-        Platform::Windows => (
-            ToolchainDescriptor::new(
-                ToolchainKind::Jdk,
-                PRODUCTION_JDK_VERSION,
-                platform,
-                TargetArchitecture::X64,
-                "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.12%2B8/OpenJDK21U-jdk_x64_windows_hotspot_21.0.12_8.zip",
-                JDK_WINDOWS_SHA256,
-                ArchiveFormat::Zip,
-            )
-            .home_dir("jdk-21.0.12+8")
-            .executable("java", "jdk-21.0.12+8/bin/java.exe"),
-            ToolchainDescriptor::new(
-                ToolchainKind::Node,
-                PRODUCTION_NODE_VERSION,
-                platform,
-                TargetArchitecture::X64,
-                "https://nodejs.org/download/release/v24.15.0/node-v24.15.0-win-x64.zip",
-                NODE_WINDOWS_SHA256,
-                ArchiveFormat::Zip,
-            )
-            .home_dir("node-v24.15.0-win-x64")
-            .executable("node", "node-v24.15.0-win-x64/node.exe")
-            .executable("npm", "node-v24.15.0-win-x64/npm.cmd")
-            .executable("npx", "node-v24.15.0-win-x64/npx.cmd"),
-        ),
-    };
+    let file: ProductionCatalogFile = serde_json::from_str(include_str!(
+        "../../../tools/release/production-toolchain-catalog.json"
+    ))
+    .map_err(|error| {
+        ToolchainError::InvalidDescriptor(format!("production catalog JSON: {error}"))
+    })?;
+    if file.schema_version != PRODUCTION_CATALOG_SCHEMA_VERSION {
+        return Err(ToolchainError::UnsupportedCatalogSchema(
+            file.schema_version,
+        ));
+    }
+    let platform_key = platform.as_str();
+    let descriptors =
+        file.descriptors
+            .get(platform_key)
+            .ok_or_else(|| ToolchainError::NotFound {
+                kind: ToolchainKind::Jdk,
+                version: platform_key.to_owned(),
+            })?;
+    let jdk = descriptors
+        .get("jdk")
+        .ok_or_else(|| ToolchainError::NotFound {
+            kind: ToolchainKind::Jdk,
+            version: PRODUCTION_JDK_VERSION.to_owned(),
+        })?
+        .clone();
+    let node = descriptors
+        .get("node")
+        .ok_or_else(|| ToolchainError::NotFound {
+            kind: ToolchainKind::Node,
+            version: PRODUCTION_NODE_VERSION.to_owned(),
+        })?
+        .clone();
 
     let catalog = OfficialToolchainCatalog {
         schema_version: PRODUCTION_CATALOG_SCHEMA_VERSION,

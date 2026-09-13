@@ -18,7 +18,7 @@ use crate::catalog::production_descriptors;
 use crate::desktop_control::DesktopShutdownHooks;
 use crate::diagnostics::DiagnosticLogger;
 use crate::download::DownloadClient;
-use crate::helper::publish_stable_launcher;
+use crate::helper::{publish_installer_helper, publish_stable_launcher, validate_published_binary};
 use crate::integration;
 use crate::lock::{InstallationLock, LockError};
 use crate::paths::InstallationPaths;
@@ -159,11 +159,52 @@ impl<D: DownloadClient, P: ProcessRunner> RepairEngine<D, P> {
             });
         };
         if let Ok(Some(runtime)) = activation.resolve_current() {
+            let surface_complete = validate_published_binary(
+                &paths,
+                &paths.installer_binary_path(),
+                &paths.installer_binary_metadata_path(),
+            )
+            .is_ok()
+                && validate_published_binary(
+                    &paths,
+                    &paths.stable_launcher_path(),
+                    &paths.stable_launcher_metadata_path(),
+                )
+                .is_ok()
+                && integration::is_complete(&paths);
+            if surface_complete {
+                return Ok(RepairResult {
+                    operation_id: "repair".to_owned(),
+                    target_commit: Some(commit),
+                    toolchains: runtime.metadata.toolchains,
+                    status: RepairStatus::Healthy {
+                        commit: runtime.metadata.target_commit,
+                        version_dir: runtime.version_dir,
+                    },
+                });
+            }
+            if let Err(error) = publish_installer_helper(&paths)
+                .and_then(|_| publish_stable_launcher(&paths))
+                .and_then(|_| {
+                    integration::install(&paths, false).map_err(|error| {
+                        crate::helper::HelperError::Io(std::io::Error::other(error.to_string()))
+                    })
+                })
+            {
+                return Ok(RepairResult {
+                    operation_id: "repair".to_owned(),
+                    target_commit: Some(commit),
+                    toolchains: runtime.metadata.toolchains,
+                    status: RepairStatus::RepairRequired {
+                        reason: format!("installed integration surface is incomplete: {error}"),
+                    },
+                });
+            }
             return Ok(RepairResult {
                 operation_id: "repair".to_owned(),
                 target_commit: Some(commit),
                 toolchains: runtime.metadata.toolchains,
-                status: RepairStatus::Healthy {
+                status: RepairStatus::Repaired {
                     commit: runtime.metadata.target_commit,
                     version_dir: runtime.version_dir,
                 },
@@ -223,6 +264,7 @@ impl<D: DownloadClient, P: ProcessRunner> RepairEngine<D, P> {
                         },
                     });
                 }
+                let _ = activation.collect_old_versions_with_lock(&lock);
                 Ok(RepairResult {
                     operation_id,
                     target_commit: Some(build.target_commit),

@@ -51,10 +51,31 @@ pub fn uninstall(
     paths: InstallationPaths,
     remove_user_data: bool,
 ) -> Result<UninstallResult, UninstallError> {
+    let managed_exists = paths.managed_paths().iter().any(|path| path.exists());
+    if !managed_exists {
+        let user_data_exists = paths.user_data_root.exists();
+        if remove_user_data {
+            remove_user_root(&paths.user_data_root)?;
+        }
+        return Ok(UninstallResult {
+            status: if remove_user_data && user_data_exists {
+                UninstallStatus::Uninstalled {
+                    user_data_preserved: false,
+                }
+            } else {
+                UninstallStatus::AlreadyUninstalled {
+                    user_data_preserved: !remove_user_data,
+                }
+            },
+        });
+    }
     let lock = InstallationLock::acquire(paths.lock_path(), "phase9-uninstall")?;
     let store = StateStore::new(paths.clone());
-    store.initialize()?;
-    let logger = DiagnosticLogger::open(paths.diagnostics_dir().join("installer.jsonl"))?;
+    let logger = DiagnosticLogger::open(
+        env::temp_dir()
+            .join("HarmoniaSuite")
+            .join("uninstall.jsonl"),
+    )?;
     logger.log(
         "info",
         "uninstall.started",
@@ -69,23 +90,31 @@ pub fn uninstall(
             ),
         ],
     )?;
-    if let Some(transaction) = store.load_transaction()? {
+    let review_required = if let Some(transaction) = store.load_transaction()? {
         if transaction.status == TransactionStatus::ReviewRequired {
+            if remove_user_data {
+                return Ok(UninstallResult {
+                    status: UninstallStatus::ReviewRequired {
+                        reason: "user-data removal is blocked while transaction state is ambiguous"
+                            .to_owned(),
+                    },
+                });
+            }
+            true
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+    if !review_required {
+        if let Err(error) = store.recover_pre_activation() {
             return Ok(UninstallResult {
                 status: UninstallStatus::ReviewRequired {
-                    reason: transaction
-                        .failure
-                        .unwrap_or_else(|| "transaction requires explicit review".to_owned()),
+                    reason: format!("uninstall blocked by incomplete transaction: {error}"),
                 },
             });
         }
-    }
-    if let Err(error) = store.recover_pre_activation() {
-        return Ok(UninstallResult {
-            status: UninstallStatus::ReviewRequired {
-                reason: format!("uninstall blocked by incomplete transaction: {error}"),
-            },
-        });
     }
 
     let mut shutdown = DesktopShutdownHooks::new(paths.clone(), true);

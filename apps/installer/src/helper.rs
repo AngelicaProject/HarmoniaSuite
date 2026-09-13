@@ -22,6 +22,8 @@ pub struct InstallerHelperMetadata {
     pub architecture: String,
     pub size: u64,
     pub sha256: String,
+    #[serde(default)]
+    pub product_version: String,
 }
 
 #[derive(Debug, Error)]
@@ -48,7 +50,7 @@ pub fn publish_installer_helper(paths: &InstallationPaths) -> Result<PathBuf, He
         return Err(HelperError::InvalidPath(source));
     }
     let destination = paths.installer_binary_path();
-    if destination.exists() {
+    if destination.exists() && same_file_path(&source, &destination) {
         verify_existing(paths, &source, &destination)?;
         return Ok(destination);
     }
@@ -67,18 +69,36 @@ pub fn publish_installer_helper(paths: &InstallationPaths) -> Result<PathBuf, He
     }
     set_executable(&staging)?;
     let metadata = helper_metadata(paths, &staging)?;
-    if let Err(error) = crate::state::durable_promote_file(&staging, &destination) {
+    if let Err(error) = crate::state::durable_replace_file(&staging, &destination) {
         let _ = fs::remove_file(&staging);
-        if matches!(error, crate::state::StateError::Io(ref value) if value.kind() == std::io::ErrorKind::AlreadyExists)
-        {
-            verify_existing(paths, &source, &destination)?;
-            return Ok(destination);
-        }
         return Err(error.into());
     }
     crate::state::atomic_write_json(&paths.installer_binary_metadata_path(), &metadata)?;
     set_executable(&destination)?;
     Ok(destination)
+}
+
+pub fn validate_published_binary(
+    paths: &InstallationPaths,
+    binary: &Path,
+    metadata_path: &Path,
+) -> Result<(), HelperError> {
+    if !binary.is_file() || !metadata_path.is_file() {
+        return Err(HelperError::InvalidPath(binary.to_path_buf()));
+    }
+    let metadata: InstallerHelperMetadata = serde_json::from_slice(&fs::read(metadata_path)?)?;
+    let actual_size = fs::metadata(binary)?.len();
+    let actual_sha = sha256_file(binary)?;
+    if metadata.schema_version != HELPER_METADATA_SCHEMA_VERSION
+        || metadata.platform != paths.platform.as_str()
+        || metadata.architecture != paths.architecture.as_str()
+        || metadata.size != actual_size
+        || metadata.sha256 != actual_sha
+        || metadata.product_version != current_product_version(paths)?
+    {
+        return Err(HelperError::AlreadyInstalled(binary.to_path_buf()));
+    }
+    ensure_executable(binary)
 }
 
 /// Publish the stable launcher beside the setup helper. The launcher uses the
@@ -115,12 +135,16 @@ pub fn schedule_self_uninstall(
     _lock: &crate::lock::InstallationLock,
 ) -> Result<(), HelperError> {
     let source = env::current_exe()?;
-    let helper = paths.bin_dir().join(format!(
-        ".harmonia-uninstall-{}.exe",
-        Uuid::new_v4().simple()
-    ));
-    validate_managed_path(&paths.app_root, &helper)?;
-    fs::create_dir_all(paths.bin_dir())?;
+    let nonce = Uuid::new_v4().simple().to_string();
+    let helper = env::temp_dir().join(format!("HarmoniaSuite-cleanup-{nonce}.exe"));
+    if paths.is_managed_path(&helper) {
+        return Err(HelperError::InvalidPath(helper));
+    }
+    fs::create_dir_all(
+        helper
+            .parent()
+            .ok_or_else(|| HelperError::InvalidPath(helper.clone()))?,
+    )?;
     copy_to_staging(&source, &helper)?;
     set_executable(&helper)?;
     let spec = DetachedLaunchSpec::new(helper.clone())
@@ -133,6 +157,7 @@ pub fn schedule_self_uninstall(
             "HARMONIA_CLEANUP_REMOVE_USER_DATA",
             if remove_user_data { "1" } else { "0" },
         );
+    let spec = spec.env("HARMONIA_CLEANUP_NONCE", &nonce);
     if let Err(error) = SystemDetachedLauncher.launch(&spec) {
         let _ = fs::remove_file(&helper);
         return Err(HelperError::Io(std::io::Error::other(error.to_string())));
@@ -148,13 +173,23 @@ pub fn run_cleanup_helper() -> Result<(), HelperError> {
         .and_then(|value| value.parse::<u32>().ok())
         .ok_or(HelperError::InvalidCleanupArgument)?;
     let remove_user_data = env::var("HARMONIA_CLEANUP_REMOVE_USER_DATA").as_deref() == Ok("1");
+    let nonce = env::var("HARMONIA_CLEANUP_NONCE")
+        .ok()
+        .filter(|value| value.len() == 32 && value.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        .ok_or(HelperError::InvalidCleanupArgument)?;
     while process_alive(parent) {
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
     let paths = InstallationPaths::current()
         .map_err(|error| HelperError::Io(std::io::Error::other(error.to_string())))?;
     let helper = env::current_exe()?;
-    remove_tree_except(&paths.app_root, &helper)?;
+    let expected_name = format!("HarmoniaSuite-cleanup-{nonce}.exe");
+    if helper.file_name().and_then(|value| value.to_str()) != Some(expected_name.as_str())
+        || paths.is_managed_path(&helper)
+    {
+        return Err(HelperError::InvalidCleanupArgument);
+    }
+    remove_root_safely(&paths.app_root)?;
     if paths.state_root != paths.app_root {
         remove_root_safely(&paths.state_root)?;
     }
@@ -177,31 +212,6 @@ fn remove_root_safely(root: &Path) -> Result<(), HelperError> {
         .ok_or_else(|| HelperError::InvalidPath(root.to_path_buf()))?;
     validate_managed_path(parent, root)?;
     fs::remove_dir_all(root)?;
-    Ok(())
-}
-
-fn remove_tree_except(root: &Path, keep: &Path) -> Result<(), HelperError> {
-    if !root.exists() {
-        return Ok(());
-    }
-    validate_managed_path(
-        root.parent()
-            .ok_or_else(|| HelperError::InvalidPath(root.to_path_buf()))?,
-        root,
-    )?;
-    for entry in fs::read_dir(root)? {
-        let path = entry?.path();
-        if path == keep {
-            continue;
-        }
-        validate_managed_path(root, &path)?;
-        let metadata = fs::symlink_metadata(&path)?;
-        if metadata.file_type().is_symlink() || !metadata.is_dir() {
-            fs::remove_file(path)?;
-        } else {
-            fs::remove_dir_all(path)?;
-        }
-    }
     Ok(())
 }
 
@@ -258,6 +268,7 @@ fn verify_existing(
                 architecture: paths.architecture.as_str().to_owned(),
                 size: actual_size,
                 sha256: actual_sha.clone(),
+                product_version: current_product_version(paths)?,
             };
             crate::state::atomic_write_json(&paths.installer_binary_metadata_path(), &metadata)?;
             metadata
@@ -273,6 +284,10 @@ fn verify_existing(
     {
         return Err(HelperError::AlreadyInstalled(path.to_path_buf()));
     }
+    if metadata.product_version != current_product_version(paths)? {
+        let refreshed = helper_metadata(paths, path)?;
+        crate::state::atomic_write_json(&paths.installer_binary_metadata_path(), &refreshed)?;
+    }
     ensure_executable(path)?;
     Ok(())
 }
@@ -287,7 +302,19 @@ fn helper_metadata(
         architecture: paths.architecture.as_str().to_owned(),
         size: fs::metadata(path)?.len(),
         sha256: sha256_file(path)?,
+        product_version: current_product_version(paths)?,
     })
+}
+
+fn current_product_version(paths: &InstallationPaths) -> Result<String, HelperError> {
+    Ok(crate::state::StateStore::new(paths.clone())
+        .load_installation()?
+        .product_version
+        .unwrap_or_else(|| crate::DEFAULT_PRODUCT_VERSION.to_owned()))
+}
+
+fn same_file_path(left: &Path, right: &Path) -> bool {
+    fs::canonicalize(left).ok() == fs::canonicalize(right).ok()
 }
 
 #[cfg(unix)]

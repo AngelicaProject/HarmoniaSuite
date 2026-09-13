@@ -70,13 +70,18 @@ jobs:
           WINDOWS_SIGNING_CERTIFICATE_B64: ${{ secrets.HARMONIA_WINDOWS_SIGNING_CERTIFICATE_B64 }}
           WINDOWS_SIGNING_PASSWORD: ${{ secrets.HARMONIA_WINDOWS_SIGNING_PASSWORD }}
         run: |
-          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_SIGNING_CERTIFICATE_B64) -or [string]::IsNullOrWhiteSpace($env:WINDOWS_SIGNING_PASSWORD)) { throw "Windows signing credentials are required; refusing unsigned release" }
-          $certificate = Join-Path $env:RUNNER_TEMP "harmonia-release.pfx"
-          [IO.File]::WriteAllBytes($certificate, [Convert]::FromBase64String($env:WINDOWS_SIGNING_CERTIFICATE_B64))
-          signtool sign /fd sha256 /f $certificate /p $env:WINDOWS_SIGNING_PASSWORD /tr http://timestamp.digicert.com /td sha256 target/release/HarmoniaSetup.exe
-          signtool sign /fd sha256 /f $certificate /p $env:WINDOWS_SIGNING_PASSWORD /tr http://timestamp.digicert.com /td sha256 target/release/HarmoniaSuite.exe
-          signtool verify /pa target/release/HarmoniaSetup.exe
-          signtool verify /pa target/release/HarmoniaSuite.exe
+          if (-not [string]::IsNullOrWhiteSpace($env:WINDOWS_SIGNING_CERTIFICATE_B64) -and -not [string]::IsNullOrWhiteSpace($env:WINDOWS_SIGNING_PASSWORD)) {
+            $certificate = Join-Path $env:RUNNER_TEMP "harmonia-release.pfx"
+            [IO.File]::WriteAllBytes($certificate, [Convert]::FromBase64String($env:WINDOWS_SIGNING_CERTIFICATE_B64))
+            signtool sign /fd sha256 /f $certificate /p $env:WINDOWS_SIGNING_PASSWORD /tr http://timestamp.digicert.com /td sha256 target/release/HarmoniaSetup.exe
+            signtool sign /fd sha256 /f $certificate /p $env:WINDOWS_SIGNING_PASSWORD /tr http://timestamp.digicert.com /td sha256 target/release/HarmoniaSuite.exe
+            signtool verify /pa target/release/HarmoniaSetup.exe
+            signtool verify /pa target/release/HarmoniaSuite.exe
+            "authenticode=signed" | Set-Content (Join-Path $env:RUNNER_TEMP "windows-signing.txt")
+          } else {
+            Write-Warning "Authenticode credentials are absent; release binaries remain unsigned."
+            "authenticode=unsigned" | Set-Content (Join-Path $env:RUNNER_TEMP "windows-signing.txt")
+          }
       - name: Stage release files (Unix)
         if: runner.os != 'Windows'
         shell: bash
@@ -93,6 +98,7 @@ jobs:
           New-Item -ItemType Directory -Force release | Out-Null
           Copy-Item target/release/HarmoniaSetup.exe release/HarmoniaSetup.exe
           Copy-Item target/release/HarmoniaSuite.exe release/HarmoniaSuite.exe
+          Copy-Item (Join-Path $env:RUNNER_TEMP "windows-signing.txt") release/windows-signing.txt
           Get-FileHash release/HarmoniaSetup.exe, release/HarmoniaSuite.exe -Algorithm SHA256 | ForEach-Object { "$($_.Hash.ToLower()) *$($_.Path | Split-Path -Leaf)" } | Set-Content release/sha256sums-windows.txt
       - uses: actions/upload-artifact@v4
         with:
@@ -101,48 +107,31 @@ jobs:
           if-no-files-found: error
 
   publish:
-    name: Publish signed manifest
+    name: Publish tagged distribution
     needs: verify-and-build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-          persist-credentials: false
       - uses: actions/download-artifact@v4
         with:
           pattern: release-*
           path: release-input
           merge-multiple: false
-      - name: Require release signing secrets
-        env:
-          MANIFEST_KEY: ${{ secrets.HARMONIA_MANIFEST_SIGNING_KEY_PEM }}
-          PUBLIC_KEY: ${{ secrets.HARMONIA_MANIFEST_PUBLIC_KEY_HEX }}
-        run: |
-          test -n "$MANIFEST_KEY" || { echo "manifest signing key is not configured" >&2; exit 1; }
-          test "$PUBLIC_KEY" = "ee7809268d92d5a832ae8fb03f7d090123073a4833cb7f1f725babfe74ff1925" || { echo "production public key secret does not match installer trust root" >&2; exit 1; }
-      - name: Create draft release and publish binaries first
+      - name: Reuse or create draft release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" --draft --title "HarmoniaSuite $GITHUB_REF_NAME" --notes "Production Windows/Linux x64 release."
-          find release-input -type f -not -name 'sha256sums-*.txt' -print0 | xargs -0 gh release upload "$GITHUB_REF_NAME"
-          find release-input -name 'sha256sums-*.txt' -print0 | xargs -0 -I{} gh release upload "$GITHUB_REF_NAME" "{}"
-      - name: Generate, sign and verify platform manifests
+          if ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release create "$GITHUB_REF_NAME" --draft --title "HarmoniaSuite $GITHUB_REF_NAME" --notes "Tagged HarmoniaSuite Windows/Linux x64 distribution. Rolling main updates are published separately."
+          fi
+      - name: Upload exact assets and publish after verification
         env:
-          MANIFEST_KEY: ${{ secrets.HARMONIA_MANIFEST_SIGNING_KEY_PEM }}
-          PUBLIC_KEY: ${{ secrets.HARMONIA_MANIFEST_PUBLIC_KEY_HEX }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          key="$RUNNER_TEMP/harmonia-manifest-key.pem"
-          printf '%s\n' "$MANIFEST_KEY" > "$key"
-          version="${GITHUB_REF_NAME#v}"
-          for platform in linux windows; do
-            node tools/release/create-manifest.mjs --platform "$platform" --target-commit "$GITHUB_SHA" --product-version "$version" --generation "$GITHUB_RUN_NUMBER" --out "release-input/manifest-$platform.json"
-            HARMONIA_MANIFEST_SIGNING_KEY_FILE="$key" node tools/release/sign-manifest.mjs "release-input/manifest-$platform.json" "release-input/manifest-$platform.json.sig" primary-2026
-            HARMONIA_MANIFEST_PUBLIC_KEY_HEX="$PUBLIC_KEY" node tools/release/verify-manifest.mjs "release-input/manifest-$platform.json" "release-input/manifest-$platform.json.sig"
+          for sums in release-input/release-*/sha256sums-*.txt; do
+            (cd "$(dirname "$sums")" && sha256sum -c "$(basename "$sums")")
           done
-      - name: Publish manifests only after verification
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release upload "$GITHUB_REF_NAME" release-input/manifest-linux.json release-input/manifest-linux.json.sig release-input/manifest-windows.json release-input/manifest-windows.json.sig
+          while IFS= read -r -d '' file; do
+            gh release upload "$GITHUB_REF_NAME" "$file" --clobber
+          done < <(find release-input -type f -print0)
+          gh release edit "$GITHUB_REF_NAME" --draft=false
