@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "latestGeneration": 7,
+  "latestGeneration": 8,
   "commits": {
     "50f513e80f167077687b133690c0f7c8d8e0c6b9": {
       "generation": 1,
@@ -49,6 +49,13 @@
       "manifests": {
         "windows": "17d647f08850d8a8f649459868935145703bb846531c46e036a10ea7ec9f2f8b",
         "linux": "7368bcd6fb17239b7b86557d63935ab92fe3bdafe1fe08a766f990ccbe10ee92"
+      }
+    },
+    "687ee3ee9549639b0b4d9f7bc197ae527473dc53": {
+      "generation": 8,
+      "manifests": {
+        "windows": "2dc9ef7dd19bc92335b7f6e7365b83eb861d2c3576f47a8945acdde4a7ee88c0",
+        "linux": "bcdbd39f7daa2e93ad3d3ffed3ac435f64d9255cb6bd5546a2c0e7be4ca29dc2"
       }
     }
   }
