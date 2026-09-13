@@ -2096,6 +2096,25 @@ mod tests {
             launch.environment.get("HARMONIA_INSTALL_STATE_ROOT"),
             Some(&paths.state_root.display().to_string())
         );
+        let active_version_dir = paths.versions_dir().join(&target);
+        assert_eq!(
+            launch.environment.get("HARMONIA_ACTIVE_VERSION_DIR"),
+            Some(&active_version_dir.display().to_string())
+        );
+        for variable in ["HARMONIA_BACKEND_JAR", "HARMONIA_JAVA_BINARY"] {
+            let value = launch
+                .environment
+                .get(variable)
+                .expect("runtime environment variable");
+            assert!(
+                Path::new(value).is_absolute(),
+                "{variable} must be absolute"
+            );
+            assert!(
+                Path::new(value).is_file(),
+                "{variable} must point to a file"
+            );
+        }
         assert!(launch.environment.contains_key("HARMONIA_LAUNCH_ACK"));
         assert!(launch
             .environment

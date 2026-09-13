@@ -3,6 +3,8 @@ import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 
+import { moduleDir } from "./runtime-paths.js";
+
 type LocalGatewayOptions = {
   jarPath?: string;
   javaBinary?: string;
@@ -185,7 +187,7 @@ export function defaultGatewayJar(): string | undefined {
       ? []
       : [
           resolve(process.cwd(), "target", "harmonia-suite.jar"),
-          resolve(__dirname, "../../../target/harmonia-suite.jar"),
+          resolve(moduleDir, "../../../target/harmonia-suite.jar"),
         ]),
   ].filter((candidate): candidate is string => Boolean(candidate));
   return candidates.find((candidate) => existsSync(candidate));
