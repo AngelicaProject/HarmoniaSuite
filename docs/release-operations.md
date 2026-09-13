@@ -82,6 +82,12 @@ remains in `main` history and is equal to or a descendant of the latest publishe
 exact target commit plus durable monotonic generation is the rolling identity; late ancestor
 completions are no-ops and stable aliases are updated last.
 
+The `gh-pages` branch is the durable rolling publication ledger: it retains the latest generation,
+commit-to-generation mappings, latest published commit, stable aliases, and immutable manifest
+history. GitHub Pages Actions deploys the committed ledger state as the public HTTPS rolling
+endpoint. Repository Settings → Pages → Source must be set to GitHub Actions. Generation is
+monotonic for the lifetime of the rolling channel and does not reset at product releases.
+
 ## Bootstrap launch acknowledgement
 
 Electron launch acknowledgement is durable and binds all of:
