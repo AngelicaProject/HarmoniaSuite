@@ -1447,6 +1447,19 @@ mod tests {
                     fs::create_dir_all(directory.join("dist")).unwrap();
                     fs::write(directory.join("dist/main.js"), b"desktop").unwrap();
                 }
+            } else if maven_command
+                && command
+                    .args
+                    .iter()
+                    .any(|argument| argument == "help:evaluate")
+            {
+                return Ok(ProcessOutput {
+                    status: Some(0),
+                    stdout: "1.0.12-SNAPSHOT\n".to_owned(),
+                    stderr: String::new(),
+                    duration_ms: 1,
+                    timed_out: false,
+                });
             } else if package_command {
                 let payload = directory.join("artifacts/linux-x64");
                 fs::create_dir_all(payload.join("resources/app/dist")).unwrap();

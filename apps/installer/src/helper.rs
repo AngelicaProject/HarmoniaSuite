@@ -368,6 +368,11 @@ mod tests {
             state_root: root.path().join("state"),
             cache_root: root.path().join("cache"),
         };
+        let store = crate::state::StateStore::new(paths.clone());
+        store.initialize().unwrap();
+        let mut installation = store.load_installation().unwrap();
+        installation.product_version = Some("1.0.12-SNAPSHOT".to_owned());
+        store.save_installation(&installation).unwrap();
         let destination = publish_installer_helper(&paths).unwrap();
         assert!(destination.is_file());
         assert!(paths.installer_binary_metadata_path().is_file());
