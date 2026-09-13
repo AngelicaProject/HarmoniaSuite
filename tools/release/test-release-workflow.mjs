@@ -39,6 +39,23 @@ test("build and publish jobs check out and verify the resolved exact tag", () =>
   assert.doesNotMatch(workflow, /GITHUB_REF_NAME/);
 });
 
+test("matrix build configures LF checkouts before checking out the release tag", () => {
+  const buildJob = workflow.match(/  verify-and-build:[\s\S]*?(?=\n  publish:)/)?.[0];
+  assert.ok(buildJob);
+  const lineEndingStep = buildJob.indexOf("- name: Configure deterministic Git line endings");
+  const checkoutStep = buildJob.indexOf("- uses: actions/checkout@v4");
+  assert.ok(lineEndingStep >= 0);
+  assert.ok(checkoutStep > lineEndingStep);
+  assert.match(
+    buildJob,
+    /git config --global core\.autocrlf false[\s\S]*git config --global core\.eol lf/,
+  );
+  assert.match(
+    buildJob,
+    /ref: \$\{\{ needs\.resolve-release\.outputs\.release_tag \}\}/,
+  );
+});
+
 test("release identity is derived from the checked-out tag commit", () => {
   assert.match(workflow, /HARMONIA_RELEASE_SEED_COMMIT=\$release_commit/);
   assert.match(
