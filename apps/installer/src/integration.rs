@@ -621,7 +621,7 @@ mod tests {
         assert!(paths.linux_icon_path().is_file());
         assert!(is_complete(&paths));
         fs::write(
-            &paths.linux_desktop_entry_path(),
+            paths.linux_desktop_entry_path(),
             "[Desktop Entry]\nExec=wrong\n",
         )
         .unwrap();

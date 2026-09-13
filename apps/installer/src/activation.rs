@@ -74,6 +74,12 @@ struct RepairJournal {
     phase: RepairJournalPhase,
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+struct ActivationOperationScope<'a> {
+    external_operation_id: Option<&'a str>,
+    active_repair_operation_id: Option<&'a str>,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "PascalCase")]
 enum RepairJournalPhase {
@@ -321,8 +327,10 @@ impl ActivationEngine {
             hooks,
             checker,
             lock,
-            external_operation_id,
-            None,
+            ActivationOperationScope {
+                external_operation_id,
+                active_repair_operation_id: None,
+            },
         )
     }
 
@@ -333,15 +341,14 @@ impl ActivationEngine {
         hooks: &mut dyn ActivationHooks,
         checker: &H,
         lock: &InstallationLock,
-        external_operation_id: Option<&str>,
-        active_repair_operation_id: Option<&str>,
+        operation_scope: ActivationOperationScope<'_>,
     ) -> Result<RuntimePaths, ActivationError> {
         if lock.path() != self.paths.lock_path() {
             return Err(ActivationError::InvalidInput(
                 "caller lock does not belong to this installation".to_owned(),
             ));
         }
-        self.recover_locked(config, checker, active_repair_operation_id)?;
+        self.recover_locked(config, checker, operation_scope.active_repair_operation_id)?;
         let result = self.load_build_result(result_path.as_ref())?;
         let candidate = self.validate_candidate(&result)?;
         let store = StateStore::new(self.paths.clone());
@@ -360,7 +367,7 @@ impl ActivationEngine {
             Some(result.target_commit.clone()),
             Vec::new(),
         )?;
-        if let Some(operation_id) = external_operation_id {
+        if let Some(operation_id) = operation_scope.external_operation_id {
             transaction.set_external_operation_id(operation_id)?;
         }
         transaction.set_pre_activation_state(installation.clone())?;
@@ -540,10 +547,12 @@ impl ActivationEngine {
             hooks,
             checker,
             lock,
-            None,
-            repair_journal
-                .as_ref()
-                .map(|journal| journal.operation_id.as_str()),
+            ActivationOperationScope {
+                external_operation_id: None,
+                active_repair_operation_id: repair_journal
+                    .as_ref()
+                    .map(|journal| journal.operation_id.as_str()),
+            },
         );
         match result {
             Ok(runtime) => {
