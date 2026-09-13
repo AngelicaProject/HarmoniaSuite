@@ -20,7 +20,9 @@ import {
 } from "./launch-ack.js";
 import { userDataRoot } from "./paths.js";
 import { registerHarmoniaProtocol } from "./protocol.js";
+import { moduleDir } from "./runtime-paths.js";
 import { registerUpdaterIpc } from "./updater-ipc.js";
+import { writeDesktopStartupFailure } from "./startup-diagnostics.js";
 import {
   isMatchingShutdownRequest,
   shutdownAcknowledgement,
@@ -104,6 +106,18 @@ if (!hasLock) {
       startShutdownWatcher();
     } catch (error) {
       console.error("Harmonia desktop startup failed", error);
+      let productVersion: string | undefined;
+      try {
+        productVersion = app.getVersion();
+      } catch {
+        // The original startup error remains authoritative if version lookup is unavailable.
+      }
+      const diagnosticWritten = await writeDesktopStartupFailure(error, {
+        productVersion,
+      });
+      if (!diagnosticWritten) {
+        console.warn("Harmonia desktop startup diagnostic could not be written");
+      }
       await shutdown(1);
     }
   });
@@ -140,7 +154,7 @@ if (!hasLock) {
         contextIsolation: true,
         sandbox: true,
         webviewTag: false,
-        preload: resolve(__dirname, "preload.js"),
+        preload: resolve(moduleDir, "preload.js"),
       },
     });
     created.webContents.setWindowOpenHandler(({ url }) => {
@@ -176,7 +190,7 @@ if (!hasLock) {
       ...(installed
         ? []
         : [
-            resolve(__dirname, "../../../frontend/dist"),
+            resolve(moduleDir, "../../../frontend/dist"),
             resolve(process.cwd(), "frontend/dist"),
           ]),
     ].filter((candidate): candidate is string => Boolean(candidate));

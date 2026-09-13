@@ -2,6 +2,8 @@ import { cp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { verifyPackagedPayload } from "./payload-contract.mjs";
+
 const desktopRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const checkoutRoot = resolve(desktopRoot, "..", "..");
 const platform = process.platform === "win32" ? "windows" : process.platform === "linux" ? "linux" : null;
@@ -48,6 +50,8 @@ await writeFile(
   `${JSON.stringify(runtimePackage, null, 2)}\n`,
   "utf8",
 );
+
+await verifyPackagedPayload(output, platform === "windows" ? "electron.exe" : "electron");
 
 async function assertFile(path, label) {
   try {
