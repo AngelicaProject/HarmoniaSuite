@@ -103,14 +103,14 @@ jobs:
         run: |
           set -euo pipefail
           test -n "$MANIFEST_KEY" || { echo "rolling Ed25519 signing key is not configured" >&2; exit 1; }
-          test "$PUBLIC_KEY" = "ee7809268d92d5a832ae8fb03f7d090123073a4833cb7f1f725babfe74ff192" || { echo "production public key secret does not match installer trust root" >&2; exit 1; }
+          test "$PUBLIC_KEY" = "5e02dfc689bc3c447cffa720d94225b5bedb593cb4f77c5ba0461103705363d2" || { echo "production public key secret does not match installer trust root" >&2; exit 1; }
           key="$RUNNER_TEMP/harmonia-manifest-key.pem"
           printf '%s\n' "$MANIFEST_KEY" > "$key"
           trap 'rm -f "$key"' EXIT
           sha="${{ github.event.workflow_run.head_sha }}"
           for platform in linux windows; do
             node tools/release/create-manifest.mjs --platform "$platform" --target-commit "$sha" --product-version "${{ steps.versions.outputs.application_version }}" --min-installer-version "${{ steps.versions.outputs.installer_version }}" --generation "${{ steps.generation.outputs.generation }}" --out "$RUNNER_TEMP/manifest-$platform.json"
-            HARMONIA_MANIFEST_SIGNING_KEY_FILE="$key" node tools/release/sign-manifest.mjs "$RUNNER_TEMP/manifest-$platform.json" "$RUNNER_TEMP/manifest-$platform.json.sig" primary-2026
+            HARMONIA_MANIFEST_SIGNING_KEY_FILE="$key" node tools/release/sign-manifest.mjs "$RUNNER_TEMP/manifest-$platform.json" "$RUNNER_TEMP/manifest-$platform.json.sig" primary-2026-09
             cargo run --quiet --manifest-path apps/installer/Cargo.toml --bin harmonia-manifest-verify -- "$platform" "$RUNNER_TEMP/manifest-$platform.json" "$RUNNER_TEMP/manifest-$platform.json.sig"
           done
       - name: Publish immutable history and stable aliases

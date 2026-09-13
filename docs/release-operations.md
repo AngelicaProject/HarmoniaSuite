@@ -8,12 +8,30 @@ The release workflow treats the two signing systems differently:
   tagged distribution continues with explicit unsigned metadata; this is not a trust substitute.
 * `HARMONIA_MANIFEST_SIGNING_KEY_PEM` is an Ed25519 PKCS#8 private key for rolling publication,
   matching the public trust root compiled into `apps/installer/src/manifest.rs`.
-  `HARMONIA_MANIFEST_PUBLIC_KEY_HEX` must equal that reviewed public key. The key is written only
-  to the ephemeral runner temp directory, and the signed envelope is verified before upload.
+  The current production key is `keyId=primary-2026-09` with public key
+  `5e02dfc689bc3c447cffa720d94225b5bedb593cb4f77c5ba0461103705363d2`.
+  `HARMONIA_MANIFEST_PUBLIC_KEY_HEX` must equal that reviewed public key. The private key is
+  stored only in the external secret manager/GitHub Actions secret, never committed, materialized
+  only in runner temp storage for signing, and removed after signing. The signed envelope is
+  verified before upload.
 
-The Ed25519 private key must be stored in the repository/environment secret manager or an
-equivalent release secret service before rolling publication. A comment or public key in source is
-not an operational substitute. The key is removed by the workflow cleanup trap after signing.
+The Ed25519 private key must be stored in the external secret manager/GitHub Actions secret before
+rolling publication. A comment or public key in source is not an operational substitute. The key is
+removed by the workflow cleanup trap after signing. The secret names remain
+`HARMONIA_MANIFEST_SIGNING_KEY_PEM` and `HARMONIA_MANIFEST_PUBLIC_KEY_HEX`; CI does not create,
+print, or publish private keys.
+
+Future production key rotation must use overlap: A -> A+B -> B.
+
+1. Current clients trust A.
+2. Publish an installer signed by A whose compiled keyring trusts A+B.
+3. Wait until sufficient client adoption.
+4. Switch manifest signing to B; clients with A+B accept it.
+5. Remove A only in a later installer release.
+
+After production clients exist, never replace A directly with B: old updater versions that trust
+only A will be unable to verify the new manifest.
+
 Ordinary tagged distribution does not require this Ed25519 key because the tag workflow publishes
 only installer/launcher binaries and does not publish a rolling manifest.
 

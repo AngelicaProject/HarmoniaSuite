@@ -5,7 +5,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { createPrivateKey, sign } from "node:crypto";
 
-const [, , manifestPath, signaturePath, keyId = "primary-2026"] = process.argv;
+const [, , manifestPath, signaturePath, keyId = "primary-2026-09"] = process.argv;
 const keyPath = process.env.HARMONIA_MANIFEST_SIGNING_KEY_FILE;
 if (!manifestPath || !signaturePath || !keyPath) {
   throw new Error(

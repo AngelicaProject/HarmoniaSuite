@@ -34,11 +34,14 @@ pub fn production_manifest_urls(platform: Platform) -> (String, String) {
     (base, signature)
 }
 
-// Release infrastructure owns the corresponding private key outside this repository. Replacing
-// this trust root requires a reviewed installer release. The private key is never accepted from
-// runtime input and is provisioned only through the release secret/file contract.
-const PRIMARY_PUBLIC_KEY_HEX: &str =
-    "ee7809268d92d5a832ae8fb03f7d090123073a4833cb7f1f725babfe74ff1925";
+// Release infrastructure owns the corresponding private keys outside this repository. Replacing
+// this trust root requires a reviewed installer release. Private keys are never accepted from
+// runtime input and are provisioned only through the release secret/file contract. Keep future
+// rotations as an overlap (A + B) until clients trusting A have adopted the release containing B.
+const PRODUCTION_MANIFEST_KEYS: &[(&str, &str)] = &[(
+    "primary-2026-09",
+    "5e02dfc689bc3c447cffa720d94225b5bedb593cb4f77c5ba0461103705363d2",
+)];
 const MAX_MANIFEST_BYTES: usize = 1024 * 1024;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -204,20 +207,35 @@ impl ManifestFetcher for HttpManifestFetcher {
 
 #[derive(Clone, Debug)]
 pub struct ManifestVerifier {
-    keys: BTreeMap<String, [u8; 32]>,
+    keys: BTreeMap<String, VerifyingKey>,
 }
 
 impl ManifestVerifier {
     pub fn production() -> Self {
-        let mut keys = BTreeMap::new();
-        keys.insert(
-            "primary-2026".to_owned(),
-            decode_hex_32(PRIMARY_PUBLIC_KEY_HEX).unwrap(),
-        );
+        let keys: BTreeMap<String, VerifyingKey> = PRODUCTION_MANIFEST_KEYS
+            .iter()
+            .map(|(key_id, public_key_hex)| {
+                let public_key_bytes = decode_hex_32(public_key_hex).unwrap_or_else(|| {
+                    panic!("compiled production manifest key {key_id} is not 32-byte hex")
+                });
+                let key = VerifyingKey::from_bytes(&public_key_bytes).unwrap_or_else(|_| {
+                    panic!("compiled production manifest key {key_id} is not a valid Ed25519 key")
+                });
+                ((*key_id).to_owned(), key)
+            })
+            .collect();
         Self { keys }
     }
 
     pub fn with_keys(keys: BTreeMap<String, [u8; 32]>) -> Self {
+        let keys = keys
+            .into_iter()
+            .map(|(key_id, public_key_bytes)| {
+                let key = VerifyingKey::from_bytes(&public_key_bytes)
+                    .expect("injected manifest verifier key must be a valid Ed25519 key");
+                (key_id, key)
+            })
+            .collect();
         Self { keys }
     }
 
@@ -232,12 +250,10 @@ impl ManifestVerifier {
         if envelope.schema_version != MANIFEST_SCHEMA_VERSION {
             return Err(ManifestError::UnsupportedSignatureSchema);
         }
-        let key_bytes = self
+        let key = self
             .keys
             .get(&envelope.key_id)
             .ok_or_else(|| ManifestError::UnknownKey(envelope.key_id.clone()))?;
-        let key =
-            VerifyingKey::from_bytes(key_bytes).map_err(|_| ManifestError::InvalidSignature)?;
         let signature_bytes =
             decode_hex::<64>(&envelope.signature_hex).ok_or(ManifestError::InvalidSignature)?;
         let signature = Signature::from_bytes(&signature_bytes);
@@ -429,6 +445,74 @@ mod tests {
             verifier.verify(b"{}", &signature, Platform::Linux, &TargetArchitecture::X64),
             Err(ManifestError::UnknownKey(_))
         ));
+
+        let old_production_signature = serde_json::to_vec(&ManifestSignature {
+            schema_version: 1,
+            key_id: "primary-2026".to_owned(),
+            signature_hex: "00".repeat(64),
+        })
+        .unwrap();
+        assert!(matches!(
+            verifier.verify(
+                b"{}",
+                &old_production_signature,
+                Platform::Linux,
+                &TargetArchitecture::X64
+            ),
+            Err(ManifestError::UnknownKey(key_id)) if key_id == "primary-2026"
+        ));
+    }
+
+    #[test]
+    fn production_keyring_contains_only_the_current_key_and_rejects_wrong_signatures() {
+        assert_eq!(PRODUCTION_MANIFEST_KEYS.len(), 1);
+        assert_eq!(PRODUCTION_MANIFEST_KEYS[0].0, "primary-2026-09");
+        assert!(decode_hex_32(PRODUCTION_MANIFEST_KEYS[0].1).is_some());
+
+        let verifier = ManifestVerifier::production();
+        let signature = serde_json::to_vec(&ManifestSignature {
+            schema_version: 1,
+            key_id: "primary-2026-09".to_owned(),
+            signature_hex: "00".repeat(64),
+        })
+        .unwrap();
+        assert!(matches!(
+            verifier.verify(b"{}", &signature, Platform::Linux, &TargetArchitecture::X64),
+            Err(ManifestError::SignatureVerification)
+        ));
+    }
+
+    #[test]
+    fn verifies_manifests_from_both_keys_during_rotation_overlap() {
+        let manifest_bytes = serde_json::to_vec(&manifest()).unwrap();
+        let signing_a = SigningKey::from_bytes(&[21u8; 32]);
+        let signing_b = SigningKey::from_bytes(&[22u8; 32]);
+        let verifier = ManifestVerifier::with_keys(BTreeMap::from([
+            ("primary-a".to_owned(), signing_a.verifying_key().to_bytes()),
+            ("primary-b".to_owned(), signing_b.verifying_key().to_bytes()),
+        ]));
+
+        for (key_id, signing_key) in [("primary-a", signing_a), ("primary-b", signing_b)] {
+            let signature = signing_key.sign(&manifest_bytes);
+            let signature_bytes = serde_json::to_vec(&ManifestSignature {
+                schema_version: 1,
+                key_id: key_id.to_owned(),
+                signature_hex: signature
+                    .to_bytes()
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect(),
+            })
+            .unwrap();
+            verifier
+                .verify(
+                    &manifest_bytes,
+                    &signature_bytes,
+                    Platform::Linux,
+                    &TargetArchitecture::X64,
+                )
+                .unwrap();
+        }
     }
 
     #[test]
@@ -655,7 +739,7 @@ mod tests {
     #[test]
     fn production_trust_root_is_not_the_public_rfc_test_vector() {
         assert_ne!(
-            PRIMARY_PUBLIC_KEY_HEX,
+            PRODUCTION_MANIFEST_KEYS[0].1,
             "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"
         );
     }
