@@ -87,7 +87,7 @@ jobs:
           test "$release_commit" = "$tag_commit"
           echo "HARMONIA_RELEASE_SEED_COMMIT=$release_commit" >> "$GITHUB_ENV"
           echo "HARMONIA_RELEASE_PRODUCT_VERSION=${RELEASE_TAG#v}" >> "$GITHUB_ENV"
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '21'
