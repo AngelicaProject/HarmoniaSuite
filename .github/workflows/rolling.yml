@@ -25,13 +25,14 @@ jobs:
           ref: ${{ github.event.workflow_run.head_sha }}
           fetch-depth: 0
           persist-credentials: false
-      - name: Reject stale workflow completion
+      - name: Validate candidate is still in main history
         shell: bash
         run: |
           set -euo pipefail
           git fetch origin main --no-tags
-          test "$(git rev-parse HEAD)" = "${{ github.event.workflow_run.head_sha }}"
-          test "$(git rev-parse origin/main)" = "${{ github.event.workflow_run.head_sha }}"
+          candidate="${{ github.event.workflow_run.head_sha }}"
+          git cat-file -e "$candidate^{commit}"
+          git merge-base --is-ancestor "$candidate" origin/main
       - name: Prepare rolling history checkout
         shell: bash
         env:
@@ -48,15 +49,30 @@ jobs:
             git -C rolling-site config user.name github-actions[bot]
             git -C rolling-site config user.email 41898282+github-actions[bot]@users.noreply.github.com
           fi
-      - name: Allocate durable generation
-        id: generation
+      - name: Evaluate monotonic rolling policy
+        id: policy
         shell: bash
         run: |
           set -euo pipefail
-          generation=$(node tools/release/publish-rolling.mjs allocate --root rolling-site --sha "${{ github.event.workflow_run.head_sha }}")
+          candidate="${{ github.event.workflow_run.head_sha }}"
+          latest=$(node tools/release/publish-rolling.mjs latest --root rolling-site)
+          echo "latest_sha=$latest" >> "$GITHUB_OUTPUT"
+          action=$(node tools/release/rolling-policy.mjs --candidate "$candidate" --latest "$latest")
+          echo "action=$action" >> "$GITHUB_OUTPUT"
+          if [[ "$action" == "noop" ]]; then
+            echo "late completion for ancestor $candidate; latest published commit is $latest"
+          fi
+      - name: Allocate durable generation
+        id: generation
+        if: steps.policy.outputs.action == 'publish'
+        shell: bash
+        run: |
+          set -euo pipefail
+          generation=$(node tools/release/publish-rolling.mjs allocate --root rolling-site --sha "${{ github.event.workflow_run.head_sha }}" --expected-latest-sha "${{ steps.policy.outputs.latest_sha }}")
           echo "generation=$generation" >> "$GITHUB_OUTPUT"
       - name: Create and sign manifests
         shell: bash
+        if: steps.policy.outputs.action == 'publish'
         env:
           MANIFEST_KEY: ${{ secrets.HARMONIA_MANIFEST_SIGNING_KEY_PEM }}
           PUBLIC_KEY: ${{ secrets.HARMONIA_MANIFEST_PUBLIC_KEY_HEX }}
@@ -74,17 +90,19 @@ jobs:
             HARMONIA_MANIFEST_SIGNING_KEY_FILE="$key" node tools/release/sign-manifest.mjs "$RUNNER_TEMP/manifest-$platform.json" "$RUNNER_TEMP/manifest-$platform.json.sig" primary-2026
             cargo run --quiet --manifest-path apps/installer/Cargo.toml --bin harmonia-manifest-verify -- "$platform" "$RUNNER_TEMP/manifest-$platform.json" "$RUNNER_TEMP/manifest-$platform.json.sig"
           done
-          node tools/release/publish-rolling.mjs publish --root rolling-site --sha "$sha" --generation "${{ steps.generation.outputs.generation }}" \
-            --linux-manifest "$RUNNER_TEMP/manifest-linux.json" --linux-signature "$RUNNER_TEMP/manifest-linux.json.sig" \
-            --windows-manifest "$RUNNER_TEMP/manifest-windows.json" --windows-signature "$RUNNER_TEMP/manifest-windows.json.sig"
       - name: Publish immutable history and stable aliases
         shell: bash
+        if: steps.policy.outputs.action == 'publish'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           git fetch origin main --no-tags
-          test "$(git rev-parse origin/main)" = "${{ github.event.workflow_run.head_sha }}"
+          git merge-base --is-ancestor "${{ github.event.workflow_run.head_sha }}" origin/main
+          sha="${{ github.event.workflow_run.head_sha }}"
+          node tools/release/publish-rolling.mjs publish --root rolling-site --sha "$sha" --generation "${{ steps.generation.outputs.generation }}" --expected-latest-sha "${{ steps.policy.outputs.latest_sha }}" \
+            --linux-manifest "$RUNNER_TEMP/manifest-linux.json" --linux-signature "$RUNNER_TEMP/manifest-linux.json.sig" \
+            --windows-manifest "$RUNNER_TEMP/manifest-windows.json" --windows-signature "$RUNNER_TEMP/manifest-windows.json.sig"
           git -C rolling-site config user.name github-actions[bot]
           git -C rolling-site config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git -C rolling-site add rolling

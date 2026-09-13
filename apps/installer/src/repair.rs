@@ -248,11 +248,14 @@ impl<D: DownloadClient, P: ProcessRunner> RepairEngine<D, P> {
             &lock,
         ) {
             Ok(runtime) => {
-                if let Err(error) = publish_stable_launcher(&paths).and_then(|_| {
-                    integration::install(&paths, false).map_err(|error| {
-                        crate::helper::HelperError::Io(std::io::Error::other(error.to_string()))
+                if let Err(error) = publish_installer_helper(&paths)
+                    .and_then(|_| publish_stable_launcher(&paths))
+                    .and_then(|_| {
+                        integration::install(&paths, false).map_err(|error| {
+                            crate::helper::HelperError::Io(std::io::Error::other(error.to_string()))
+                        })
                     })
-                }) {
+                {
                     return Ok(RepairResult {
                         operation_id,
                         target_commit: Some(build.target_commit),

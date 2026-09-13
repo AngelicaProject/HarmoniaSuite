@@ -67,6 +67,8 @@ const REPAIR_JOURNAL_SCHEMA_VERSION: u32 = 1;
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct RepairJournal {
     schema_version: u32,
+    #[serde(default)]
+    operation_id: String,
     target_commit: String,
     quarantine: PathBuf,
     phase: RepairJournalPhase,
@@ -313,12 +315,33 @@ impl ActivationEngine {
         lock: &InstallationLock,
         external_operation_id: Option<&str>,
     ) -> Result<RuntimePaths, ActivationError> {
+        self.activate_with_lock_for_operation_scope(
+            result_path,
+            config,
+            hooks,
+            checker,
+            lock,
+            external_operation_id,
+            None,
+        )
+    }
+
+    fn activate_with_lock_for_operation_scope<H: HealthChecker>(
+        &self,
+        result_path: impl AsRef<Path>,
+        config: &ActivationConfig,
+        hooks: &mut dyn ActivationHooks,
+        checker: &H,
+        lock: &InstallationLock,
+        external_operation_id: Option<&str>,
+        active_repair_operation_id: Option<&str>,
+    ) -> Result<RuntimePaths, ActivationError> {
         if lock.path() != self.paths.lock_path() {
             return Err(ActivationError::InvalidInput(
                 "caller lock does not belong to this installation".to_owned(),
             ));
         }
-        self.recover_locked(config, checker)?;
+        self.recover_locked(config, checker, active_repair_operation_id)?;
         let result = self.load_build_result(result_path.as_ref())?;
         let candidate = self.validate_candidate(&result)?;
         let store = StateStore::new(self.paths.clone());
@@ -498,6 +521,7 @@ impl ActivationEngine {
         let repair_journal = if final_dir.exists() {
             let journal = RepairJournal {
                 schema_version: REPAIR_JOURNAL_SCHEMA_VERSION,
+                operation_id: Uuid::new_v4().simple().to_string(),
                 target_commit: current.clone(),
                 quarantine: quarantine.clone(),
                 phase: RepairJournalPhase::Quarantined,
@@ -510,8 +534,17 @@ impl ActivationEngine {
         if final_dir.exists() {
             fs::rename(&final_dir, &quarantine)?;
         }
-        let result =
-            self.activate_with_lock_for_operation(result_path, config, hooks, checker, lock, None);
+        let result = self.activate_with_lock_for_operation_scope(
+            result_path,
+            config,
+            hooks,
+            checker,
+            lock,
+            None,
+            repair_journal
+                .as_ref()
+                .map(|journal| journal.operation_id.as_str()),
+        );
         match result {
             Ok(runtime) => {
                 if let Some(repair_journal) = repair_journal.as_ref() {
@@ -858,7 +891,7 @@ impl ActivationEngine {
     pub fn recover(&self) -> Result<(), ActivationError> {
         let _lock = InstallationLock::acquire(self.paths.lock_path(), "phase5-recovery")?;
         let config = ActivationConfig::for_paths(&self.paths, PathBuf::new());
-        self.recover_locked(&config, &UnavailableHealthChecker)
+        self.recover_locked(&config, &UnavailableHealthChecker, None)
     }
 
     pub fn recover_with_health_checker<H: HealthChecker>(
@@ -867,7 +900,7 @@ impl ActivationEngine {
         checker: &H,
     ) -> Result<(), ActivationError> {
         let _lock = InstallationLock::acquire(self.paths.lock_path(), "phase5-recovery")?;
-        self.recover_locked(config, checker)
+        self.recover_locked(config, checker, None)
     }
 
     pub fn recover_with_lock<H: HealthChecker>(
@@ -881,16 +914,17 @@ impl ActivationEngine {
                 "caller lock does not belong to this installation".to_owned(),
             ));
         }
-        self.recover_locked(config, checker)
+        self.recover_locked(config, checker, None)
     }
 
     fn recover_locked<H: HealthChecker>(
         &self,
         config: &ActivationConfig,
         checker: &H,
+        active_repair_operation_id: Option<&str>,
     ) -> Result<(), ActivationError> {
         let store = StateStore::new(self.paths.clone());
-        self.recover_repair_journal(&store)?;
+        self.recover_repair_journal(&store, active_repair_operation_id)?;
         let Some(record) = store.load_transaction()? else {
             return Ok(());
         };
@@ -977,12 +1011,21 @@ impl ActivationEngine {
         Ok(())
     }
 
-    fn recover_repair_journal(&self, store: &StateStore) -> Result<(), ActivationError> {
+    fn recover_repair_journal(
+        &self,
+        store: &StateStore,
+        active_operation_id: Option<&str>,
+    ) -> Result<(), ActivationError> {
         let path = self.paths.repair_operation_path();
         if !path.is_file() {
             return Ok(());
         }
         let journal: RepairJournal = serde_json::from_slice(&fs::read(&path)?)?;
+        if active_operation_id.is_some_and(|operation_id| {
+            !journal.operation_id.is_empty() && journal.operation_id == operation_id
+        }) {
+            return Ok(());
+        }
         if journal.schema_version != REPAIR_JOURNAL_SCHEMA_VERSION
             || journal.target_commit.len() != 40
         {
@@ -1772,6 +1815,65 @@ mod tests {
     }
 
     #[test]
+    fn active_repair_journal_is_not_recovered_by_its_own_activation_scope() {
+        let root = tempdir().unwrap();
+        let paths = paths(root.path());
+        let store = StateStore::new(paths.clone());
+        store.initialize().unwrap();
+        let target = "a".repeat(40);
+        let quarantine = paths
+            .versions_dir()
+            .join(format!(".{target}.repair-old-active"));
+        fs::create_dir_all(&quarantine).unwrap();
+        let journal = RepairJournal {
+            schema_version: REPAIR_JOURNAL_SCHEMA_VERSION,
+            operation_id: "active-repair".to_owned(),
+            target_commit: target,
+            quarantine: quarantine.clone(),
+            phase: RepairJournalPhase::Quarantined,
+        };
+        crate::state::atomic_write_json(&paths.repair_operation_path(), &journal).unwrap();
+
+        ActivationEngine::new(paths.clone())
+            .recover_repair_journal(&store, Some("active-repair"))
+            .unwrap();
+        assert!(quarantine.is_dir());
+        assert!(paths.repair_operation_path().is_file());
+    }
+
+    #[test]
+    fn stale_repair_journal_restores_quarantine_as_the_original_version() {
+        let root = tempdir().unwrap();
+        let paths = paths(root.path());
+        let store = StateStore::new(paths.clone());
+        store.initialize().unwrap();
+        let target = "b".repeat(40);
+        let quarantine = paths
+            .versions_dir()
+            .join(format!(".{target}.repair-old-stale"));
+        fs::create_dir_all(&quarantine).unwrap();
+        fs::write(quarantine.join("original"), b"original").unwrap();
+        let journal = RepairJournal {
+            schema_version: REPAIR_JOURNAL_SCHEMA_VERSION,
+            operation_id: "stale-repair".to_owned(),
+            target_commit: target.clone(),
+            quarantine: quarantine.clone(),
+            phase: RepairJournalPhase::Quarantined,
+        };
+        crate::state::atomic_write_json(&paths.repair_operation_path(), &journal).unwrap();
+
+        ActivationEngine::new(paths.clone())
+            .recover_repair_journal(&store, None)
+            .unwrap();
+        assert!(!quarantine.exists());
+        assert_eq!(
+            fs::read(paths.versions_dir().join(target).join("original")).unwrap(),
+            b"original"
+        );
+        assert!(!paths.repair_operation_path().exists());
+    }
+
+    #[test]
     fn database_snapshot_is_unique_and_restorable() {
         let root = tempdir().unwrap();
         let user_data = root.path().join("user-data");
@@ -2197,6 +2299,57 @@ mod tests {
         assert!(!runtime.version_dir.join("frontend").exists());
         assert!(!runtime.version_dir.starts_with(&paths.user_data_root));
         assert!(!runtime.version_dir.join("source").exists());
+    }
+
+    #[test]
+    fn repair_replaces_corrupt_current_without_self_recovery_rollback() {
+        let root = tempdir().unwrap();
+        let paths = paths(root.path());
+        let engine = ActivationEngine::new(paths.clone());
+        let mut hooks = NoopActivationHooks;
+        let (first_path, first) = fixture_result(&paths, &"a".repeat(40), "tx-repair-base");
+        engine
+            .activate(
+                first_path,
+                &fixture_config(&paths),
+                &mut hooks,
+                &FixtureHealthChecker {
+                    healthy: true,
+                    fail_commit: None,
+                },
+            )
+            .unwrap();
+        fs::write(
+            paths
+                .versions_dir()
+                .join(&first.target_commit)
+                .join("backend/harmonia-suite.jar"),
+            b"corrupt",
+        )
+        .unwrap();
+        let (repair_path, repair_result) =
+            fixture_result(&paths, &first.target_commit, "tx-repair-replacement");
+        let lock = InstallationLock::acquire(paths.lock_path(), "repair-test").unwrap();
+        let runtime = engine
+            .repair_current_with_lock(
+                repair_path,
+                &fixture_config(&paths),
+                &mut hooks,
+                &FixtureHealthChecker {
+                    healthy: true,
+                    fail_commit: None,
+                },
+                &lock,
+            )
+            .unwrap();
+
+        assert_eq!(runtime.metadata.target_commit, repair_result.target_commit);
+        assert!(engine.resolve_current().unwrap().is_some());
+        assert!(!paths.repair_operation_path().exists());
+        assert!(fs::read_dir(paths.versions_dir())
+            .unwrap()
+            .filter_map(Result::ok)
+            .all(|entry| !entry.file_name().to_string_lossy().contains(".repair-old-")));
     }
 
     #[test]

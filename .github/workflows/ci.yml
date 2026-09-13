@@ -116,6 +116,8 @@ jobs:
       - run: ./mvnw -B -q test
       - run: node --test tools/test-release-notes.mjs
       - run: node --test tools/release/test-manifest.mjs
+      - run: node --test tools/release/test-rolling-policy.mjs
+      - run: node --test tools/release/test-rolling-publication.mjs
       - uses: codecov/codecov-action@v5
         with:
           use_oidc: true

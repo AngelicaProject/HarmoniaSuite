@@ -38,8 +38,10 @@ Release CI targets Windows x64 and Linux x64 only. Tagged releases publish only 
 stable launcher distribution; they do not drive the rolling application target. Authenticode is
 optional and the published Windows metadata says whether binaries are signed. Ed25519 signing of
 rolling manifests is mandatory and fail-closed. The separate `workflow_run` rolling publication
-uses the exact green `main` commit, a monotonic immutable generation history, and stable aliases
-updated last at `angelicaproject.github.io/HarmoniaSuite/rolling/{windows,linux}`. Update identity
+uses an exact green commit from `main`, a monotonic immutable generation history, and stable aliases
+updated last at `angelicaproject.github.io/HarmoniaSuite/rolling/{windows,linux}`. Each candidate
+must remain in `main` history and be equal to or a descendant of the latest published target;
+late ancestor completions are no-ops, so the alias never moves backward. Update identity
 is the exact commit object ID plus generation; the display product version is only a snapshot
 label. Portable ZIP/MSI and macOS artifacts are intentionally out of scope.
 

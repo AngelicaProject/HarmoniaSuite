@@ -2,6 +2,8 @@
 //! no mutable checkout or system-wide registration is used.
 
 use std::fs;
+#[cfg(windows)]
+use std::path::Path;
 use std::path::PathBuf;
 
 use thiserror::Error;
@@ -61,19 +63,32 @@ pub fn remove(paths: &InstallationPaths) -> Result<(), IntegrationError> {
 /// degraded installation state rather than silently reported as healthy.
 pub fn is_complete(paths: &InstallationPaths) -> bool {
     match paths.platform {
-        Platform::Linux => {
-            paths.linux_desktop_entry_path().is_file() && paths.linux_icon_path().is_file()
-        }
-        Platform::Windows => {
-            paths.windows_start_menu_shortcut_path().is_file() && windows_registry_complete(paths)
-        }
+        Platform::Linux => linux_integration_complete(paths),
+        Platform::Windows => windows_integration_complete(paths),
     }
+}
+
+fn linux_integration_complete(paths: &InstallationPaths) -> bool {
+    let launcher = paths.stable_launcher_path();
+    let icon = paths.linux_icon_path();
+    let entry = paths.linux_desktop_entry_path();
+    let Ok(content) = fs::read_to_string(&entry) else {
+        return false;
+    };
+    let launcher = desktop_exec_path(&launcher.display().to_string());
+    let icon = desktop_exec_path(&icon.display().to_string());
+    content
+        == format!(
+            "[Desktop Entry]\nType=Application\nName=HarmoniaSuite\nExec={launcher}\nTryExec={launcher}\nIcon={icon}\nCategories=AudioVideo;\nTerminal=false\n"
+        )
+        && paths.linux_icon_path().is_file()
+        && paths.stable_launcher_path().is_file()
 }
 
 #[cfg(windows)]
 fn windows_registry_complete(paths: &InstallationPaths) -> bool {
     use windows_sys::Win32::System::Registry::{
-        RegCloseKey, RegOpenKeyExW, HKEY_CURRENT_USER, KEY_READ,
+        RegCloseKey, RegOpenKeyExW, RegQueryValueExW, HKEY_CURRENT_USER, KEY_READ, REG_SZ,
     };
     let key = to_wide(paths.windows_uninstall_registry_key());
     let mut handle = std::ptr::null_mut();
@@ -82,13 +97,213 @@ fn windows_registry_complete(paths: &InstallationPaths) -> bool {
     if result != 0 {
         return false;
     }
+    let product_version = installed_product_version(paths);
+    let expected = [
+        ("DisplayName", "HarmoniaSuite".to_owned()),
+        (
+            "DisplayVersion",
+            product_version.unwrap_or_else(|| crate::DEFAULT_PRODUCT_VERSION.to_owned()),
+        ),
+        ("Publisher", "AngelicaProject".to_owned()),
+        ("InstallLocation", paths.app_root.display().to_string()),
+        (
+            "DisplayIcon",
+            paths.stable_launcher_path().display().to_string(),
+        ),
+        (
+            "UninstallString",
+            format!("\"{}\" uninstall", paths.installer_binary_path().display()),
+        ),
+        (
+            "QuietUninstallString",
+            format!("\"{}\" uninstall", paths.installer_binary_path().display()),
+        ),
+    ];
+    let values_match = expected.iter().all(|(name, expected)| {
+        let name = to_wide(name);
+        let mut kind = 0;
+        let mut size = 0;
+        let query = unsafe {
+            RegQueryValueExW(
+                handle,
+                name.as_ptr(),
+                std::ptr::null_mut(),
+                &mut kind,
+                std::ptr::null_mut(),
+                &mut size,
+            )
+        };
+        if query != 0 || kind != REG_SZ || size < 2 {
+            return false;
+        }
+        let mut bytes = vec![0u8; size as usize];
+        let query = unsafe {
+            RegQueryValueExW(
+                handle,
+                name.as_ptr(),
+                std::ptr::null_mut(),
+                &mut kind,
+                bytes.as_mut_ptr(),
+                &mut size,
+            )
+        };
+        if query != 0 || kind != REG_SZ {
+            return false;
+        }
+        let units =
+            unsafe { std::slice::from_raw_parts(bytes.as_ptr() as *const u16, size as usize / 2) };
+        let actual = String::from_utf16_lossy(units)
+            .trim_end_matches('\0')
+            .to_owned();
+        actual == expected.as_str()
+    });
     unsafe { RegCloseKey(handle) };
-    true
+    values_match
+        && windows_shortcut_targets(
+            &paths.windows_start_menu_shortcut_path(),
+            &paths.stable_launcher_path(),
+        )
 }
 
 #[cfg(not(windows))]
 fn windows_registry_complete(_paths: &InstallationPaths) -> bool {
     true
+}
+
+#[cfg(windows)]
+fn windows_integration_complete(paths: &InstallationPaths) -> bool {
+    windows_registry_complete(paths)
+}
+
+#[cfg(not(windows))]
+fn windows_integration_complete(_paths: &InstallationPaths) -> bool {
+    true
+}
+
+#[cfg(windows)]
+fn windows_shortcut_targets(path: &Path, target: &Path) -> bool {
+    use std::mem::transmute;
+    use windows_sys::core::GUID;
+    use windows_sys::Win32::System::Com::{
+        CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER,
+        COINIT_APARTMENTTHREADED,
+    };
+
+    #[repr(C)]
+    struct ComObject {
+        vtable: *const usize,
+    }
+    type QueryInterface =
+        unsafe extern "system" fn(*mut ComObject, *const GUID, *mut *mut std::ffi::c_void) -> i32;
+    type Release = unsafe extern "system" fn(*mut ComObject) -> u32;
+    type Load = unsafe extern "system" fn(*mut ComObject, *const u16, u32) -> i32;
+    type GetPath =
+        unsafe extern "system" fn(*mut ComObject, *mut u16, i32, *mut std::ffi::c_void, u32) -> i32;
+
+    let clsid_shell_link = GUID {
+        data1: 0x00021401,
+        data2: 0,
+        data3: 0,
+        data4: [0xc0, 0, 0, 0, 0, 0, 0, 0x46],
+    };
+    let iid_shell_link = GUID {
+        data1: 0x000214f9,
+        data2: 0,
+        data3: 0,
+        data4: [0xc0, 0, 0, 0, 0, 0, 0, 0x46],
+    };
+    let iid_persist_file = GUID {
+        data1: 0x0000010b,
+        data2: 0,
+        data3: 0,
+        data4: [0xc0, 0, 0, 0, 0, 0, 0, 0x46],
+    };
+    let init = unsafe { CoInitializeEx(std::ptr::null(), COINIT_APARTMENTTHREADED as u32) };
+    if init < 0 {
+        return false;
+    }
+    let mut shell: *mut ComObject = std::ptr::null_mut();
+    let created = unsafe {
+        CoCreateInstance(
+            &clsid_shell_link,
+            std::ptr::null_mut(),
+            CLSCTX_INPROC_SERVER,
+            &iid_shell_link,
+            &mut shell as *mut _ as *mut *mut std::ffi::c_void,
+        )
+    };
+    if created < 0 || shell.is_null() {
+        unsafe { CoUninitialize() };
+        return false;
+    }
+    let query: QueryInterface = unsafe { transmute::<usize, QueryInterface>(*((*shell).vtable)) };
+    let mut persist: *mut ComObject = std::ptr::null_mut();
+    let queried = unsafe {
+        query(
+            shell,
+            &iid_persist_file,
+            &mut persist as *mut _ as *mut *mut std::ffi::c_void,
+        )
+    };
+    if queried < 0 || persist.is_null() {
+        let release: Release = unsafe { transmute::<usize, Release>(*((*shell).vtable.add(2))) };
+        unsafe {
+            release(shell);
+            CoUninitialize();
+        }
+        return false;
+    }
+    let load: Load = unsafe { transmute::<usize, Load>(*((*persist).vtable.add(5))) };
+    let loaded = unsafe { load(persist, to_wide(path).as_ptr(), 0) };
+    let mut value = vec![0u16; 32768];
+    let get_path: GetPath = unsafe { transmute::<usize, GetPath>(*((*shell).vtable.add(3))) };
+    let got_path = if loaded >= 0 {
+        unsafe {
+            get_path(
+                shell,
+                value.as_mut_ptr(),
+                value.len() as i32,
+                std::ptr::null_mut(),
+                0,
+            )
+        }
+    } else {
+        -1
+    };
+    let release_persist: Release =
+        unsafe { transmute::<usize, Release>(*((*persist).vtable.add(2))) };
+    let release_shell: Release = unsafe { transmute::<usize, Release>(*((*shell).vtable.add(2))) };
+    unsafe {
+        release_persist(persist);
+        release_shell(shell);
+        CoUninitialize();
+    }
+    if got_path < 0 {
+        return false;
+    }
+    let length = value
+        .iter()
+        .position(|unit| *unit == 0)
+        .unwrap_or(value.len());
+    fs::canonicalize(String::from_utf16_lossy(&value[..length])).ok()
+        == fs::canonicalize(target).ok()
+}
+
+fn installed_product_version(paths: &InstallationPaths) -> Option<String> {
+    crate::state::StateStore::new(paths.clone())
+        .load_installation()
+        .ok()
+        .and_then(|state| state.product_version)
+        .or_else(|| {
+            fs::read(paths.installer_binary_metadata_path())
+                .ok()
+                .and_then(|bytes| {
+                    serde_json::from_slice::<crate::helper::InstallerHelperMetadata>(&bytes)
+                        .ok()
+                        .map(|metadata| metadata.product_version)
+                })
+        })
+        .filter(|value| !value.trim().is_empty())
 }
 
 fn install_linux(paths: &InstallationPaths) -> Result<(), IntegrationError> {
@@ -286,7 +501,11 @@ fn write_windows_registry(paths: &InstallationPaths) -> Result<(), IntegrationEr
     }
     let values = [
         ("DisplayName", "HarmoniaSuite".to_owned()),
-        ("DisplayVersion", crate::DEFAULT_PRODUCT_VERSION.to_owned()),
+        (
+            "DisplayVersion",
+            installed_product_version(paths)
+                .unwrap_or_else(|| crate::DEFAULT_PRODUCT_VERSION.to_owned()),
+        ),
         ("Publisher", "AngelicaProject".to_owned()),
         ("InstallLocation", paths.app_root.display().to_string()),
         (
@@ -400,6 +619,15 @@ mod tests {
         )));
         assert!(!entry.contains("%U"));
         assert!(paths.linux_icon_path().is_file());
+        assert!(is_complete(&paths));
+        fs::write(
+            &paths.linux_desktop_entry_path(),
+            "[Desktop Entry]\nExec=wrong\n",
+        )
+        .unwrap();
+        assert!(!is_complete(&paths));
+        install(&paths, false).unwrap();
+        assert!(is_complete(&paths));
         remove(&paths).unwrap();
         assert!(!paths.linux_desktop_entry_path().exists());
     }

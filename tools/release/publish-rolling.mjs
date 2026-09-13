@@ -16,7 +16,7 @@ for (let index = 0; index < args.length; index += 2) {
 
 const root = values.get("root");
 const sha = values.get("sha")?.toLowerCase();
-if (!root || !/^[0-9a-f]{40}$/.test(sha ?? "")) throw new Error("--root and full --sha are required");
+if (!root) throw new Error("--root is required");
 const indexPath = join(root, "rolling", "generations", "index.json");
 
 async function readIndex() {
@@ -31,7 +31,29 @@ async function readIndex() {
 const index = await readIndex();
 if (index.schemaVersion !== 1 || typeof index.commits !== "object") throw new Error("rolling index schema is invalid");
 
+function latestCommit(value) {
+  return Object.entries(value.commits)
+    .filter(([, entry]) => Number.isSafeInteger(Number(entry?.generation)) && Number(entry.generation) > 0)
+    .sort(([, left], [, right]) => Number(right.generation) - Number(left.generation))[0]?.[0] ?? "";
+}
+
+function assertExpectedLatest() {
+  const expected = values.get("expected-latest-sha");
+  if (expected !== undefined && expected.toLowerCase() !== latestCommit(index)) {
+    throw new Error("rolling publication state changed since policy decision");
+  }
+}
+
+if (command === "latest") {
+  if (values.size !== 1 || !values.has("root")) throw new Error("latest accepts only --root");
+  process.stdout.write(`${latestCommit(index)}\n`);
+  process.exit(0);
+}
+
+if (!/^[0-9a-f]{40}$/.test(sha ?? "")) throw new Error("full --sha is required");
+
 if (command === "allocate") {
+  assertExpectedLatest();
   const existing = index.commits[sha];
   process.stdout.write(`${existing?.generation ?? (Number(index.latestGeneration) + 1)}\n`);
   process.exit(0);
@@ -40,6 +62,7 @@ if (command === "allocate") {
 if (command !== "publish") throw new Error("command must be allocate or publish");
 const generation = Number(values.get("generation"));
 if (!Number.isSafeInteger(generation) || generation < 1) throw new Error("positive --generation is required");
+assertExpectedLatest();
 const platforms = ["windows", "linux"];
 const incoming = {};
 for (const platform of platforms) {
@@ -58,6 +81,10 @@ for (const platform of platforms) {
 const existing = index.commits[sha];
 if (existing && existing.generation !== generation) throw new Error("commit is already mapped to a different generation");
 if (!existing && generation <= Number(index.latestGeneration)) throw new Error("generation is not monotonic");
+const generationOwner = Object.entries(index.commits).find(
+  ([candidate, entry]) => candidate !== sha && Number(entry?.generation) === generation,
+);
+if (generationOwner) throw new Error(`generation is already mapped to ${generationOwner[0]}`);
 
 const generationDir = join(root, "rolling", "generations", String(generation).padStart(8, "0"));
 for (const platform of platforms) {

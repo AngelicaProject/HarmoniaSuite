@@ -116,22 +116,55 @@ jobs:
           pattern: release-*
           path: release-input
           merge-multiple: false
-      - name: Reuse or create draft release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          if ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release create "$GITHUB_REF_NAME" --draft --title "HarmoniaSuite $GITHUB_REF_NAME" --notes "Tagged HarmoniaSuite Windows/Linux x64 distribution. Rolling main updates are published separately."
-          fi
-      - name: Upload exact assets and publish after verification
+      - name: Publish exact assets or verify immutable release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          tag="$GITHUB_REF_NAME"
+          repo="$GITHUB_REPOSITORY"
           for sums in release-input/release-*/sha256sums-*.txt; do
             (cd "$(dirname "$sums")" && sha256sum -c "$(basename "$sums")")
           done
+          if release_json="$(gh release view "$tag" --repo "$repo" --json isDraft 2>/dev/null)"; then
+            is_draft="$(jq -r '.isDraft' <<<"$release_json")"
+          else
+            gh release create "$tag" --repo "$repo" --draft \
+              --title "HarmoniaSuite $tag" \
+              --notes "Tagged HarmoniaSuite Windows/Linux x64 distribution. Rolling main updates are published separately."
+            is_draft=true
+          fi
+
+          if [[ "$is_draft" != "true" ]]; then
+            existing="$RUNNER_TEMP/existing-release"
+            expected="$RUNNER_TEMP/expected-release"
+            rm -rf "$existing" "$expected"
+            mkdir -p "$existing" "$expected"
+            gh release download "$tag" --repo "$repo" --dir "$existing"
+            while IFS= read -r -d '' file; do
+              name="$(basename "$file")"
+              destination="$expected/$name"
+              if [[ -e "$destination" ]] && ! cmp -s "$file" "$destination"; then
+                echo "expected asset basename collision: $name" >&2
+                exit 1
+              fi
+              cp "$file" "$destination"
+            done < <(find release-input -type f -print0)
+            while IFS= read -r -d '' file; do
+              name="$(basename "$file")"
+              [[ -f "$expected/$name" ]] || { echo "published release has unexpected asset: $name" >&2; exit 1; }
+              cmp -s "$file" "$expected/$name" || { echo "published release asset differs: $name" >&2; exit 1; }
+            done < <(find "$existing" -type f -print0)
+            while IFS= read -r -d '' file; do
+              name="$(basename "$file")"
+              [[ -f "$existing/$name" ]] || { echo "published release is missing asset: $name" >&2; exit 1; }
+              cmp -s "$file" "$existing/$name" || { echo "published release asset differs: $name" >&2; exit 1; }
+            done < <(find "$expected" -type f -print0)
+            echo "tagged release $tag is already published and matches expected assets; no-op"
+            exit 0
+          fi
+
           while IFS= read -r -d '' file; do
-            gh release upload "$GITHUB_REF_NAME" "$file" --clobber
+            gh release upload "$tag" --repo "$repo" "$file" --clobber
           done < <(find release-input -type f -print0)
-          gh release edit "$GITHUB_REF_NAME" --draft=false
+          gh release edit "$tag" --repo "$repo" --draft=false
