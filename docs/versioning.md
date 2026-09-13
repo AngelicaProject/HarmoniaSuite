@@ -15,6 +15,10 @@ The product version may be a stable SemVer release or a development SemVer such 
 `1.0.12-SNAPSHOT`. Rolling builds do not bump this value for every commit. Their identity is the
 exact commit OID plus the durable rolling generation.
 
+At a product release, the current stable product version must be greater than the product version
+of the previous valid product release. This prevents re-publishing an older product under a new
+or repeated tag.
+
 ## Installer Engine Version
 
 `installerVersion` is the independent SemVer version of the Rust installer/updater/launcher
@@ -30,6 +34,10 @@ version before a new installer binary is published. An installer-only compatible
 is the signed manifest's `minInstallerVersion`; it is not automatically copied from
 `installerVersion`. It must be less than or equal to `installerVersion` and is raised only when a
 new rolling contract cannot safely run on older engines.
+
+The two values are separate by definition: they may be equal in the initial release, but a new
+installer engine does not automatically raise the compatibility floor. The floor changes only
+after the required installer engine is published and the new rolling contract has been reviewed.
 
 The compatible installer must be published and available to users before a later main commit
 raises this floor. Otherwise an old client could create an update deadlock. If the running engine
@@ -76,6 +84,20 @@ installer at compile time. A fresh install from that tagged installer builds onl
 seed commit and fails closed if its `versions.json` product version differs. These values are not
 runtime CLI or environment overrides; after the seed is installed, normal signed rolling updates
 continue to select later exact commits.
+
+The first-release flow is therefore:
+
+```text
+tag v1.0.11
+  -> embedded exact seed commit
+  -> exact Product Version 1.0.11
+  -> successful first launch
+  -> subsequent updates from signed rolling manifests
+```
+
+If installer source or behavior changed since the previous valid product release, the next
+product release must use a greater `installerVersion`. If the installer did not change, reusing
+the engine version is allowed.
 
 ## Lifecycle examples
 

@@ -23,9 +23,9 @@ Machine translation runs on either Gemini or OpenRouter. Paste the key in settin
 
 ## Quick install
 
-### Windows, MSI
+### Windows and Linux
 
-Grab the MSI from [Releases](https://github.com/AngelicaProject/HarmoniaSuite/releases) — it installs per user, no admin rights needed. The bundled JDK, Git, Node.js toolchain, and unpacker come with it, so you only point it at the game path. Node.js is used for future source updates and is not needed to run the packaged JAR. State lives in `%APPDATA%/HarmoniaSuite`.
+Download the setup or launcher artifact for Windows x64 or Linux x64 from [Releases](https://github.com/AngelicaProject/HarmoniaSuite/releases). Installation is per user with no admin rights needed; the managed JDK and Node.js toolchain support local builds and are not needed to run the packaged JAR. State lives in `%APPDATA%/HarmoniaSuite` on Windows.
 
 Updates handle themselves: a version chip in the status bar, one button. The app pulls sources and rebuilds locally, rolling back on failure. If your checkout is dirty it refuses the update instead of risking local work.
 
@@ -47,8 +47,8 @@ npm ci
 npm run dev
 ```
 
-For the browser-independent frontend, keep API calls relative to `/api/**`. The Phase 1 desktop shell
-serves the built frontend through `harmonia://app/`, chooses a dynamic loopback port for Spring Boot,
+For the browser-independent frontend, keep API calls relative to `/api/**`. The desktop shell serves
+the built frontend through `harmonia://app/`, chooses a dynamic loopback port for Spring Boot,
 waits for `/api/status`, and proxies API requests without exposing that port to Vue. See
 [apps/desktop/README.md](apps/desktop/README.md) for the manual Electron run. Vite's fixed-port proxy
 remains only as a standalone browser development fallback.
@@ -113,8 +113,9 @@ The production frontend is built by Vite and copied directly to `target/classes/
 ## Release
 
 Version policy lives in [`versions.json`](versions.json) and is documented in
-[`docs/versioning.md`](docs/versioning.md). Development happens on `*-SNAPSHOT`. To cut a
-release, use `node tools/version/set-version.mjs product X.Y.Z`, run the version check, then
+[`docs/versioning.md`](docs/versioning.md). Release and rolling-update security operations are
+documented in [`docs/release-operations.md`](docs/release-operations.md). Development happens on
+`*-SNAPSHOT`; use `node tools/version/set-version.mjs product X.Y.Z`, run the version check, then
 create the matching `vX.Y.Z` tag. CI publishes a HarmoniaSuite product release and records the
 independent installer engine version in `release-metadata.json`.
 

@@ -113,7 +113,7 @@ without a deliberate migration and backup coverage.
 
 ## Known migration delta
 
-The current Java `UpdateService` still performs `git pull` and `git reset --hard` in a checkout, and
-the current release workflow publishes a Windows-only Java/AWT + external .NET unpacker package.
-These are legacy paths, not the new contract. They remain untouched in Phase 1 except that backend
-desktop lifecycle hooks are disabled; responsibility moves to `apps/installer` in later phases.
+The current Java `UpdateService` still performs `git pull` and `git reset --hard` in a checkout.
+That legacy path is not the production release/update contract; responsibility belongs to the
+transactional `apps/installer` flow. Release platform and artifact boundaries are documented in
+[`release-operations.md`](release-operations.md).
