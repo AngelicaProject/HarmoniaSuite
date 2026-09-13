@@ -165,11 +165,6 @@ fn windows_registry_complete(paths: &InstallationPaths) -> bool {
         )
 }
 
-#[cfg(not(windows))]
-fn windows_registry_complete(_paths: &InstallationPaths) -> bool {
-    true
-}
-
 #[cfg(windows)]
 fn windows_integration_complete(paths: &InstallationPaths) -> bool {
     windows_registry_complete(paths)
@@ -289,6 +284,7 @@ fn windows_shortcut_targets(path: &Path, target: &Path) -> bool {
         == fs::canonicalize(target).ok()
 }
 
+#[cfg(windows)]
 fn installed_product_version(paths: &InstallationPaths) -> Option<String> {
     crate::state::StateStore::new(paths.clone())
         .load_installation()
