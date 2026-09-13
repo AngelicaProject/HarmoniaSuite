@@ -3,13 +3,42 @@ name: Production release
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing immutable product release tag
+        required: true
+        type: string
 
 permissions:
   contents: write
 
 jobs:
+  resolve-release:
+    name: Resolve release tag
+    runs-on: ubuntu-latest
+    outputs:
+      release_tag: ${{ steps.release-tag.outputs.release_tag }}
+    steps:
+      - name: Validate release tag input
+        id: release-tag
+        shell: bash
+        env:
+          RELEASE_TAG_INPUT: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          tag="$RELEASE_TAG_INPUT"
+          if [[ ! "$tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "release tag must be vX.Y.Z: ${tag:-<missing>}" >&2
+            exit 1
+          fi
+          echo "release_tag=$tag" >> "$GITHUB_OUTPUT"
+
   verify-and-build:
     name: Build ${{ matrix.platform }} x64
+    needs: resolve-release
+    env:
+      RELEASE_TAG: ${{ needs.resolve-release.outputs.release_tag }}
     strategy:
       fail-fast: false
       matrix:
@@ -22,12 +51,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ needs.resolve-release.outputs.release_tag }}
           fetch-depth: 0
           persist-credentials: false
       - name: Verify exact release commit
         shell: bash
-        run: test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+        run: |
+          set -euo pipefail
+          release_commit="$(git rev-parse HEAD)"
+          tag_commit="$(git rev-list -n 1 "$RELEASE_TAG")"
+          test "$release_commit" = "$tag_commit"
+          echo "release checkout: $RELEASE_TAG @ $release_commit"
       - uses: dtolnay/rust-toolchain@1.89.0
+        with:
+          components: rustfmt, clippy
       - uses: actions/setup-node@v4
         with:
           node-version-file: frontend/.node-version
@@ -36,15 +73,20 @@ jobs:
             frontend/package-lock.json
             apps/desktop/package-lock.json
       - name: Check product version contract and release tag
+        shell: bash
         run: |
+          set -euo pipefail
           node tools/version/check-versions.mjs
-          node tools/release/check-release.mjs "$GITHUB_REF_NAME"
+          node tools/release/check-release.mjs "$RELEASE_TAG"
       - name: Embed immutable release bootstrap seed
         shell: bash
         run: |
           set -euo pipefail
-          echo "HARMONIA_RELEASE_SEED_COMMIT=$GITHUB_SHA" >> "$GITHUB_ENV"
-          echo "HARMONIA_RELEASE_PRODUCT_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+          release_commit="$(git rev-parse HEAD)"
+          tag_commit="$(git rev-list -n 1 "$RELEASE_TAG")"
+          test "$release_commit" = "$tag_commit"
+          echo "HARMONIA_RELEASE_SEED_COMMIT=$release_commit" >> "$GITHUB_ENV"
+          echo "HARMONIA_RELEASE_PRODUCT_VERSION=${RELEASE_TAG#v}" >> "$GITHUB_ENV"
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -123,12 +165,14 @@ jobs:
 
   publish:
     name: Publish HarmoniaSuite product release
-    needs: verify-and-build
+    needs: [resolve-release, verify-and-build]
     runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ needs.resolve-release.outputs.release_tag }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ needs.resolve-release.outputs.release_tag }}
           fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-node@v4
@@ -138,9 +182,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          node tools/release/check-release.mjs "$GITHUB_REF_NAME"
+          release_commit="$(git rev-parse HEAD)"
+          tag_commit="$(git rev-list -n 1 "$RELEASE_TAG")"
+          test "$release_commit" = "$tag_commit"
+          node tools/release/check-release.mjs "$RELEASE_TAG"
           mkdir -p release-input/release-metadata
-          node tools/release/create-release-metadata.mjs --out release-input/release-metadata/release-metadata.json
+          node tools/release/create-release-metadata.mjs --commit "$release_commit" --out release-input/release-metadata/release-metadata.json
       - uses: actions/download-artifact@v4
         with:
           pattern: release-*
@@ -151,7 +198,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          tag="$GITHUB_REF_NAME"
+          tag="$RELEASE_TAG"
           repo="$GITHUB_REPOSITORY"
           for sums in release-input/release-*/sha256sums-*.txt; do
             (cd "$(dirname "$sums")" && sha256sum -c "$(basename "$sums")")
