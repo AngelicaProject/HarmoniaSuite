@@ -218,6 +218,9 @@ fn safe_detached_environment_allowlist() -> &'static [&'static str] {
             "DISPLAY",
             "WAYLAND_DISPLAY",
             "XDG_RUNTIME_DIR",
+            "XDG_DATA_HOME",
+            "XDG_STATE_HOME",
+            "XDG_CACHE_HOME",
             "DBUS_SESSION_BUS_ADDRESS",
             "XAUTHORITY",
         ]

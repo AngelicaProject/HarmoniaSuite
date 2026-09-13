@@ -17,7 +17,8 @@ use crate::catalog::production_descriptors;
 use crate::detached::{DetachedLaunchSpec, DetachedLauncher};
 use crate::diagnostics::{DiagnosticError, DiagnosticLogger};
 use crate::download::DownloadClient;
-use crate::helper::publish_installer_helper;
+use crate::helper::{publish_installer_helper, publish_stable_launcher};
+use crate::integration;
 use crate::lock::{InstallationLock, LockError};
 use crate::paths::InstallationPaths;
 use crate::process::{ProcessRunner, SystemProcessRunner};
@@ -36,19 +37,15 @@ fn now_ms() -> u128 {
         .unwrap_or_default()
         .as_millis()
 }
-pub const DEFAULT_PRODUCT_VERSION: &str = "1.0.11-SNAPSHOT";
-
 #[derive(Clone, Debug)]
 pub struct BootstrapOptions {
     remote_url: String,
-    product_version: String,
 }
 
 impl Default for BootstrapOptions {
     fn default() -> Self {
         Self {
             remote_url: DEFAULT_REMOTE_URL.to_owned(),
-            product_version: DEFAULT_PRODUCT_VERSION.to_owned(),
         }
     }
 }
@@ -125,7 +122,7 @@ pub enum BootstrapError {
 
 fn new_bootstrap_journal(
     paths: &InstallationPaths,
-    options: &BootstrapOptions,
+    _options: &BootstrapOptions,
     operation_id: String,
 ) -> BootstrapJournal {
     let launch_nonce = Uuid::new_v4().simple().to_string();
@@ -138,7 +135,7 @@ fn new_bootstrap_journal(
         finished_at_ms: None,
         phase: BootstrapJournalPhase::Recovering,
         target_commit: None,
-        product_version: options.product_version.clone(),
+        product_version: String::new(),
         toolchains: BTreeMap::new(),
         activation_completed: false,
         launch_attempted: false,
@@ -271,6 +268,31 @@ pub fn runtime_launch_spec(
     ack_path: &Path,
     nonce: &str,
 ) -> DetachedLaunchSpec {
+    let mut spec = installed_runtime_spec(paths, runtime);
+    spec = spec
+        .env("HARMONIA_LAUNCH_ACK", ack_path.display().to_string())
+        .env("HARMONIA_LAUNCH_OPERATION_ID", operation_id.to_owned())
+        .env(
+            "HARMONIA_LAUNCH_COMMIT",
+            runtime.metadata.target_commit.clone(),
+        )
+        .env("HARMONIA_LAUNCH_NONCE", nonce.to_owned());
+    spec
+}
+
+/// Runtime contract used by the stable OS launcher. Unlike an install/update
+/// handoff it has no operation-scoped launch acknowledgement.
+pub fn stable_runtime_launch_spec(
+    paths: &InstallationPaths,
+    runtime: &crate::activation::RuntimePaths,
+) -> DetachedLaunchSpec {
+    installed_runtime_spec(paths, runtime)
+}
+
+fn installed_runtime_spec(
+    paths: &InstallationPaths,
+    runtime: &crate::activation::RuntimePaths,
+) -> DetachedLaunchSpec {
     let mut spec = DetachedLaunchSpec::new(runtime.desktop_executable.clone())
         .current_dir(runtime.version_dir.clone())
         .env("HARMONIA_RUNTIME_MODE", "installed")
@@ -307,13 +329,7 @@ pub fn runtime_launch_spec(
         "HARMONIA_INSTALLER_BINARY",
         paths.bin_dir().join(installer_name).display().to_string(),
     );
-    spec.env("HARMONIA_LAUNCH_ACK", ack_path.display().to_string())
-        .env("HARMONIA_LAUNCH_OPERATION_ID", operation_id.to_owned())
-        .env(
-            "HARMONIA_LAUNCH_COMMIT",
-            runtime.metadata.target_commit.clone(),
-        )
-        .env("HARMONIA_LAUNCH_NONCE", nonce.to_owned())
+    spec
 }
 
 fn desktop_launch_spec(
@@ -446,6 +462,30 @@ fn reconcile_running_activation<L: DetachedLauncher>(
             false,
         );
     }
+    if let Err(error) = publish_stable_launcher(paths).and_then(|_| {
+        integration::install(paths, false).map_err(|error| {
+            crate::helper::HelperError::Io(std::io::Error::other(error.to_string()))
+        })
+    }) {
+        let reason = format!("stable launcher/OS integration publication failed: {error}");
+        journal.failure = Some(reason.clone());
+        return finish_result(
+            paths,
+            logger,
+            &operation_id,
+            options,
+            started_at_ms,
+            journal,
+            BootstrapStatus::LaunchFailed {
+                reason,
+                version_dir: runtime.version_dir,
+            },
+            Some(runtime.metadata.target_commit),
+            runtime.metadata.toolchains,
+            true,
+            false,
+        );
+    }
     journal.phase = BootstrapJournalPhase::Launching;
     persist_bootstrap_journal(paths, &journal)?;
     if read_matching_launch_ack(paths, &journal, &runtime.metadata.target_commit)? {
@@ -557,9 +597,10 @@ enum BootstrapJournalStatus {
     Failed,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "PascalCase")]
 enum BootstrapJournalPhase {
+    #[default]
     Recovering,
     Detecting,
     Building,
@@ -567,12 +608,6 @@ enum BootstrapJournalPhase {
     Launching,
     Completed,
     Failed,
-}
-
-impl Default for BootstrapJournalPhase {
-    fn default() -> Self {
-        Self::Recovering
-    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -728,6 +763,31 @@ impl<D: DownloadClient, P: ProcessRunner, L: DetachedLauncher> BootstrapInstalle
             match activation.resolve_current() {
                 Ok(Some(runtime)) => {
                     let existing_commit = commit.clone();
+                    if let Err(error) = publish_stable_launcher(&paths).and_then(|_| {
+                        integration::install(&paths, false).map_err(|error| {
+                            crate::helper::HelperError::Io(std::io::Error::other(error.to_string()))
+                        })
+                    }) {
+                        let reason =
+                            format!("stable launcher/OS integration repair failed: {error}");
+                        journal.failure = Some(reason.clone());
+                        return finish_result(
+                            &paths,
+                            logger.as_ref(),
+                            &operation_id,
+                            &options,
+                            started_at_ms,
+                            journal,
+                            BootstrapStatus::LaunchFailed {
+                                reason,
+                                version_dir: runtime.version_dir,
+                            },
+                            Some(existing_commit),
+                            installation.current_toolchains.clone(),
+                            true,
+                            false,
+                        );
+                    }
                     let status = BootstrapStatus::AlreadyInstalled {
                         commit,
                         version_dir: runtime.version_dir,
@@ -771,12 +831,7 @@ impl<D: DownloadClient, P: ProcessRunner, L: DetachedLauncher> BootstrapInstalle
 
         journal.phase = BootstrapJournalPhase::Building;
         persist_bootstrap_journal(&paths, &journal)?;
-        let build_config = BuildConfig::new(
-            options.remote_url.clone(),
-            options.product_version.clone(),
-            jdk,
-            node,
-        );
+        let build_config = BuildConfig::fresh(options.remote_url.clone(), jdk, node);
         let pipeline = BuildPipeline::new(paths.clone(), downloader, runner, logger.clone());
         let build = match pipeline.run_with_lock(&build_config, &lock) {
             Ok(result) => result,
@@ -886,6 +941,30 @@ impl<D: DownloadClient, P: ProcessRunner, L: DetachedLauncher> BootstrapInstalle
                 false,
             );
         }
+        if let Err(error) = publish_stable_launcher(&paths).and_then(|_| {
+            integration::install(&paths, false).map_err(|error| {
+                crate::helper::HelperError::Io(std::io::Error::other(error.to_string()))
+            })
+        }) {
+            let reason = format!("stable launcher/OS integration publication failed: {error}");
+            journal.failure = Some(reason.clone());
+            return finish_result(
+                &paths,
+                logger.as_ref(),
+                &operation_id,
+                &options,
+                started_at_ms,
+                journal,
+                BootstrapStatus::LaunchFailed {
+                    reason,
+                    version_dir: runtime.version_dir,
+                },
+                Some(build.target_commit),
+                toolchain_ids,
+                true,
+                false,
+            );
+        }
         journal.phase = BootstrapJournalPhase::Launching;
         persist_bootstrap_journal(&paths, &journal)?;
         if read_matching_launch_ack(&paths, &journal, &build.target_commit)? {
@@ -972,6 +1051,7 @@ impl<D: DownloadClient, P: ProcessRunner, L: DetachedLauncher> BootstrapInstalle
         }
 
         journal.launch_handoff_completed = true;
+        let _ = activation.collect_old_versions_with_lock(&lock);
         let status = BootstrapStatus::Installed {
             commit: build.target_commit.clone(),
             product_version: build.product_version.clone(),
@@ -1012,7 +1092,7 @@ fn finish_result(
     paths: &InstallationPaths,
     logger: Option<&DiagnosticLogger>,
     operation_id: &str,
-    options: &BootstrapOptions,
+    _options: &BootstrapOptions,
     started_at_ms: u128,
     mut journal: BootstrapJournal,
     status: BootstrapStatus,
@@ -1040,9 +1120,6 @@ fn finish_result(
     journal.toolchains = toolchains.clone();
     journal.activation_completed |= activation_succeeded;
     journal.launch_handoff_completed |= launch_succeeded;
-    if journal.product_version.is_empty() {
-        journal.product_version = options.product_version.clone();
-    }
     if journal.failure.is_none() {
         journal.failure = match &status {
             BootstrapStatus::Installed { .. } | BootstrapStatus::AlreadyInstalled { .. } => None,
@@ -1208,10 +1285,9 @@ mod tests {
     }
 
     #[test]
-    fn default_options_are_public_repository_and_product_version() {
+    fn default_options_use_the_public_repository_without_an_application_version_override() {
         let options = BootstrapOptions::default();
         assert_eq!(options.remote_url, DEFAULT_REMOTE_URL);
-        assert_eq!(options.product_version, DEFAULT_PRODUCT_VERSION);
     }
 
     #[test]
@@ -1371,6 +1447,19 @@ mod tests {
                     fs::create_dir_all(directory.join("dist")).unwrap();
                     fs::write(directory.join("dist/main.js"), b"desktop").unwrap();
                 }
+            } else if maven_command
+                && command
+                    .args
+                    .iter()
+                    .any(|argument| argument == "help:evaluate")
+            {
+                return Ok(ProcessOutput {
+                    status: Some(0),
+                    stdout: "1.0.12-SNAPSHOT\n".to_owned(),
+                    stderr: String::new(),
+                    duration_ms: 1,
+                    timed_out: false,
+                });
             } else if package_command {
                 let payload = directory.join("artifacts/linux-x64");
                 fs::create_dir_all(payload.join("resources/app/dist")).unwrap();
@@ -1655,15 +1744,7 @@ mod tests {
             launcher.clone(),
             None,
         )
-        .install_with_descriptors(
-            BootstrapOptions {
-                remote_url,
-                product_version: "fixture".to_owned(),
-            },
-            jdk,
-            node,
-            &HealthyFixture,
-        )
+        .install_with_descriptors(BootstrapOptions { remote_url }, jdk, node, &HealthyFixture)
         .unwrap();
         assert!(matches!(result.status, BootstrapStatus::Installed { .. }));
         assert_eq!(
@@ -1764,7 +1845,6 @@ mod tests {
         .install_with_descriptors(
             BootstrapOptions {
                 remote_url: fixture.remote_url,
-                product_version: "fixture".to_owned(),
             },
             fixture.jdk,
             fixture.node,
@@ -1802,7 +1882,6 @@ mod tests {
         .install_with_descriptors(
             BootstrapOptions {
                 remote_url: fixture.remote_url,
-                product_version: "fixture".to_owned(),
             },
             fixture.jdk,
             fixture.node,
@@ -1864,7 +1943,6 @@ mod tests {
         .install_with_descriptors(
             BootstrapOptions {
                 remote_url: fixture.remote_url,
-                product_version: "fixture".to_owned(),
             },
             fixture.jdk,
             fixture.node,

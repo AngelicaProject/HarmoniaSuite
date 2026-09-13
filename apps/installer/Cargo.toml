@@ -14,6 +14,18 @@ path = "src/bin/harmonia-setup.rs"
 name = "HarmoniaSetup"
 path = "src/bin/harmonia-setup.rs"
 
+[[bin]]
+name = "HarmoniaSuite"
+path = "src/bin/harmonia-setup.rs"
+
+[[bin]]
+name = "harmonia-suite"
+path = "src/bin/harmonia-setup.rs"
+
+[[bin]]
+name = "harmonia-manifest-verify"
+path = "src/bin/harmonia-manifest-verify.rs"
+
 [dependencies]
 fs2 = "0.4"
 ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
@@ -42,6 +54,9 @@ windows-sys = { version = "0.59", features = [
     "Win32_Storage_FileSystem",
     "Win32_System_JobObjects",
     "Win32_System_Threading",
+    "Win32_System_Registry",
+    "Win32_System_Com",
+    "Win32_UI_Shell",
 ] }
 
 [dev-dependencies]

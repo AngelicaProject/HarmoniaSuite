@@ -26,5 +26,9 @@ jobs:
       - uses: github/codeql-action/init@v3
         with:
           languages: java
-      - uses: github/codeql-action/autobuild@v3
+      # The Maven wrapper distribution is intentionally checksum-pinned and may not
+      # be present in the runner cache. Use the runner's preinstalled Maven only
+      # for CodeQL's traced compilation; production builds still use ./mvnw.
+      - name: Build Java for CodeQL
+        run: mvn -B -q -DskipTests package
       - uses: github/codeql-action/analyze@v3

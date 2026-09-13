@@ -21,10 +21,18 @@ use crate::paths::{Platform, TargetArchitecture};
 use crate::toolchain::{ToolchainDescriptor, ToolchainError, ToolchainKind};
 
 pub const MANIFEST_SCHEMA_VERSION: u32 = 1;
-pub const DEFAULT_MANIFEST_URL: &str =
-    "https://github.com/AngelicaProject/HarmoniaSuite/releases/latest/download/harmonia-manifest.json";
-pub const DEFAULT_MANIFEST_SIGNATURE_URL: &str =
-    "https://github.com/AngelicaProject/HarmoniaSuite/releases/latest/download/harmonia-manifest.json.sig";
+pub const ROLLING_MANIFEST_BASE_URL: &str =
+    "https://angelicaproject.github.io/HarmoniaSuite/rolling";
+
+pub fn production_manifest_urls(platform: Platform) -> (String, String) {
+    let base = format!(
+        "{}/{}/manifest.json",
+        ROLLING_MANIFEST_BASE_URL,
+        platform.as_str()
+    );
+    let signature = format!("{}.sig", base);
+    (base, signature)
+}
 
 // Release infrastructure owns the corresponding private key outside this repository. Replacing
 // this trust root requires a reviewed installer release. The private key is never accepted from
@@ -34,6 +42,7 @@ const PRIMARY_PUBLIC_KEY_HEX: &str =
 const MAX_MANIFEST_BYTES: usize = 1024 * 1024;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RollingManifest {
     pub schema_version: u32,
     pub channel: String,
@@ -299,8 +308,10 @@ fn decode_hex<const N: usize>(value: &str) -> Option<[u8; N]> {
         return None;
     }
     let mut bytes = [0u8; N];
-    for (index, pair) in value.as_bytes().chunks_exact(2).enumerate() {
-        bytes[index] = (hex_nibble(pair[0])? << 4) | hex_nibble(pair[1])?;
+    for (index, byte) in bytes.iter_mut().enumerate() {
+        let offset = index * 2;
+        *byte = (hex_nibble(value.as_bytes()[offset])? << 4)
+            | hex_nibble(value.as_bytes()[offset + 1])?;
     }
     Some(bytes)
 }
@@ -473,72 +484,172 @@ mod tests {
     }
 
     #[test]
-    fn verifies_signature_written_by_release_node_signer() {
+    fn production_urls_are_platform_specific_pages_endpoints() {
+        let (windows, windows_sig) = production_manifest_urls(Platform::Windows);
+        let (linux, linux_sig) = production_manifest_urls(Platform::Linux);
+        assert_eq!(
+            windows,
+            "https://angelicaproject.github.io/HarmoniaSuite/rolling/windows/manifest.json"
+        );
+        assert_eq!(
+            linux,
+            "https://angelicaproject.github.io/HarmoniaSuite/rolling/linux/manifest.json"
+        );
+        assert!(windows_sig.ends_with("/manifest.json.sig"));
+        assert!(linux_sig.ends_with("/manifest.json.sig"));
+    }
+
+    #[test]
+    fn verifies_actual_node_generated_and_signed_manifests_on_both_platforms() {
         use std::fs;
         use std::path::PathBuf;
         use std::process::Command;
         use tempfile::tempdir;
 
         let root = tempdir().unwrap();
-        let manifest_path = root.path().join("manifest.json");
-        let signature_path = root.path().join("manifest.json.sig");
         let key_path = root.path().join("fixture-ed25519-key.pem");
-        let manifest_bytes = serde_json::to_vec(&manifest()).unwrap();
-        fs::write(&manifest_path, &manifest_bytes).unwrap();
         fs::write(
             &key_path,
             "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIPTbj1QOnOfs/NEu9Bbd/aQxEBWtyXdzibqMIxJmyY7j\n-----END PRIVATE KEY-----\n",
         )
         .unwrap();
 
-        let signer =
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tools/release/sign-manifest.mjs");
-        let output = Command::new("node")
-            .current_dir(env!("CARGO_MANIFEST_DIR"))
-            .env("HARMONIA_MANIFEST_SIGNING_KEY_FILE", &key_path)
-            .arg(&signer)
-            .arg(&manifest_path)
-            .arg(&signature_path)
-            .arg("cross-language")
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "release signer failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-
-        let envelope = fs::read(&signature_path).unwrap();
-        let document: serde_json::Value = serde_json::from_slice(&envelope).unwrap();
-        assert_eq!(document["schemaVersion"], 1);
-        assert_eq!(document["keyId"], "cross-language");
-        assert!(document.get("schema_version").is_none());
-
         let verifier = ManifestVerifier::with_keys(BTreeMap::from([(
             "cross-language".to_owned(),
             decode_hex_32("69b02488d9b687a23cb0918614519c97f1618f5d8c005437e82de9b997835192")
                 .unwrap(),
         )]));
-        verifier
-            .verify(
-                &manifest_bytes,
-                &envelope,
-                Platform::Linux,
-                &TargetArchitecture::X64,
+        let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let generator = repo_root.join("tools/release/create-manifest.mjs");
+        let signer = repo_root.join("tools/release/sign-manifest.mjs");
+        let target = "0123456789abcdef0123456789abcdef01234567";
+
+        for (name, platform) in [("linux", Platform::Linux), ("windows", Platform::Windows)] {
+            let manifest_path = root.path().join(format!("manifest-{name}.json"));
+            let signature_path = root.path().join(format!("manifest-{name}.json.sig"));
+            let output = Command::new("node")
+                .current_dir(&repo_root)
+                .arg(&generator)
+                .args([
+                    "--platform",
+                    name,
+                    "--target-commit",
+                    target,
+                    "--product-version",
+                    "1.0.11-SNAPSHOT",
+                    "--min-installer-version",
+                    "0.1.0",
+                    "--generation",
+                    "1",
+                    "--out",
+                ])
+                .arg(&manifest_path)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "manifest generator failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+
+            let sign = |input: &PathBuf, output: &PathBuf| {
+                let result = Command::new("node")
+                    .current_dir(&repo_root)
+                    .env("HARMONIA_MANIFEST_SIGNING_KEY_FILE", &key_path)
+                    .arg(&signer)
+                    .arg(input)
+                    .arg(output)
+                    .arg("cross-language")
+                    .output()
+                    .unwrap();
+                assert!(
+                    result.status.success(),
+                    "release signer failed: {}",
+                    String::from_utf8_lossy(&result.stderr)
+                );
+            };
+            sign(&manifest_path, &signature_path);
+
+            let manifest_bytes = fs::read(&manifest_path).unwrap();
+            let envelope = fs::read(&signature_path).unwrap();
+            let document: serde_json::Value = serde_json::from_slice(&envelope).unwrap();
+            assert_eq!(document["schemaVersion"], 1);
+            assert_eq!(document["keyId"], "cross-language");
+            assert!(document.get("schema_version").is_none());
+            verifier
+                .verify(
+                    &manifest_bytes,
+                    &envelope,
+                    platform,
+                    &TargetArchitecture::X64,
+                )
+                .unwrap();
+
+            let wrong_platform = if platform == Platform::Linux {
+                Platform::Windows
+            } else {
+                Platform::Linux
+            };
+            assert!(matches!(
+                verifier.verify(
+                    &manifest_bytes,
+                    &envelope,
+                    wrong_platform,
+                    &TargetArchitecture::X64
+                ),
+                Err(ManifestError::Toolchain(
+                    crate::toolchain::ToolchainError::UnsupportedTarget { .. }
+                ))
+            ));
+
+            let mut tampered = manifest_bytes.clone();
+            tampered[0] = b'[';
+            assert!(matches!(
+                verifier.verify(&tampered, &envelope, platform, &TargetArchitecture::X64),
+                Err(ManifestError::SignatureVerification)
+            ));
+
+            let mut wrong_signature =
+                serde_json::from_slice::<serde_json::Value>(&envelope).unwrap();
+            let mut signature_hex = wrong_signature["signatureHex"].as_str().unwrap().to_owned();
+            signature_hex.replace_range(..2, "00");
+            wrong_signature["signatureHex"] = serde_json::Value::String(signature_hex);
+            let wrong_signature_bytes = serde_json::to_vec(&wrong_signature).unwrap();
+            assert!(matches!(
+                verifier.verify(
+                    &manifest_bytes,
+                    &wrong_signature_bytes,
+                    platform,
+                    &TargetArchitecture::X64
+                ),
+                Err(ManifestError::SignatureVerification)
+            ));
+
+            let wrong_channel_path = root
+                .path()
+                .join(format!("manifest-{name}-wrong-channel.json"));
+            let wrong_channel_signature = root
+                .path()
+                .join(format!("manifest-{name}-wrong-channel.json.sig"));
+            let mut wrong_channel =
+                serde_json::from_slice::<serde_json::Value>(&manifest_bytes).unwrap();
+            wrong_channel["channel"] = serde_json::Value::String("tagged".to_owned());
+            fs::write(
+                &wrong_channel_path,
+                serde_json::to_vec(&wrong_channel).unwrap(),
             )
             .unwrap();
-
-        let mut tampered = manifest_bytes;
-        tampered[0] = b'[';
-        assert!(matches!(
-            verifier.verify(
-                &tampered,
-                &envelope,
-                Platform::Linux,
-                &TargetArchitecture::X64
-            ),
-            Err(ManifestError::SignatureVerification)
-        ));
+            sign(&wrong_channel_path, &wrong_channel_signature);
+            assert!(matches!(
+                verifier.verify(
+                    &fs::read(&wrong_channel_path).unwrap(),
+                    &fs::read(&wrong_channel_signature).unwrap(),
+                    platform,
+                    &TargetArchitecture::X64
+                ),
+                Err(ManifestError::UnsupportedChannel)
+            ));
+        }
     }
 
     #[test]

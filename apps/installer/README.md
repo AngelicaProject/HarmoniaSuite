@@ -68,6 +68,21 @@ per-user `install` operation:
 - production setup accepts no arbitrary source URL or product-version override. Custom repositories
   and descriptors remain restricted to internal fixture seams.
 
+Phase 9–10 adds the production lifecycle around those engines:
+
+- `install`, `update`, `check-update`, `repair`, and `uninstall` are strict per-user operations with
+  documented stable exit codes and optional JSON output;
+- repair rebuilds the trusted exact current commit and atomically republishes a corrupted immutable
+  version; uninstall stops the bound desktop session and preserves user data unless
+  `--remove-user-data` is explicit;
+- `bin/HarmoniaSetup.exe`/`harmonia-setup` and `bin/HarmoniaSuite.exe`/`harmonia-suite` are the
+  setup and stable launcher contracts. The stable launcher resolves current and passes managed Java,
+  workspace, and user-data paths explicitly;
+- Windows per-user Start Menu/Desktop shortcuts and HKCU uninstall registration, plus Linux XDG
+  desktop entry/icon integration, target only the stable launcher;
+- release CI is Windows/Linux x64 only and publishes signed setup/launcher artifacts and signed
+  platform manifests. MSI, portable ZIP, and macOS artifacts are deliberately excluded.
+
 Run the checks from the repository root with:
 
 ```text

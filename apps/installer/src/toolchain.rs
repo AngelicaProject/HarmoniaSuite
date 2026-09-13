@@ -61,7 +61,7 @@ pub struct ToolchainDescriptor {
     pub url: String,
     pub sha256: String,
     pub archive: ArchiveFormat,
-    #[serde(default = "default_home_dir")]
+    #[serde(rename = "homeDir", alias = "home_dir", default = "default_home_dir")]
     pub home_dir: PathBuf,
     pub executables: BTreeMap<String, PathBuf>,
 }

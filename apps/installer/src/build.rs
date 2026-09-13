@@ -26,7 +26,9 @@ const BUILD_RESULT_SCHEMA_VERSION: u32 = 1;
 #[derive(Clone, Debug)]
 pub struct BuildConfig {
     pub remote_url: String,
-    pub product_version: String,
+    /// If present, the exact source-derived Maven version must match this policy value.
+    /// The value is never used as the BuildResult product version.
+    pub expected_product_version: Option<String>,
     pub jdk: ToolchainDescriptor,
     pub node: ToolchainDescriptor,
     /// When present, the build is bound to this exact object. No moving ref is read again.
@@ -36,13 +38,27 @@ pub struct BuildConfig {
 impl BuildConfig {
     pub fn new(
         remote_url: impl Into<String>,
-        product_version: impl Into<String>,
+        expected_product_version: impl Into<String>,
         jdk: ToolchainDescriptor,
         node: ToolchainDescriptor,
     ) -> Self {
         Self {
             remote_url: remote_url.into(),
-            product_version: product_version.into(),
+            expected_product_version: Some(expected_product_version.into()),
+            jdk,
+            node,
+            target_commit: None,
+        }
+    }
+
+    pub fn fresh(
+        remote_url: impl Into<String>,
+        jdk: ToolchainDescriptor,
+        node: ToolchainDescriptor,
+    ) -> Self {
+        Self {
+            remote_url: remote_url.into(),
+            expected_product_version: None,
             jdk,
             node,
             target_commit: None,
@@ -51,6 +67,11 @@ impl BuildConfig {
 
     pub fn with_target_commit(mut self, target_commit: impl Into<String>) -> Self {
         self.target_commit = Some(target_commit.into());
+        self
+    }
+
+    pub fn with_expected_product_version(mut self, version: impl Into<String>) -> Self {
+        self.expected_product_version = Some(version.into());
         self
     }
 }
@@ -121,6 +142,12 @@ pub enum BuildError {
     State(#[from] StateError),
     #[error("build result JSON failed: {0}")]
     Json(#[from] serde_json::Error),
+    #[error(
+        "canonical application version mismatch: expected {expected}, source resolved {actual}"
+    )]
+    CanonicalVersionMismatch { expected: String, actual: String },
+    #[error("canonical application version could not be resolved: {0}")]
+    CanonicalVersion(String),
 }
 
 pub struct BuildPipeline<D, P> {
@@ -309,6 +336,16 @@ impl<D: DownloadClient, P: ProcessRunner> BuildPipeline<D, P> {
             self.build_frontend(&prepared.path, &node, &managed_environment, &target)?;
 
             transaction.transition(TransactionPhase::BuildingBackend)?;
+            let canonical_version =
+                self.resolve_project_version(&prepared.path, &managed_environment, &target)?;
+            if let Some(expected) = config.expected_product_version.as_deref() {
+                if expected != canonical_version {
+                    return Err(BuildError::CanonicalVersionMismatch {
+                        expected: expected.to_owned(),
+                        actual: canonical_version,
+                    });
+                }
+            }
             self.build_backend(&prepared.path, &managed_environment, &target)?;
 
             transaction.transition(TransactionPhase::BuildingDesktop)?;
@@ -316,11 +353,11 @@ impl<D: DownloadClient, P: ProcessRunner> BuildPipeline<D, P> {
 
             transaction.transition(TransactionPhase::Verifying)?;
             let result = self.verify_and_write_result(
-                config,
                 &target,
                 &prepared,
                 &jdk,
                 &node,
+                &canonical_version,
                 started_at_ms,
                 transaction,
             )?;
@@ -367,10 +404,89 @@ impl<D: DownloadClient, P: ProcessRunner> BuildPipeline<D, P> {
         environment: &ManagedEnvironment,
         target: &str,
     ) -> Result<(), BuildError> {
-        let wrapper = self.toolchains.maven_wrapper_path(checkout)?;
         let wrapper_args = ["-B", "-q", "-DskipTests", "package"];
+        let wrapper = self.toolchains.maven_wrapper_path(checkout)?;
+        let output = self.run_maven_wrapper(
+            checkout,
+            environment,
+            target,
+            &wrapper_args,
+            &TransactionPhase::BuildingBackend,
+        )?;
+        if !output.success() {
+            return Err(command_failed(
+                TransactionPhase::BuildingBackend,
+                &wrapper,
+                output,
+            ));
+        }
+        Ok(())
+    }
+
+    fn resolve_project_version(
+        &self,
+        checkout: &Path,
+        environment: &ManagedEnvironment,
+        target: &str,
+    ) -> Result<String, BuildError> {
+        let args = [
+            "-B",
+            "-q",
+            "help:evaluate",
+            "-Dexpression=project.version",
+            "-DforceStdout",
+        ];
+        let output = self.run_maven_wrapper(
+            checkout,
+            environment,
+            target,
+            &args,
+            &TransactionPhase::BuildingBackend,
+        )?;
+        if !output.success() {
+            return Err(command_failed(
+                TransactionPhase::BuildingBackend,
+                &self.toolchains.maven_wrapper_path(checkout)?,
+                output,
+            ));
+        }
+        let versions = output
+            .stdout
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .collect::<Vec<_>>();
+        if versions.len() != 1 {
+            return Err(BuildError::CanonicalVersion(format!(
+                "expected exactly one non-empty Maven version line, got {}",
+                versions.len()
+            )));
+        }
+        let version = versions[0];
+        if version.len() > 128
+            || version.is_empty()
+            || !version.bytes().all(|byte| {
+                byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_' | b'+')
+            })
+        {
+            return Err(BuildError::CanonicalVersion(
+                "Maven project.version has an unsafe format".to_owned(),
+            ));
+        }
+        Ok(version.to_owned())
+    }
+
+    fn run_maven_wrapper(
+        &self,
+        checkout: &Path,
+        environment: &ManagedEnvironment,
+        target: &str,
+        args: &[&str],
+        phase: &TransactionPhase,
+    ) -> Result<crate::process::ProcessOutput, BuildError> {
+        let wrapper = self.toolchains.maven_wrapper_path(checkout)?;
         #[cfg(windows)]
-        let output = {
+        {
             let system_root = std::env::var_os("SystemRoot").ok_or_else(|| {
                 BuildError::InvalidConfig("SystemRoot is required to run mvnw.cmd".to_owned())
             })?;
@@ -381,33 +497,20 @@ impl<D: DownloadClient, P: ProcessRunner> BuildPipeline<D, P> {
                 "call".to_owned(),
                 wrapper.display().to_string(),
             ];
-            command_args.extend(wrapper_args.iter().map(|argument| (*argument).to_owned()));
+            command_args.extend(args.iter().map(|argument| (*argument).to_owned()));
             self.run_command_strings(
-                &TransactionPhase::BuildingBackend,
+                phase,
                 target,
                 environment,
                 &PathBuf::from(system_root).join("System32").join("cmd.exe"),
                 &command_args,
                 checkout,
-            )?
-        };
-        #[cfg(not(windows))]
-        let output = self.run_command(
-            &TransactionPhase::BuildingBackend,
-            target,
-            environment,
-            &wrapper,
-            &wrapper_args,
-            checkout,
-        )?;
-        if !output.success() {
-            return Err(command_failed(
-                TransactionPhase::BuildingBackend,
-                &wrapper,
-                output,
-            ));
+            )
         }
-        Ok(())
+        #[cfg(not(windows))]
+        {
+            self.run_command(phase, target, environment, &wrapper, args, checkout)
+        }
     }
 
     fn build_desktop(
@@ -547,11 +650,11 @@ impl<D: DownloadClient, P: ProcessRunner> BuildPipeline<D, P> {
     #[allow(clippy::too_many_arguments)]
     fn verify_and_write_result(
         &self,
-        config: &BuildConfig,
         target: &str,
         checkout: &ManagedCheckout,
         jdk: &ResolvedToolchain,
         node: &ResolvedToolchain,
+        canonical_version: &str,
         started_at_ms: u128,
         transaction: &mut Transaction,
     ) -> Result<BuildResult, BuildError> {
@@ -607,7 +710,7 @@ impl<D: DownloadClient, P: ProcessRunner> BuildPipeline<D, P> {
             schema_version: BUILD_RESULT_SCHEMA_VERSION,
             status: BuildStatus::Completed,
             target_commit: target.to_owned(),
-            product_version: config.product_version.clone(),
+            product_version: canonical_version.to_owned(),
             checkout_dir,
             toolchains: BTreeMap::from([
                 ("jdk".to_owned(), jdk.id.clone()),
@@ -650,9 +753,13 @@ impl<D: DownloadClient, P: ProcessRunner> BuildPipeline<D, P> {
 }
 
 fn validate_config(config: &BuildConfig) -> Result<(), BuildError> {
-    if config.product_version.trim().is_empty() {
+    if config
+        .expected_product_version
+        .as_deref()
+        .is_some_and(|version| version.trim().is_empty())
+    {
         return Err(BuildError::InvalidConfig(
-            "product_version must not be empty".to_owned(),
+            "expected_product_version must not be empty".to_owned(),
         ));
     }
     if let Some(target) = &config.target_commit {
@@ -833,6 +940,16 @@ mod tests {
                 });
             }
 
+            if is_maven_version_command(command) {
+                return Ok(ProcessOutput {
+                    status: Some(0),
+                    stdout: "1.0.12-SNAPSHOT\n".to_owned(),
+                    stderr: String::new(),
+                    duration_ms: 1,
+                    timed_out: false,
+                });
+            }
+
             if is_build_command(command) {
                 let output = current_dir.join("dist");
                 fs::create_dir_all(&output)?;
@@ -923,7 +1040,7 @@ mod tests {
         Fixture {
             _root: root,
             paths,
-            config: BuildConfig::new(remote_url, "1.0.11-test", jdk, node),
+            config: BuildConfig::fresh(remote_url, jdk, node),
             git,
             target,
             downloader,
@@ -962,7 +1079,18 @@ mod tests {
         let mut root_builder = repository.treebuilder(Some(&base_tree)).unwrap();
         let wrapper_blob = repository.blob(b"#!/bin/sh\nexit 0\n").unwrap();
         root_builder.insert("mvnw", wrapper_blob, 0o100755).unwrap();
-        let pom_blob = repository.blob(b"<project/>\n").unwrap();
+        let pom_blob = repository
+            .blob(
+                br#"<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>com.example</groupId>
+  <artifactId>fixture</artifactId>
+  <version>1.0.12-SNAPSHOT</version>
+</project>
+"#,
+            )
+            .unwrap();
         root_builder.insert("pom.xml", pom_blob, 0o100644).unwrap();
         let root = repository.find_tree(root_builder.write().unwrap()).unwrap();
         let signature = Signature::now("Harmonia Test", "test@example.invalid").unwrap();
@@ -1076,6 +1204,14 @@ mod tests {
                 .any(|argument| argument.contains("mvnw"))
     }
 
+    fn is_maven_version_command(command: &CommandSpec) -> bool {
+        is_maven_command(command)
+            && command
+                .args
+                .iter()
+                .any(|argument| argument == "help:evaluate")
+    }
+
     #[test]
     fn pipeline_uses_exact_sha_managed_tools_and_ci_only() {
         let fixture = fixture();
@@ -1088,6 +1224,7 @@ mod tests {
 
         assert_eq!(result.target_commit, fixture.target);
         assert_eq!(result.status, BuildStatus::Completed);
+        assert_eq!(result.product_version, "1.0.12-SNAPSHOT");
         let first_checkout = fixture.paths.app_root.join(&result.checkout_dir);
         assert!(first_checkout.is_dir());
         assert_eq!(
@@ -1141,6 +1278,40 @@ mod tests {
                 .count(),
             2
         );
+    }
+
+    #[test]
+    fn expected_product_version_is_a_policy_check_not_build_identity() {
+        let first_fixture = fixture();
+        let config = first_fixture
+            .config
+            .clone()
+            .with_expected_product_version("1.0.12-SNAPSHOT");
+        let pipeline = BuildPipeline::new(
+            first_fixture.paths.clone(),
+            first_fixture.downloader,
+            FixtureRunner::default(),
+            None,
+        );
+        let result = pipeline.run_with_git(&config, &first_fixture.git).unwrap();
+        assert_eq!(result.product_version, "1.0.12-SNAPSHOT");
+
+        let second_fixture = fixture();
+        let config = second_fixture
+            .config
+            .clone()
+            .with_expected_product_version("1.0.13-SNAPSHOT");
+        let pipeline = BuildPipeline::new(
+            second_fixture.paths.clone(),
+            second_fixture.downloader,
+            FixtureRunner::default(),
+            None,
+        );
+        assert!(matches!(
+            pipeline.run_with_git(&config, &second_fixture.git),
+            Err(BuildError::CanonicalVersionMismatch { expected, actual })
+                if expected == "1.0.13-SNAPSHOT" && actual == "1.0.12-SNAPSHOT"
+        ));
     }
 
     #[test]

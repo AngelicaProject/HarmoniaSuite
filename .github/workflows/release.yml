@@ -1,97 +1,175 @@
-name: Release
+name: Production release
 
 on:
   push:
-    tags: ['v*']
+    tags: ["v*"]
+
+permissions:
+  contents: write
 
 jobs:
-  installer:
-    runs-on: windows-latest
-    permissions:
-      contents: write
+  verify-and-build:
+    name: Build ${{ matrix.platform }} x64
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux
+          - os: windows-latest
+            platform: windows
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
         with:
-          path: app
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/checkout@v4
-        with:
-          repository: AngelicaProject/HarmoniaExtractor
-          path: extractor
+      - name: Verify exact release commit
+        shell: bash
+        run: test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+      - uses: dtolnay/rust-toolchain@1.89.0
       - uses: actions/setup-node@v4
         with:
-          node-version-file: app/frontend/.node-version
+          node-version-file: frontend/.node-version
           cache: npm
-          cache-dependency-path: app/frontend/package-lock.json
-      - run: npm ci
-        working-directory: app/frontend
-      - run: npm run check
-        working-directory: app/frontend
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: '10.0.x'
-      - run: dotnet publish XivExdUnpacker.csproj -c Release -r win-x64 --self-contained -o ../bundle/unpacker
-        working-directory: extractor
+          cache-dependency-path: |
+            frontend/package-lock.json
+            apps/desktop/package-lock.json
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '21'
-          cache: maven
-      - name: Fetch toolchain
+      - name: Verify frontend
+        run: npm ci
+        working-directory: frontend
+      - name: Check frontend
+        run: npm run check
+        working-directory: frontend
+      - name: Package desktop payload
+        run: npm ci
+        working-directory: apps/desktop
+      - name: Check desktop
+        run: npm run check
+        working-directory: apps/desktop
+      - name: Package desktop
+        run: npm run package
+        working-directory: apps/desktop
+      - name: Build backend with checksum-protected Maven Wrapper
+        if: runner.os != 'Windows'
+        run: ./mvnw -B -q -DskipTests package
+      - name: Build backend with checksum-protected Maven Wrapper (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: .\mvnw.cmd -B -q -DskipTests package
+      - name: Rust format, lint and tests
+        run: |
+          cargo fmt --manifest-path apps/installer/Cargo.toml -- --check
+          cargo clippy --manifest-path apps/installer/Cargo.toml --all-targets -- -D warnings
+          cargo test --manifest-path apps/installer/Cargo.toml
+      - name: Build installer and stable launcher
+        run: cargo build --manifest-path apps/installer/Cargo.toml --release --bins
+      - name: Sign Windows binaries
+        if: runner.os == 'Windows'
         shell: pwsh
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          WINDOWS_SIGNING_CERTIFICATE_B64: ${{ secrets.HARMONIA_WINDOWS_SIGNING_CERTIFICATE_B64 }}
+          WINDOWS_SIGNING_PASSWORD: ${{ secrets.HARMONIA_WINDOWS_SIGNING_PASSWORD }}
         run: |
-          New-Item -ItemType Directory -Force toolchain-dl | Out-Null
-          Invoke-WebRequest -Uri 'https://api.adoptium.net/v3/binary/latest/21/ga/windows/x64/jdk/hotspot/normal/eclipse' -OutFile toolchain-dl/jdk.zip
-          $nodeVersion = (Get-Content app/frontend/.node-version -Raw).Trim().TrimStart('v')
-          Invoke-WebRequest -Uri "https://nodejs.org/dist/v$nodeVersion/node-v$nodeVersion-win-x64.zip" -OutFile toolchain-dl/node.zip
-          $mingit = gh release view -R git-for-windows/git --json assets -q '.assets[].name' | Where-Object { $_ -like 'MinGit-*-64-bit.zip' -and $_ -notlike '*busybox*' } | Select-Object -First 1
-          gh release download -R git-for-windows/git -p $mingit -D toolchain-dl
-          New-Item -ItemType Directory -Force staging/toolchain/jdk, staging/toolchain/git, staging/toolchain/node | Out-Null
-          Expand-Archive toolchain-dl/jdk.zip staging/toolchain/jdk
-          Expand-Archive "toolchain-dl/$mingit" staging/toolchain/git
-          Expand-Archive toolchain-dl/node.zip staging/toolchain/node
-          & "staging/toolchain/node/node-v$nodeVersion-win-x64/node.exe" --version
-          & "staging/toolchain/node/node-v$nodeVersion-win-x64/npm.cmd" --version
-      - name: Ensure WiX
-        shell: pwsh
-        run: |
-          if (-not (Get-Command light.exe -ErrorAction SilentlyContinue)) {
-            choco install wixtoolset -y
-            "C:\Program Files (x86)\WiX Toolset v3.14\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
+          if (-not [string]::IsNullOrWhiteSpace($env:WINDOWS_SIGNING_CERTIFICATE_B64) -and -not [string]::IsNullOrWhiteSpace($env:WINDOWS_SIGNING_PASSWORD)) {
+            $certificate = Join-Path $env:RUNNER_TEMP "harmonia-release.pfx"
+            [IO.File]::WriteAllBytes($certificate, [Convert]::FromBase64String($env:WINDOWS_SIGNING_CERTIFICATE_B64))
+            signtool sign /fd sha256 /f $certificate /p $env:WINDOWS_SIGNING_PASSWORD /tr http://timestamp.digicert.com /td sha256 target/release/HarmoniaSetup.exe
+            signtool sign /fd sha256 /f $certificate /p $env:WINDOWS_SIGNING_PASSWORD /tr http://timestamp.digicert.com /td sha256 target/release/HarmoniaSuite.exe
+            signtool verify /pa target/release/HarmoniaSetup.exe
+            signtool verify /pa target/release/HarmoniaSuite.exe
+            "authenticode=signed" | Set-Content (Join-Path $env:RUNNER_TEMP "windows-signing.txt")
+          } else {
+            Write-Warning "Authenticode credentials are absent; release binaries remain unsigned."
+            "authenticode=unsigned" | Set-Content (Join-Path $env:RUNNER_TEMP "windows-signing.txt")
           }
-      - run: mvn -B -q -DskipTests package "-Dapp.commit=$env:GITHUB_SHA"
-        working-directory: app
-      - name: Stage jpackage input
+      - name: Stage release files (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          install -m 0755 target/release/harmonia-setup release/harmonia-setup
+          install -m 0755 target/release/harmonia-suite release/harmonia-suite
+          sha256sum release/harmonia-setup release/harmonia-suite > release/sha256sums-linux.txt
+      - name: Stage release files (Windows)
+        if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force staging, staging/unpacker, staging/src | Out-Null
-          Copy-Item app/target/harmonia-suite.jar staging/
-          Copy-Item bundle/unpacker/XivExdUnpacker.exe staging/unpacker/
-          "version=$env:GITHUB_REF_NAME" | Out-File -Encoding utf8 staging/VERSION.txt
-          "commit=$env:GITHUB_SHA" | Out-File -Encoding utf8 -Append staging/VERSION.txt
-          git -C app archive HEAD | tar -x -C staging/src
-          Copy-Item -Recurse -Force app/.git staging/src/.git
-          git -C staging/src config --unset-all http.https://github.com/.extraheader 2>$null; $LASTEXITCODE = 0
-      - name: Build MSI
-        shell: pwsh
-        run: |
-          $tag = $env:GITHUB_REF_NAME.TrimStart('v')
-          jpackage --type msi --dest installer --name HarmoniaSuite --vendor AngelicaProject `
-            --app-version $tag --win-per-user-install --win-shortcut --win-menu --win-menu-group AngelicaProject `
-            --java-options "-Djava.awt.headless=false" `
-            --icon app/src/main/dist/yuki.ico --input staging --main-jar harmonia-suite.jar
-      - name: Generate release notes
-        working-directory: app
-        shell: pwsh
-        run: node tools/generate-release-notes.cjs --tag $env:GITHUB_REF_NAME --out release-notes.md
-      - uses: softprops/action-gh-release@v2
+          New-Item -ItemType Directory -Force release | Out-Null
+          Copy-Item target/release/HarmoniaSetup.exe release/HarmoniaSetup.exe
+          Copy-Item target/release/HarmoniaSuite.exe release/HarmoniaSuite.exe
+          Copy-Item (Join-Path $env:RUNNER_TEMP "windows-signing.txt") release/windows-signing.txt
+          Get-FileHash release/HarmoniaSetup.exe, release/HarmoniaSuite.exe -Algorithm SHA256 | ForEach-Object { "$($_.Hash.ToLower()) *$($_.Path | Split-Path -Leaf)" } | Set-Content release/sha256sums-windows.txt
+      - uses: actions/upload-artifact@v4
         with:
-          name: Harmonia Suite ${{ github.ref_name }}
-          body_path: app/release-notes.md
-          draft: true
-          files: |
-            installer/*.msi
-            app/target/harmonia-suite-*.zip
+          name: release-${{ matrix.platform }}
+          path: release
+          if-no-files-found: error
+
+  publish:
+    name: Publish tagged distribution
+    needs: verify-and-build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: release-input
+          merge-multiple: false
+      - name: Publish exact assets or verify immutable release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="$GITHUB_REF_NAME"
+          repo="$GITHUB_REPOSITORY"
+          for sums in release-input/release-*/sha256sums-*.txt; do
+            (cd "$(dirname "$sums")" && sha256sum -c "$(basename "$sums")")
+          done
+          if release_json="$(gh release view "$tag" --repo "$repo" --json isDraft 2>/dev/null)"; then
+            is_draft="$(jq -r '.isDraft' <<<"$release_json")"
+          else
+            gh release create "$tag" --repo "$repo" --draft \
+              --title "HarmoniaSuite $tag" \
+              --notes "Tagged HarmoniaSuite Windows/Linux x64 distribution. Rolling main updates are published separately."
+            is_draft=true
+          fi
+
+          if [[ "$is_draft" != "true" ]]; then
+            existing="$RUNNER_TEMP/existing-release"
+            expected="$RUNNER_TEMP/expected-release"
+            rm -rf "$existing" "$expected"
+            mkdir -p "$existing" "$expected"
+            gh release download "$tag" --repo "$repo" --dir "$existing"
+            while IFS= read -r -d '' file; do
+              name="$(basename "$file")"
+              destination="$expected/$name"
+              if [[ -e "$destination" ]] && ! cmp -s "$file" "$destination"; then
+                echo "expected asset basename collision: $name" >&2
+                exit 1
+              fi
+              cp "$file" "$destination"
+            done < <(find release-input -type f -print0)
+            while IFS= read -r -d '' file; do
+              name="$(basename "$file")"
+              [[ -f "$expected/$name" ]] || { echo "published release has unexpected asset: $name" >&2; exit 1; }
+              cmp -s "$file" "$expected/$name" || { echo "published release asset differs: $name" >&2; exit 1; }
+            done < <(find "$existing" -type f -print0)
+            while IFS= read -r -d '' file; do
+              name="$(basename "$file")"
+              [[ -f "$existing/$name" ]] || { echo "published release is missing asset: $name" >&2; exit 1; }
+              cmp -s "$file" "$existing/$name" || { echo "published release asset differs: $name" >&2; exit 1; }
+            done < <(find "$expected" -type f -print0)
+            echo "tagged release $tag is already published and matches expected assets; no-op"
+            exit 0
+          fi
+
+          while IFS= read -r -d '' file; do
+            gh release upload "$tag" --repo "$repo" "$file" --clobber
+          done < <(find release-input -type f -print0)
+          gh release edit "$tag" --repo "$repo" --draft=false
