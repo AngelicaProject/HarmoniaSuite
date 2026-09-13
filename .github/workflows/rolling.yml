@@ -43,20 +43,21 @@ jobs:
           node-version-file: frontend/.node-version
           cache: npm
           cache-dependency-path: frontend/package-lock.json
-      - name: Resolve canonical application and installer versions
+      - name: Check exact checkout version contract
+        run: node tools/version/check-versions.mjs
+      - name: Resolve product and installer version contract
         id: versions
         shell: bash
         run: |
           set -euo pipefail
-          application_version="$(./mvnw -B -q help:evaluate -Dexpression=project.version -DforceStdout | tr -d '\r')"
-          [[ "$(printf '%s\n' "$application_version" | wc -l)" -eq 1 ]]
-          [[ "$application_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]
-          metadata="$RUNNER_TEMP/harmonia-cargo-metadata.json"
-          cargo metadata --manifest-path apps/installer/Cargo.toml --no-deps --format-version 1 > "$metadata"
-          installer_version="$(node -e 'const fs=require("node:fs"); const d=JSON.parse(fs.readFileSync(process.argv[1], "utf8")); const p=d.packages.find((x)=>x.name==="harmonia-installer"); if (!p) process.exit(1); process.stdout.write(p.version);' "$metadata")"
-          [[ "$installer_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]
+          contract="$RUNNER_TEMP/harmonia-versions.json"
+          node tools/version/check-versions.mjs --json > "$contract"
+          application_version="$(node -e 'const fs=require("node:fs"); process.stdout.write(JSON.parse(fs.readFileSync(process.argv[1], "utf8")).productVersion);' "$contract")"
+          installer_version="$(node -e 'const fs=require("node:fs"); process.stdout.write(JSON.parse(fs.readFileSync(process.argv[1], "utf8")).installerVersion);' "$contract")"
+          minimum_installer_version="$(node -e 'const fs=require("node:fs"); process.stdout.write(JSON.parse(fs.readFileSync(process.argv[1], "utf8")).minimumInstallerVersion);' "$contract")"
           echo "application_version=$application_version" >> "$GITHUB_OUTPUT"
           echo "installer_version=$installer_version" >> "$GITHUB_OUTPUT"
+          echo "minimum_installer_version=$minimum_installer_version" >> "$GITHUB_OUTPUT"
       - name: Prepare rolling history checkout
         shell: bash
         env:
@@ -109,7 +110,7 @@ jobs:
           trap 'rm -f "$key"' EXIT
           sha="${{ github.event.workflow_run.head_sha }}"
           for platform in linux windows; do
-            node tools/release/create-manifest.mjs --platform "$platform" --target-commit "$sha" --product-version "${{ steps.versions.outputs.application_version }}" --min-installer-version "${{ steps.versions.outputs.installer_version }}" --generation "${{ steps.generation.outputs.generation }}" --out "$RUNNER_TEMP/manifest-$platform.json"
+            node tools/release/create-manifest.mjs --platform "$platform" --target-commit "$sha" --product-version "${{ steps.versions.outputs.application_version }}" --min-installer-version "${{ steps.versions.outputs.minimum_installer_version }}" --generation "${{ steps.generation.outputs.generation }}" --out "$RUNNER_TEMP/manifest-$platform.json"
             HARMONIA_MANIFEST_SIGNING_KEY_FILE="$key" node tools/release/sign-manifest.mjs "$RUNNER_TEMP/manifest-$platform.json" "$RUNNER_TEMP/manifest-$platform.json.sig" primary-2026-09
             cargo run --quiet --manifest-path apps/installer/Cargo.toml --bin harmonia-manifest-verify -- "$platform" "$RUNNER_TEMP/manifest-$platform.json" "$RUNNER_TEMP/manifest-$platform.json.sig"
           done

@@ -109,6 +109,8 @@ pub enum ManifestError {
     InvalidCommit,
     #[error("manifest product version is empty")]
     EmptyProductVersion,
+    #[error("manifest product version is malformed: {0}")]
+    InvalidProductVersion(String),
     #[error("manifest toolchain is invalid: {0}")]
     Toolchain(#[from] ToolchainError),
     #[error("manifest toolchain kind is invalid")]
@@ -132,6 +134,7 @@ impl ManifestError {
                 | Self::UnsupportedChannel
                 | Self::InvalidCommit
                 | Self::EmptyProductVersion
+                | Self::InvalidProductVersion(_)
                 | Self::Toolchain(_)
                 | Self::InvalidToolchainKind
                 | Self::WrongTarget
@@ -286,9 +289,16 @@ fn validate_manifest(
     if manifest.product_version.trim().is_empty() {
         return Err(ManifestError::EmptyProductVersion);
     }
+    Version::parse(&manifest.product_version)
+        .map_err(|_| ManifestError::InvalidProductVersion(manifest.product_version.clone()))?;
     if let Some(minimum) = manifest.min_installer_version.as_deref() {
-        Version::parse(minimum)
+        let parsed = Version::parse(minimum)
             .map_err(|_| ManifestError::InvalidMinimumInstallerVersion(minimum.to_owned()))?;
+        if !parsed.pre.is_empty() {
+            return Err(ManifestError::InvalidMinimumInstallerVersion(
+                minimum.to_owned(),
+            ));
+        }
     }
     if manifest.target_commit.len() != 40
         || !manifest

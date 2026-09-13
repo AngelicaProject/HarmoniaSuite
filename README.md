@@ -112,7 +112,11 @@ The production frontend is built by Vite and copied directly to `target/classes/
 
 ## Release
 
-Development happens on `*-SNAPSHOT`. To cut a release: `versions:set`, a `vX.Y.Z` tag, `package`. You get `harmonia-suite-X.Y.Z.zip` with `VERSION.txt` inside; CI builds the MSI and the portable zip for each tag.
+Version policy lives in [`versions.json`](versions.json) and is documented in
+[`docs/versioning.md`](docs/versioning.md). Development happens on `*-SNAPSHOT`. To cut a
+release, use `node tools/version/set-version.mjs product X.Y.Z`, run the version check, then
+create the matching `vX.Y.Z` tag. CI publishes a HarmoniaSuite product release and records the
+independent installer engine version in `release-metadata.json`.
 
 ## License
 

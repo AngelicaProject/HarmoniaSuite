@@ -37,15 +37,10 @@ test("production manifest generator uses the signed rolling wire contract", asyn
   assert.equal(manifest.target_commit, undefined);
 });
 
-test("rolling manifest keeps Maven application version separate from identity fields", async () => {
+test("rolling manifest keeps product version separate from identity fields", async () => {
   const repo = join(import.meta.dirname, "..", "..");
   const root = await mkdtemp(join(tmpdir(), "harmonia-manifest-version-"));
-  const fixture = await readFile(
-    join(repo, "tools/release/fixtures/rolling-version/pom.xml"),
-    "utf8",
-  );
-  const applicationVersion = fixture.match(/<version>([^<]+)<\/version>/)?.[1];
-  assert.equal(applicationVersion, "1.0.11-SNAPSHOT");
+  const productVersion = "1.0.11-SNAPSHOT";
   const output = join(root, "manifest.json");
   await exec(process.execPath, [
     "tools/release/create-manifest.mjs",
@@ -54,7 +49,7 @@ test("rolling manifest keeps Maven application version separate from identity fi
     "--target-commit",
     "fedcba9876543210fedcba9876543210fedcba98",
     "--product-version",
-    applicationVersion,
+    productVersion,
     "--min-installer-version",
     "0.1.0",
     "--generation",
@@ -63,9 +58,32 @@ test("rolling manifest keeps Maven application version separate from identity fi
     output,
   ], { cwd: repo });
   const manifest = JSON.parse(await readFile(output, "utf8"));
-  assert.equal(manifest.productVersion, "1.0.11-SNAPSHOT");
+  assert.equal(manifest.productVersion, productVersion);
   assert.equal(manifest.targetCommit, "fedcba9876543210fedcba9876543210fedcba98");
   assert.equal(manifest.generation, 125);
+});
+
+test("rolling manifest keeps installer engine and compatibility floor independent", async () => {
+  const root = await mkdtemp(join(tmpdir(), "harmonia-manifest-installer-floor-"));
+  const output = join(root, "manifest.json");
+  await exec(process.execPath, [
+    "tools/release/create-manifest.mjs",
+    "--platform",
+    "linux",
+    "--target-commit",
+    "0123456789abcdef0123456789abcdef01234567",
+    "--product-version",
+    "1.0.11",
+    "--min-installer-version",
+    "0.1.0",
+    "--generation",
+    "2",
+    "--out",
+    output,
+  ], { cwd: join(import.meta.dirname, "..", "..") });
+  const manifest = JSON.parse(await readFile(output, "utf8"));
+  assert.equal(manifest.minInstallerVersion, "0.1.0");
+  assert.notEqual("0.2.0", manifest.minInstallerVersion);
 });
 
 test("manifest signing and verification default to the current key id", async () => {

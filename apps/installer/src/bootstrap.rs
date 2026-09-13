@@ -1574,17 +1574,24 @@ mod tests {
         let remote_path = root.join("remote");
         let repository = Repository::init(&remote_path).unwrap();
         for (relative, contents) in [
-            ("frontend/package.json", br#"{"scripts":{"build":"vite build"}}"#.as_slice()),
+            (
+                "frontend/package.json",
+                br#"{"version":"1.0.12-SNAPSHOT","scripts":{"build":"vite build"}}"#.as_slice(),
+            ),
             ("frontend/package-lock.json", br#"{"lockfileVersion":3}"#.as_slice()),
             (
                 "apps/desktop/package.json",
-                br#"{"scripts":{"build":"tsc","package":"node package"}}"#.as_slice(),
+                br#"{"version":"1.0.12-SNAPSHOT","scripts":{"build":"tsc","package":"node package"}}"#.as_slice(),
             ),
             (
                 "apps/desktop/package-lock.json",
                 br#"{"lockfileVersion":3}"#.as_slice(),
             ),
             ("pom.xml", b"<project/>".as_slice()),
+            (
+                "versions.json",
+                br#"{"schemaVersion":1,"productVersion":"1.0.12-SNAPSHOT","installerVersion":"0.1.0","minimumInstallerVersion":"0.1.0"}"#.as_slice(),
+            ),
             (
                 ".mvn/wrapper/maven-wrapper.properties",
                 b"distributionType=only-script\ndistributionSha256Sum=0000000000000000000000000000000000000000000000000000000000000000\n".as_slice(),
@@ -1668,11 +1675,21 @@ mod tests {
         let legacy_file = paths.user_data_root.join("legacy data.txt");
         fs::write(&legacy_file, b"preserve").unwrap();
         for (relative, contents) in [
-            ("frontend/package.json", br#"{"scripts":{"build":"vite build"}}"#.as_slice()),
+            (
+                "frontend/package.json",
+                br#"{"version":"1.0.12-SNAPSHOT","scripts":{"build":"vite build"}}"#.as_slice(),
+            ),
             ("frontend/package-lock.json", br#"{"lockfileVersion":3}"#.as_slice()),
-            ("apps/desktop/package.json", br#"{"scripts":{"build":"tsc","package":"node package"}}"#.as_slice()),
+            (
+                "apps/desktop/package.json",
+                br#"{"version":"1.0.12-SNAPSHOT","scripts":{"build":"tsc","package":"node package"}}"#.as_slice(),
+            ),
             ("apps/desktop/package-lock.json", br#"{"lockfileVersion":3}"#.as_slice()),
             ("pom.xml", b"<project/>".as_slice()),
+            (
+                "versions.json",
+                br#"{"schemaVersion":1,"productVersion":"1.0.12-SNAPSHOT","installerVersion":"0.1.0","minimumInstallerVersion":"0.1.0"}"#.as_slice(),
+            ),
             (
                 ".mvn/wrapper/maven-wrapper.properties",
                 b"distributionType=only-script\ndistributionSha256Sum=0000000000000000000000000000000000000000000000000000000000000000\n".as_slice(),

@@ -4,6 +4,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use semver::Version;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -26,8 +27,7 @@ const BUILD_RESULT_SCHEMA_VERSION: u32 = 1;
 #[derive(Clone, Debug)]
 pub struct BuildConfig {
     pub remote_url: String,
-    /// If present, the exact source-derived Maven version must match this policy value.
-    /// The value is never used as the BuildResult product version.
+    /// If present, the exact checkout product version must match this policy value.
     pub expected_product_version: Option<String>,
     pub jdk: ToolchainDescriptor,
     pub node: ToolchainDescriptor,
@@ -104,6 +104,13 @@ pub struct BuildResult {
     pub duration_ms: u128,
 }
 
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct VersionContract {
+    schema_version: u32,
+    product_version: String,
+}
+
 #[derive(Debug, Error)]
 pub enum BuildError {
     #[error("build configuration is invalid: {0}")]
@@ -148,6 +155,14 @@ pub enum BuildError {
     CanonicalVersionMismatch { expected: String, actual: String },
     #[error("canonical application version could not be resolved: {0}")]
     CanonicalVersion(String),
+    #[error(
+        "canonical component version mismatch for {component}: expected {expected}, source resolved {actual}"
+    )]
+    CanonicalComponentVersionMismatch {
+        component: String,
+        expected: String,
+        actual: String,
+    },
 }
 
 pub struct BuildPipeline<D, P> {
@@ -332,12 +347,8 @@ impl<D: DownloadClient, P: ProcessRunner> BuildPipeline<D, P> {
                 [("checkout_dir".to_owned(), json!(prepared.path.clone()))],
             )?;
 
-            transaction.transition(TransactionPhase::BuildingFrontend)?;
-            self.build_frontend(&prepared.path, &node, &managed_environment, &target)?;
-
-            transaction.transition(TransactionPhase::BuildingBackend)?;
             let canonical_version =
-                self.resolve_project_version(&prepared.path, &managed_environment, &target)?;
+                self.resolve_product_version(&prepared.path, &managed_environment, &target)?;
             if let Some(expected) = config.expected_product_version.as_deref() {
                 if expected != canonical_version {
                     return Err(BuildError::CanonicalVersionMismatch {
@@ -346,6 +357,11 @@ impl<D: DownloadClient, P: ProcessRunner> BuildPipeline<D, P> {
                     });
                 }
             }
+
+            transaction.transition(TransactionPhase::BuildingFrontend)?;
+            self.build_frontend(&prepared.path, &node, &managed_environment, &target)?;
+
+            transaction.transition(TransactionPhase::BuildingBackend)?;
             self.build_backend(&prepared.path, &managed_environment, &target)?;
 
             transaction.transition(TransactionPhase::BuildingDesktop)?;
@@ -423,7 +439,62 @@ impl<D: DownloadClient, P: ProcessRunner> BuildPipeline<D, P> {
         Ok(())
     }
 
-    fn resolve_project_version(
+    fn resolve_product_version(
+        &self,
+        checkout: &Path,
+        environment: &ManagedEnvironment,
+        target: &str,
+    ) -> Result<String, BuildError> {
+        let contract_path = checkout.join("versions.json");
+        if !contract_path.is_file() {
+            return Err(BuildError::MissingInput(contract_path));
+        }
+        let contract: VersionContract = serde_json::from_slice(&fs::read(&contract_path)?)?;
+        if contract.schema_version != 1 {
+            return Err(BuildError::CanonicalVersion(format!(
+                "versions.json schemaVersion must be 1, got {}",
+                contract.schema_version
+            )));
+        }
+        if contract.product_version.len() > 128
+            || Version::parse(&contract.product_version).is_err()
+        {
+            return Err(BuildError::CanonicalVersion(
+                "versions.json productVersion is not valid SemVer".to_owned(),
+            ));
+        }
+
+        let maven_version = self.resolve_maven_project_version(checkout, environment, target)?;
+        if maven_version != contract.product_version {
+            return Err(BuildError::CanonicalVersionMismatch {
+                expected: contract.product_version.clone(),
+                actual: maven_version,
+            });
+        }
+        for (component, relative) in [
+            ("frontend/package.json version", "frontend/package.json"),
+            (
+                "apps/desktop/package.json version",
+                "apps/desktop/package.json",
+            ),
+        ] {
+            let path = checkout.join(relative);
+            if !path.is_file() {
+                return Err(BuildError::MissingInput(path));
+            }
+            let document: serde_json::Value = serde_json::from_slice(&fs::read(&path)?)?;
+            let version = document
+                .get("version")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| {
+                    BuildError::CanonicalVersion(format!("{relative} has no version"))
+                })?;
+            ensure_component_version(component, &contract.product_version, version)?;
+        }
+        Ok(contract.product_version)
+    }
+
+    fn resolve_maven_project_version(
         &self,
         checkout: &Path,
         environment: &ManagedEnvironment,
@@ -752,6 +823,21 @@ impl<D: DownloadClient, P: ProcessRunner> BuildPipeline<D, P> {
     }
 }
 
+fn ensure_component_version(
+    component: &str,
+    expected: &str,
+    actual: &str,
+) -> Result<(), BuildError> {
+    if actual != expected {
+        return Err(BuildError::CanonicalComponentVersionMismatch {
+            component: component.to_owned(),
+            expected: expected.to_owned(),
+            actual: actual.to_owned(),
+        });
+    }
+    Ok(())
+}
+
 fn validate_config(config: &BuildConfig) -> Result<(), BuildError> {
     if config
         .expected_product_version
@@ -1051,14 +1137,20 @@ mod tests {
         let frontend = tree_with_files(
             repository,
             &[
-                ("package.json", b"{\"scripts\":{\"build\":\"vite build\"}}"),
+                (
+                    "package.json",
+                    b"{\"version\":\"1.0.12-SNAPSHOT\",\"scripts\":{\"build\":\"vite build\"}}",
+                ),
                 ("package-lock.json", b"{\"lockfileVersion\":3}"),
             ],
         );
         let desktop = tree_with_files(
             repository,
             &[
-                ("package.json", b"{\"scripts\":{\"build\":\"tsc\"}}"),
+                (
+                    "package.json",
+                    b"{\"version\":\"1.0.12-SNAPSHOT\",\"scripts\":{\"build\":\"tsc\"}}",
+                ),
                 ("package-lock.json", b"{\"lockfileVersion\":3}"),
             ],
         );
@@ -1092,6 +1184,20 @@ mod tests {
             )
             .unwrap();
         root_builder.insert("pom.xml", pom_blob, 0o100644).unwrap();
+        let versions_blob = repository
+            .blob(
+                br#"{
+  "schemaVersion": 1,
+  "productVersion": "1.0.12-SNAPSHOT",
+  "installerVersion": "0.1.0",
+  "minimumInstallerVersion": "0.1.0"
+}
+"#,
+            )
+            .unwrap();
+        root_builder
+            .insert("versions.json", versions_blob, 0o100644)
+            .unwrap();
         let root = repository.find_tree(root_builder.write().unwrap()).unwrap();
         let signature = Signature::now("Harmonia Test", "test@example.invalid").unwrap();
         repository

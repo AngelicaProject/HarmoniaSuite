@@ -58,8 +58,7 @@ per-user `install` operation:
   existing engine, and launches the immutable Electron payload;
 - the global installation lock is held across recovery, build, activation and detached launch
   handoff, using locked engine APIs to avoid nested lock deadlocks;
-- `--json` emits a machine-readable outcome and the stable exit codes are documented in
-  `docs/phase6-fresh-bootstrap-design.md`;
+- `--json` emits a machine-readable outcome alongside stable exit codes;
 - the final desktop handoff uses a separate detached launcher, so the setup process's health-process
   containment does not kill the installed desktop when setup exits. It passes the exact
   `HARMONIA_USER_DATA_ROOT` contract to Electron and waits for an operation-bound, durable
