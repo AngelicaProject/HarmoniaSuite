@@ -134,7 +134,7 @@ test("Pages workflow deploys the exact committed ledger without its git director
   assert.match(deployJob, /pages:\s+write/);
   assert.match(deployJob, /id-token:\s+write/);
   assert.match(deployJob, /actions\/configure-pages@v5/);
-  assert.match(deployJob, /actions\/upload-pages-artifact@v3/);
+  assert.match(deployJob, /actions\/upload-pages-artifact@v4/);
   assert.match(deployJob, /path: pages-root/);
   assert.match(deployJob, /cp -R rolling-site\/rolling pages-root\/rolling/);
   assert.match(deployJob, /test -f pages-root\/rolling\/generations\/index\.json/);
