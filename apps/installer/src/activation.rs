@@ -1133,6 +1133,10 @@ impl ActivationEngine {
                     remove_repair_journal(&self.paths)?;
                     return Ok(());
                 }
+                (RepairJournalPhase::Quarantined, true, false) => {
+                    remove_repair_journal(&self.paths)?;
+                    return Ok(());
+                }
                 _ => {
                     return Err(ActivationError::ReviewRequired(
                         "repair journal has no matching activation transaction and filesystem state is ambiguous"
@@ -2340,6 +2344,94 @@ mod tests {
         assert_eq!(
             fs::read(final_dir.join("original")).unwrap(),
             b"restored-after-crash"
+        );
+        assert!(!paths.repair_operation_path().exists());
+    }
+
+    #[test]
+    fn quarantined_repair_journal_after_restore_rename_only_cleans_journal() {
+        let root = tempdir().unwrap();
+        let paths = paths(root.path());
+        let store = StateStore::new(paths.clone());
+        store.initialize().unwrap();
+        let target = "g".repeat(40);
+        let final_dir = paths.versions_dir().join(&target);
+        let quarantine = paths
+            .versions_dir()
+            .join(format!(".{target}.repair-restored"));
+        fs::create_dir_all(&final_dir).unwrap();
+        fs::write(final_dir.join("original"), b"original-marker").unwrap();
+        let journal = RepairJournal {
+            schema_version: REPAIR_JOURNAL_SCHEMA_VERSION,
+            operation_id: "quarantined-after-restore".to_owned(),
+            target_commit: target,
+            quarantine,
+            phase: RepairJournalPhase::Quarantined,
+            activation_transaction_id: None,
+        };
+        crate::state::atomic_write_json(&paths.repair_operation_path(), &journal).unwrap();
+
+        ActivationEngine::new(paths.clone())
+            .recover_repair_journal(
+                &store,
+                None,
+                &fixture_config(&paths),
+                &FixtureHealthChecker {
+                    healthy: true,
+                    fail_commit: None,
+                },
+            )
+            .unwrap();
+
+        assert_eq!(
+            fs::read(final_dir.join("original")).unwrap(),
+            b"original-marker"
+        );
+        assert!(!paths.repair_operation_path().exists());
+    }
+
+    #[test]
+    fn repair_restore_recovery_is_idempotent_after_restore_rename() {
+        let root = tempdir().unwrap();
+        let paths = paths(root.path());
+        let store = StateStore::new(paths.clone());
+        store.initialize().unwrap();
+        let target = "h".repeat(40);
+        let final_dir = paths.versions_dir().join(&target);
+        let quarantine = paths
+            .versions_dir()
+            .join(format!(".{target}.repair-restored"));
+        fs::create_dir_all(&quarantine).unwrap();
+        fs::write(quarantine.join("original"), b"restored-marker").unwrap();
+        let journal = RepairJournal {
+            schema_version: REPAIR_JOURNAL_SCHEMA_VERSION,
+            operation_id: "quarantined-restore-crash".to_owned(),
+            target_commit: target,
+            quarantine: quarantine.clone(),
+            phase: RepairJournalPhase::Quarantined,
+            activation_transaction_id: None,
+        };
+        crate::state::atomic_write_json(&paths.repair_operation_path(), &journal).unwrap();
+
+        // Simulate the restore rename completing immediately before a process crash.
+        fs::rename(&quarantine, &final_dir).unwrap();
+
+        ActivationEngine::new(paths.clone())
+            .recover_repair_journal(
+                &store,
+                None,
+                &fixture_config(&paths),
+                &FixtureHealthChecker {
+                    healthy: true,
+                    fail_commit: None,
+                },
+            )
+            .unwrap();
+
+        assert!(!quarantine.exists());
+        assert_eq!(
+            fs::read(final_dir.join("original")).unwrap(),
+            b"restored-marker"
         );
         assert!(!paths.repair_operation_path().exists());
     }
