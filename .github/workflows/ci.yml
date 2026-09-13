@@ -101,6 +101,8 @@ jobs:
           node-version-file: frontend/.node-version
           cache: npm
           cache-dependency-path: frontend/package-lock.json
+      - name: Check version contract
+        run: node tools/version/check-versions.mjs
       - run: npm ci
         working-directory: frontend
       - run: npm run typecheck
@@ -115,6 +117,7 @@ jobs:
         working-directory: frontend
       - run: ./mvnw -B -q test
       - run: node --test tools/test-release-notes.mjs
+      - run: node --test tools/version/test-versions.mjs
       - run: node --test tools/release/test-manifest.mjs
       - run: node --test tools/release/test-rolling-policy.mjs
       - run: node --test tools/release/test-rolling-publication.mjs

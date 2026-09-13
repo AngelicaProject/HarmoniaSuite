@@ -286,7 +286,8 @@ Node
 
 Use portable distributions inside the application installation. Do not invoke system-wide installers for these dependencies.
 
-Release builds must continue to produce the existing MSI and portable distribution artifacts.
+Current release artifacts target Windows x64 and Linux x64 setup/launcher binaries and rolling
+manifests; MSI, portable ZIP, and macOS releases are outside the release contract.
 
 A release must not depend on the end user having Java, Git or Node installed globally.
 

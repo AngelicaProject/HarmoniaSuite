@@ -1,8 +1,7 @@
 # Harmonia installer core
 
-Phase 2 through Phase 5 provide the shared Rust foundation. Phase 6 adds the first CLI bootstrap
-operation; it is still not an installer UI, OS registration, shortcut manager, repair implementation,
-uninstaller, or updater.
+The installer core provides the shared Rust foundation and per-user bootstrap/update operations. It
+is not an installer UI, OS registration, shortcut manager, repair implementation, or uninstaller.
 
 The core owns:
 
@@ -16,7 +15,7 @@ The core owns:
   explicit environment policy and redacted command diagnostics;
 - validated transaction phases and conservative crash-recovery inspection.
 
-Phase 3 additionally provides:
+Toolchain management additionally provides:
 
 - pinned HTTPS descriptors for side-by-side JDK and Node installations;
 - verified archive download/reuse and ZIP/tar.gz extraction with traversal, safe internal symlink and reparse-point
@@ -25,15 +24,15 @@ Phase 3 additionally provides:
   current, previous and active transaction references;
 - managed-only executable resolution and explicit build environments with persistent Maven and npm
   caches;
-- Rust/libgit2 as the single Git implementation planned for Phase 4 on Windows and Linux; Git CLI
+- Rust/libgit2 as the single Git implementation on Windows and Linux; Git CLI
   archives are not a mandatory managed toolchain;
 - Rust 1.89.0 pinning for installer development and CI.
 
-The Phase 6 production descriptor catalog is checked in under `src/catalog.rs`. Every descriptor carries
+The production descriptor catalog is checked in under `src/catalog.rs`. Every descriptor carries
 an exact upstream version, HTTPS URL and SHA-256; the manager does not resolve “latest” or fall back to
 system Java or Node. Git operations use the Rust/libgit2 implementation directly.
 
-Phase 4 additionally provides:
+The exact-commit build pipeline additionally provides:
 
 - a libgit2-only bare mirror for `origin/main`, exact full-SHA resolution and installer-owned
   attempt-specific staging and verified candidates under `build/staging/<transaction-id>/<sha>` and
@@ -44,22 +43,21 @@ Phase 4 additionally provides:
   installation locking and crash recovery of journaled pre-activation paths without changing
   installation state or user data;
 - complete unpacked Electron payloads, including runtime, compiled shell and frontend assets, ready
-  for later Phase 5 staging without another build step.
+  for activation staging without another build step.
 
-Phase 4 deliberately does not stage or activate an artifact, switch current/previous versions, or
-implement signed manifests, installer UI, shortcuts or uninstall. Those are later phases.
+The build pipeline deliberately does not activate an artifact or switch current/previous versions;
+activation and lifecycle operations own those boundaries.
 
-Phase 5 adds immutable version staging, managed-Java runtime metadata, health checks, database-safe
-rollback, current/previous state and crash recovery. Phase 6 composes those engines into one
-per-user `install` operation:
+Activation and bootstrap provide immutable version staging, managed-Java runtime metadata, health
+checks, database-safe rollback, current/previous state, crash recovery, and the per-user `install`
+operation:
 
 - `harmonia-setup install` resolves one exact `origin/main` commit, downloads only the checked-in
   production JDK/Node descriptors, builds through the existing pipeline, activates through the
   existing engine, and launches the immutable Electron payload;
 - the global installation lock is held across recovery, build, activation and detached launch
   handoff, using locked engine APIs to avoid nested lock deadlocks;
-- `--json` emits a machine-readable outcome and the stable exit codes are documented in
-  `docs/phase6-fresh-bootstrap-design.md`;
+- `--json` emits a machine-readable outcome alongside stable exit codes;
 - the final desktop handoff uses a separate detached launcher, so the setup process's health-process
   containment does not kill the installed desktop when setup exits. It passes the exact
   `HARMONIA_USER_DATA_ROOT` contract to Electron and waits for an operation-bound, durable
@@ -68,7 +66,7 @@ per-user `install` operation:
 - production setup accepts no arbitrary source URL or product-version override. Custom repositories
   and descriptors remain restricted to internal fixture seams.
 
-Phase 9–10 adds the production lifecycle around those engines:
+The production lifecycle around those engines provides:
 
 - `install`, `update`, `check-update`, `repair`, and `uninstall` are strict per-user operations with
   documented stable exit codes and optional JSON output;
@@ -80,8 +78,8 @@ Phase 9–10 adds the production lifecycle around those engines:
   workspace, and user-data paths explicitly;
 - Windows per-user Start Menu/Desktop shortcuts and HKCU uninstall registration, plus Linux XDG
   desktop entry/icon integration, target only the stable launcher;
-- release CI is Windows/Linux x64 only and publishes signed setup/launcher artifacts and signed
-  platform manifests. MSI, portable ZIP, and macOS artifacts are deliberately excluded.
+- release CI targets Windows/Linux x64, publishes setup/launcher artifacts with optional Authenticode,
+  and publishes signed platform manifests. MSI, portable ZIP, and macOS artifacts are out of scope.
 
 Run the checks from the repository root with:
 

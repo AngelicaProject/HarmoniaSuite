@@ -35,6 +35,16 @@ jobs:
           cache-dependency-path: |
             frontend/package-lock.json
             apps/desktop/package-lock.json
+      - name: Check product version contract and release tag
+        run: |
+          node tools/version/check-versions.mjs
+          node tools/release/check-release.mjs "$GITHUB_REF_NAME"
+      - name: Embed immutable release bootstrap seed
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "HARMONIA_RELEASE_SEED_COMMIT=$GITHUB_SHA" >> "$GITHUB_ENV"
+          echo "HARMONIA_RELEASE_PRODUCT_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -112,10 +122,25 @@ jobs:
           if-no-files-found: error
 
   publish:
-    name: Publish tagged distribution
+    name: Publish HarmoniaSuite product release
     needs: verify-and-build
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: frontend/.node-version
+      - name: Verify release contract and create metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          node tools/release/check-release.mjs "$GITHUB_REF_NAME"
+          mkdir -p release-input/release-metadata
+          node tools/release/create-release-metadata.mjs --out release-input/release-metadata/release-metadata.json
       - uses: actions/download-artifact@v4
         with:
           pattern: release-*
@@ -136,7 +161,7 @@ jobs:
           else
             gh release create "$tag" --repo "$repo" --draft \
               --title "HarmoniaSuite $tag" \
-              --notes "Tagged HarmoniaSuite Windows/Linux x64 distribution. Rolling main updates are published separately."
+              --notes "HarmoniaSuite product release for Windows/Linux x64. Rolling main updates are published separately."
             is_draft=true
           fi
 

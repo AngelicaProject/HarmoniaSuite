@@ -3,6 +3,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { isStableSemVer, parseSemVer } from "../version/check-versions.mjs";
 
 const args = new Map();
 for (let index = 2; index < process.argv.length; index += 2) {
@@ -22,6 +23,10 @@ if (!new Set(["windows", "linux"]).has(platform)) throw new Error("platform must
 if (!/^[0-9a-f]{40}$/i.test(targetCommit ?? "")) throw new Error("target-commit must be a full SHA");
 if (!productVersion?.trim() || !Number.isSafeInteger(generation) || generation < 1) {
   throw new Error("product-version and positive generation are required");
+}
+parseSemVer(productVersion, "product-version");
+if (minInstallerVersion !== undefined && !isStableSemVer(minInstallerVersion)) {
+  throw new Error(`min-installer-version must be stable SemVer: ${minInstallerVersion}`);
 }
 
 const catalogPath = join(dirname(fileURLToPath(import.meta.url)), "production-toolchain-catalog.json");

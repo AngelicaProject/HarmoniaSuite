@@ -273,7 +273,7 @@ impl<D: DownloadClient, P: ProcessRunner> UpdateEngine<D, P> {
 
     #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
-    fn update_with_sources_for_test<
+    pub(crate) fn update_with_sources_for_test<
         F: ManifestFetcher,
         H: HealthChecker,
         A: ActivationHooks,
@@ -510,7 +510,12 @@ impl<D: DownloadClient, P: ProcessRunner> UpdateEngine<D, P> {
                 journal.phase = UpdateJournalPhase::Failed;
                 journal.failure = Some(error.to_string());
                 finish_journal(&self.paths, &mut journal)?;
-                let status = if matches!(&error, BuildError::CanonicalVersionMismatch { .. }) {
+                let status = if matches!(
+                    &error,
+                    BuildError::CanonicalVersionMismatch { .. }
+                        | BuildError::CanonicalComponentVersionMismatch { .. }
+                        | BuildError::CanonicalVersion(..)
+                ) {
                     UpdateStatus::TrustFailure {
                         reason: error.to_string(),
                     }
@@ -1664,13 +1669,22 @@ mod tests {
     }
 
     fn ab_commit(repository: &Repository, parent: Option<&str>, marker: &str) -> String {
+        let product_version = ab_version(marker);
+        let frontend_package = format!(r#"{{"version":"{product_version}"}}"#);
+        let desktop_package = format!(r#"{{"version":"{product_version}"}}"#);
         let frontend = ab_tree(
             repository,
-            &[("package.json", b"{}"), ("package-lock.json", b"{}")],
+            &[
+                ("package.json", frontend_package.as_bytes()),
+                ("package-lock.json", b"{}"),
+            ],
         );
         let desktop = ab_tree(
             repository,
-            &[("package.json", b"{}"), ("package-lock.json", b"{}")],
+            &[
+                ("package.json", desktop_package.as_bytes()),
+                ("package-lock.json", b"{}"),
+            ],
         );
         let apps = ab_children(repository, &[("desktop", desktop)]);
         let wrapper = ab_tree(
@@ -1692,6 +1706,15 @@ mod tests {
         root.insert(
             "pom.xml",
             repository.blob(pom.as_bytes()).unwrap(),
+            0o100644,
+        )
+        .unwrap();
+        let versions = format!(
+            r#"{{"schemaVersion":1,"productVersion":"{product_version}","installerVersion":"0.1.0","minimumInstallerVersion":"0.1.0"}}"#
+        );
+        root.insert(
+            "versions.json",
+            repository.blob(versions.as_bytes()).unwrap(),
             0o100644,
         )
         .unwrap();

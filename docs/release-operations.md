@@ -1,62 +1,107 @@
 # Release operations
 
-The release workflow treats the two signing systems differently:
+This document is the operational contract for product releases and signed rolling updates.
+Version identity and release progression rules live in [versioning.md](versioning.md).
 
-* `HARMONIA_WINDOWS_SIGNING_CERTIFICATE_B64` and
-  `HARMONIA_WINDOWS_SIGNING_PASSWORD` sign and verify `HarmoniaSetup.exe` and
-  `HarmoniaSuite.exe` with Authenticode on the Windows runner when configured. If absent, the
-  tagged distribution continues with explicit unsigned metadata; this is not a trust substitute.
-* `HARMONIA_MANIFEST_SIGNING_KEY_PEM` is an Ed25519 PKCS#8 private key for rolling publication,
-  matching the public trust root compiled into `apps/installer/src/manifest.rs`.
-  The current production key is `keyId=primary-2026-09` with public key
-  `5e02dfc689bc3c447cffa720d94225b5bedb593cb4f77c5ba0461103705363d2`.
-  `HARMONIA_MANIFEST_PUBLIC_KEY_HEX` must equal that reviewed public key. The private key is
-  stored only in the external secret manager/GitHub Actions secret, never committed, materialized
-  only in runner temp storage for signing, and removed after signing. The signed envelope is
-  verified before upload.
+## Supported release scope
 
-The Ed25519 private key must be stored in the external secret manager/GitHub Actions secret before
-rolling publication. A comment or public key in source is not an operational substitute. The key is
-removed by the workflow cleanup trap after signing. The secret names remain
-`HARMONIA_MANIFEST_SIGNING_KEY_PEM` and `HARMONIA_MANIFEST_PUBLIC_KEY_HEX`; CI does not create,
-print, or publish private keys.
+Production release artifacts target Windows x64 and Linux x64. macOS, portable ZIP distributions,
+and MSI packages are out of scope for this release contract. The application payload and installer
+artifacts must not be confused with user-created translation ZIP exports.
 
-Future production key rotation must use overlap: A -> A+B -> B.
+## GitHub product releases
 
-1. Current clients trust A.
-2. Publish an installer signed by A whose compiled keyring trusts A+B.
-3. Wait until sufficient client adoption.
-4. Switch manifest signing to B; clients with A+B accept it.
-5. Remove A only in a later installer release.
+A tag `vX.Y.Z` means a HarmoniaSuite product release, not an installer-engine release. The
+published release title is `HarmoniaSuite vX.Y.Z`, and the tag must equal the stable
+`versions.json.productVersion`. The release workflow also requires the checked-out commit to be
+the exact tag commit.
 
-After production clients exist, never replace A directly with B: old updater versions that trust
-only A will be unable to verify the new manifest.
+Assets may include the platform bootstrap/launcher binaries and their checksums:
 
-Ordinary tagged distribution does not require this Ed25519 key because the tag workflow publishes
-only installer/launcher binaries and does not publish a rolling manifest.
+```text
+HarmoniaSetup.exe
+HarmoniaSuite.exe
+harmonia-setup
+harmonia-suite
+release-metadata.json
+checksums
+```
 
-Tagged distribution publication is draft-first and rerun-safe: an existing draft is reused,
-expected assets are uploaded with clobber semantics, and the draft is made public only after all
-assets verify. A published tag is immutable: a rerun verifies existing assets and never replaces
-them. Rolling publication runs only after successful `main` CI, accepts a candidate only when it is
-in `main` history and is equal to or a descendant of the latest published target, and treats late
-ancestor completions as no-ops. It persists SHA-to-generation mapping under
-`rolling/generations`, invokes the Rust production verifier, and updates stable aliases last. A
-rerun for the same SHA is idempotent; a generation collision with different bytes is fatal.
+The tagged installer is compiled with the exact tag commit and stable product version. A fresh
+install uses that embedded release bootstrap seed, builds only the exact seed commit, and fails
+closed when the checkout's product version differs. After the first launch, normal updates follow
+signed rolling manifests and later exact commit identities.
 
-The rolling manifest keeps three version identities separate: `productVersion` is the Maven
-`project.version` read from the exact candidate checkout, `targetCommit` plus `generation` is the
-rolling publication identity, and `minInstallerVersion` is derived from the installer Cargo
-package version unless a separately reviewed compatibility floor is introduced. Generation and
-commit values are never embedded into the canonical application version.
+`release-metadata.json` is a machine-readable product-release asset:
 
-The canonical application version is resolved during every production build from the exact
-checkout with the managed Maven Wrapper (`help:evaluate -Dexpression=project.version
--DforceStdout`). Fresh install and repair use the resolved value directly; a rolling manifest
-must match it exactly or the update fails closed. The installer Cargo version is separate and is
-used only for installer compatibility metadata.
+```json
+{
+  "schemaVersion": 1,
+  "productVersion": "1.0.11",
+  "installerVersion": "0.1.0",
+  "commit": "<exact tag commit>"
+}
+```
 
-The updater uses only the compiled platform-specific HTTPS Pages endpoint and the signed
-`channel: rolling` contract. It does not use GitHub `releases/latest/download` as an application
-update source. The installer has no XivExdUnpacker dependency: Electron's verified runnable
-payload is the desktop artifact contract.
+Its `commit` must be the same exact target as the embedded release bootstrap seed. Product release
+publication is draft-first and rerun-safe; a published tag is immutable and reruns verify existing
+assets instead of replacing them.
+
+## Authenticode and rolling trust
+
+Windows Authenticode signing is optional. An unsigned production release is allowed and is marked
+in its Windows release metadata. Authenticode status is separate from rolling-update trust:
+rolling manifests are trusted through Ed25519 verification, not through the Windows signature.
+
+The rolling signing key is external secret material. The current reviewed keyring contains the
+compiled public key selected by `keyId=primary-2026-09`. Private keys are never committed,
+accepted as runtime input, or printed by CI. Future key rotation is an overlap sequence:
+
+```text
+A -> A+B -> B
+```
+
+Old clients trust A, a reviewed installer release adds B while retaining A, and A is removed only
+after clients have had time to adopt the A+B release.
+
+## Rolling manifest security contract
+
+Production rolling manifests are fetched only from the compiled platform-specific HTTPS Pages
+endpoint. The signed raw manifest must use `channel: "rolling"`. `keyId` selects a compiled,
+reviewed public key; an unknown key produces `TrustFailure`.
+
+Manifest and signature documents fail closed on unknown keys, invalid Ed25519 signatures,
+malformed or unsupported schemas, malformed JSON or other malformed documents, malformed
+`minInstallerVersion`, credentials in artifact or manifest URLs, plain HTTP, HTTPS-to-HTTP
+downgrade/redirects, and oversized manifest or signature documents. The manifest's
+`productVersion` must match the exact checkout's `versions.json`; `minInstallerVersion` comes from
+that contract and remains independent from the current installer engine version.
+
+Rolling publication runs only after successful main CI. It accepts a candidate only when it
+remains in `main` history and is equal to or a descendant of the latest published target. The
+exact target commit plus durable monotonic generation is the rolling identity; late ancestor
+completions are no-ops and stable aliases are updated last.
+
+## Bootstrap launch acknowledgement
+
+Electron launch acknowledgement is durable and binds all of:
+
+```text
+operation id
+exact target commit OID
+nonce
+```
+
+Electron writes the acknowledgement only after the local gateway is ready, the secure application
+protocol is registered, and the initial UI has loaded successfully. Recovery validates the same
+operation id, target commit, and nonce; stale or mismatched acknowledgements are ignored. The
+`second-instance` recovery path may acknowledge on behalf of an already-running primary, while a
+short-lived secondary is not treated as a successful launch by itself.
+
+## Operational boundaries
+
+Fresh install, rolling update, repair, and launch use the same per-user transactional state and
+rollback contract. The installer does not use GitHub `releases/latest/download` as an application
+update source, does not accept arbitrary source/version runtime overrides, and does not weaken the
+existing updater trust model. The product release workflow publishes product assets; rolling
+manifest publication is a separate signed operation.
