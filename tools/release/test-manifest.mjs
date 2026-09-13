@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFile } from "node:child_process";
@@ -66,4 +66,54 @@ test("rolling manifest keeps Maven application version separate from identity fi
   assert.equal(manifest.productVersion, "1.0.11-SNAPSHOT");
   assert.equal(manifest.targetCommit, "fedcba9876543210fedcba9876543210fedcba98");
   assert.equal(manifest.generation, 125);
+});
+
+test("manifest signing and verification default to the current key id", async () => {
+  const repo = join(import.meta.dirname, "..", "..");
+  const root = await mkdtemp(join(tmpdir(), "harmonia-manifest-signing-"));
+  const manifestPath = join(root, "manifest.json");
+  const signaturePath = join(root, "manifest.json.sig");
+  const keyPath = join(root, "fixture-ed25519-key.pem");
+  await writeFile(
+    keyPath,
+    "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIPTbj1QOnOfs/NEu9Bbd/aQxEBWtyXdzibqMIxJmyY7j\n-----END PRIVATE KEY-----\n",
+  );
+  await exec(process.execPath, [
+    "tools/release/create-manifest.mjs",
+    "--platform",
+    "linux",
+    "--target-commit",
+    "0123456789abcdef0123456789abcdef01234567",
+    "--product-version",
+    "1.0.11-SNAPSHOT",
+    "--generation",
+    "1",
+    "--out",
+    manifestPath,
+  ], { cwd: repo });
+
+  const environment = {
+    ...process.env,
+    HARMONIA_MANIFEST_SIGNING_KEY_FILE: keyPath,
+  };
+  await exec(process.execPath, [
+    "tools/release/sign-manifest.mjs",
+    manifestPath,
+    signaturePath,
+  ], { cwd: repo, env: environment });
+  const envelope = JSON.parse(await readFile(signaturePath, "utf8"));
+  assert.equal(envelope.keyId, "primary-2026-09");
+
+  await exec(process.execPath, [
+    "tools/release/verify-manifest.mjs",
+    manifestPath,
+    signaturePath,
+  ], {
+    cwd: repo,
+    env: {
+      ...process.env,
+      HARMONIA_MANIFEST_PUBLIC_KEY_HEX:
+        "69b02488d9b687a23cb0918614519c97f1618f5d8c005437e82de9b997835192",
+    },
+  });
 });
