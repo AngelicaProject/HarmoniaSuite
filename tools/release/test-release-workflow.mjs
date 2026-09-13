@@ -75,6 +75,50 @@ test("release workflow installs the Rust components used by its checks", () => {
   );
 });
 
+test("release staging and optional Windows signing use the manifest target directory", () => {
+  assert.match(
+    workflow,
+    /cargo build --manifest-path apps\/installer\/Cargo\.toml --release --bins/,
+  );
+  assert.doesNotMatch(workflow, /(?<!apps\/installer\/)target\/release\//);
+  for (const binary of [
+    "HarmoniaSetup.exe",
+    "HarmoniaSuite.exe",
+    "harmonia-setup",
+    "harmonia-suite",
+  ]) {
+    assert.match(
+      workflow,
+      new RegExp(`apps/installer/target/release/${binary}`),
+    );
+  }
+  const signingStep = workflow.match(
+    /- name: Sign Windows binaries[\s\S]*?(?=\n\s+- name: Stage release files \(Unix\))/,
+  )?.[0];
+  assert.ok(signingStep);
+  assert.match(
+    signingStep,
+    /signtool sign[\s\S]*apps\/installer\/target\/release\/HarmoniaSetup\.exe/,
+  );
+  assert.match(
+    signingStep,
+    /signtool sign[\s\S]*apps\/installer\/target\/release\/HarmoniaSuite\.exe/,
+  );
+  assert.match(
+    signingStep,
+    /signtool verify[\s\S]*apps\/installer\/target\/release\/HarmoniaSetup\.exe/,
+  );
+  assert.match(
+    signingStep,
+    /signtool verify[\s\S]*apps\/installer\/target\/release\/HarmoniaSuite\.exe/,
+  );
+  assert.match(signingStep, /if: runner\.os == 'Windows'/);
+  assert.match(
+    signingStep,
+    /Authenticode credentials are absent; release binaries remain unsigned/,
+  );
+});
+
 test("Windows release contract runs in an explicit bash shell", () => {
   const contractStep = workflow.match(
     /- name: Check product version contract and release tag[\s\S]*?(?=\n\s+- name:|\n\s+- uses:)/,
