@@ -224,7 +224,7 @@ impl InstallationPaths {
     pub fn windows_start_menu_shortcut_path(&self) -> PathBuf {
         #[cfg(windows)]
         if let Some(path) =
-            windows_known_folder_path(windows_sys::Win32::UI::Shell::FOLDERID_StartMenu)
+            windows_known_folder_path(&windows_sys::Win32::UI::Shell::FOLDERID_StartMenu)
         {
             return path.join("Programs").join("HarmoniaSuite.lnk");
         }
@@ -239,7 +239,7 @@ impl InstallationPaths {
     pub fn windows_desktop_shortcut_path(&self) -> PathBuf {
         #[cfg(windows)]
         if let Some(path) =
-            windows_known_folder_path(windows_sys::Win32::UI::Shell::FOLDERID_Desktop)
+            windows_known_folder_path(&windows_sys::Win32::UI::Shell::FOLDERID_Desktop)
         {
             return path.join("HarmoniaSuite.lnk");
         }
