@@ -153,7 +153,10 @@ jobs:
           mkdir -p release
           install -m 0755 apps/installer/target/release/harmonia-setup release/harmonia-setup
           install -m 0755 apps/installer/target/release/harmonia-suite release/harmonia-suite
-          sha256sum release/harmonia-setup release/harmonia-suite > release/sha256sums-linux.txt
+          (
+            cd release
+            sha256sum harmonia-setup harmonia-suite > sha256sums-linux.txt
+          )
       - name: Stage release files (Windows)
         if: runner.os == 'Windows'
         shell: pwsh

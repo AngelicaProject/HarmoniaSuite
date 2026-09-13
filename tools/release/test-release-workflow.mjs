@@ -119,6 +119,21 @@ test("release staging and optional Windows signing use the manifest target direc
   );
 });
 
+test("Linux checksum entries are basename-only for downloaded artifacts", () => {
+  const stagingStep = workflow.match(
+    /- name: Stage release files \(Unix\)[\s\S]*?(?=\n\s+- name: Stage release files \(Windows\))/,
+  )?.[0];
+  assert.ok(stagingStep);
+  assert.match(
+    stagingStep,
+    /cd release[\s\S]*sha256sum harmonia-setup harmonia-suite > sha256sums-linux\.txt/,
+  );
+  assert.doesNotMatch(
+    stagingStep,
+    /sha256sum release\/harmonia-setup release\/harmonia-suite/,
+  );
+});
+
 test("Windows release contract runs in an explicit bash shell", () => {
   const contractStep = workflow.match(
     /- name: Check product version contract and release tag[\s\S]*?(?=\n\s+- name:|\n\s+- uses:)/,
