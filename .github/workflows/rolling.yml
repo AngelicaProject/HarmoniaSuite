@@ -37,7 +37,7 @@ jobs:
           git cat-file -e "$candidate^{commit}"
           git merge-base --is-ancestor "$candidate" origin/main
       - uses: dtolnay/rust-toolchain@1.89.0
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '21'
