@@ -22,7 +22,7 @@ jobs:
         with:
           components: rustfmt, clippy
       - name: cache production toolchains
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ runner.temp }}/harmonia-toolchain-smoke
           key: installer-toolchains-${{ runner.os }}-jdk-21.0.12-8-node-24.15.0
