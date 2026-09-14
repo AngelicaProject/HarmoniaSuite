@@ -21,8 +21,8 @@ or repeated tag.
 
 ## Installer Engine Version
 
-`installerVersion` is the independent SemVer version of the Rust installer/updater/launcher
-engine. It must equal `apps/installer/Cargo.toml` and the corresponding package entry in
+`installerVersion` is the independent SemVer version of the Rust installer/updater engine. It must
+equal `apps/installer/Cargo.toml` and the corresponding package entry in
 `Cargo.lock` when that entry is tracked. Changing installer behavior requires a higher engine
 version before a new installer binary is published. An installer-only compatible fix can bump
 `0.1.0` to `0.1.1`; a substantial engine capability or protocol change can bump the minor line to
@@ -128,6 +128,16 @@ It is valid for product releases to reuse an unchanged engine:
 Product v1.0.12 -> installer 0.1.1
 Product v1.0.13 -> installer 0.1.1
 ```
+
+The 0.1.0/0.1.1 to 0.1.2 migration is staged separately from rolling application publication. The
+old client first performs a normal signed rolling update to a PR44-or-later transition commit with
+the canonical Electron executable and compatibility alias. The user then runs a trusted, prebuilt
+0.1.2 setup binary's `repair` command, which publishes the direct-launch `current` surface and
+removes the legacy proxy only after integration succeeds. If the exact current payload has no
+canonical executable, repair returns `rolling application update required first` and leaves the
+proxy in place. Until the two steps complete, existing clients remain on their legacy proxy
+contract. The rolling manifest's `minimumInstallerVersion` stays at `0.1.0` until this upgrade path
+is available and adopted; this change does not raise the floor.
 
 ## SemVer policy and tooling
 

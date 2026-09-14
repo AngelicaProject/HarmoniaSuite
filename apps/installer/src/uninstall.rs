@@ -51,7 +51,8 @@ pub fn uninstall(
     paths: InstallationPaths,
     remove_user_data: bool,
 ) -> Result<UninstallResult, UninstallError> {
-    let managed_exists = paths.managed_paths().iter().any(|path| path.exists());
+    let managed_exists = paths.managed_paths().iter().any(|path| path.exists())
+        || paths.current_pointer_path().exists();
     if !managed_exists {
         let user_data_exists = paths.user_data_root.exists();
         if remove_user_data {
@@ -127,6 +128,8 @@ pub fn uninstall(
     cleanup_shutdown_coordination(&paths)
         .map_err(|error| UninstallError::Desktop(error.to_string()))?;
     integration::remove(&paths)
+        .map_err(|error| UninstallError::Io(std::io::Error::other(error.to_string())))?;
+    crate::current_pointer::remove(&paths)
         .map_err(|error| UninstallError::Io(std::io::Error::other(error.to_string())))?;
 
     let roots = [
@@ -232,12 +235,16 @@ mod tests {
         let root = tempdir().unwrap();
         let paths = paths(root.path());
         StateStore::new(paths.clone()).initialize().unwrap();
+        let commit = "a".repeat(40);
+        fs::create_dir_all(paths.versions_dir().join(&commit)).unwrap();
+        crate::current_pointer::switch(&paths, &commit).unwrap();
         fs::write(paths.app_root.join("owned.txt"), b"owned").unwrap();
         fs::create_dir_all(&paths.user_data_root).unwrap();
         fs::write(paths.user_data_root.join("db"), b"data").unwrap();
         let result = uninstall(paths.clone(), false).unwrap();
         assert!(matches!(result.status, UninstallStatus::Uninstalled { .. }));
         assert!(!paths.app_root.exists());
+        assert!(!paths.current_pointer_path().exists());
         assert!(paths.user_data_root.join("db").is_file());
     }
 

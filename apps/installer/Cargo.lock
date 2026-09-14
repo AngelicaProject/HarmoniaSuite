@@ -416,7 +416,7 @@ dependencies = [
 
 [[package]]
 name = "harmonia-installer"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "ed25519-dalek",
  "flate2",

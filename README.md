@@ -25,7 +25,7 @@ Machine translation runs on either Gemini or OpenRouter. Paste the key in settin
 
 ### Windows and Linux
 
-Download the setup or launcher artifact for Windows x64 or Linux x64 from [Releases](https://github.com/AngelicaProject/HarmoniaSuite/releases). Installation is per user with no admin rights needed; the managed JDK and Node.js toolchain support local builds and are not needed to run the packaged JAR. State lives in `%APPDATA%/HarmoniaSuite` on Windows.
+Download the setup artifact for Windows x64 or Linux x64 from [Releases](https://github.com/AngelicaProject/HarmoniaSuite/releases). Installation is per user with no admin rights needed; the managed JDK and Node.js toolchain support local builds and are not needed to run the packaged JAR. State lives in `%APPDATA%/HarmoniaSuite` on Windows.
 
 Updates handle themselves: a version chip in the status bar, one button. The app pulls sources and rebuilds locally, rolling back on failure. If your checkout is dirty it refuses the update instead of risking local work.
 

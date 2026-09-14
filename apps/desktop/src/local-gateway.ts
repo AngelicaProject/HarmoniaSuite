@@ -4,8 +4,13 @@ import { join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 
 import { moduleDir } from "./runtime-paths.js";
+import {
+  createDesktopRuntimeContext,
+  type DesktopRuntimeContext,
+} from "./runtime-context.js";
 
 type LocalGatewayOptions = {
+  runtimeContext?: DesktopRuntimeContext;
   jarPath?: string;
   javaBinary?: string;
   workspace?: string;
@@ -39,14 +44,15 @@ export class LocalGateway {
     if (this.child) {
       throw new Error("local gateway is already running");
     }
-    const jarPath = this.options.jarPath || defaultGatewayJar();
+    const runtimeContext = this.options.runtimeContext || createDesktopRuntimeContext();
+    const jarPath = this.options.jarPath || defaultGatewayJar(runtimeContext);
     if (!jarPath || !existsSync(jarPath)) {
       throw new Error(
         "Spring gateway JAR was not found; build the backend or set HARMONIA_GATEWAY_JAR",
       );
     }
-    const java = this.options.javaBinary || defaultJavaBinary();
-    const workspace = this.options.workspace || process.env.HARMONIA_WORKSPACE;
+    const java = this.options.javaBinary || runtimeContext.javaBinary || defaultJavaBinary(runtimeContext);
+    const workspace = this.options.workspace || runtimeContext.workspace;
     const instanceId = randomUUID().replaceAll("-", "");
     this.instanceId = instanceId;
     this.stopping = false;
@@ -176,32 +182,25 @@ export function parseGatewayReadyLine(line: string, expectedInstance?: string): 
   return Number.isInteger(port) && port > 0 && port <= 65535 ? port : undefined;
 }
 
-export function defaultGatewayJar(): string | undefined {
+export function defaultGatewayJar(
+  runtimeContext: DesktopRuntimeContext = createDesktopRuntimeContext(),
+): string | undefined {
+  if (runtimeContext.mode === "installed") return runtimeContext.backendJar;
   const explicit = process.env.HARMONIA_BACKEND_JAR || process.env.HARMONIA_GATEWAY_JAR;
-  const activeVersion = process.env.HARMONIA_ACTIVE_VERSION_DIR;
-  const installed = process.env.HARMONIA_RUNTIME_MODE === "installed";
+  const activeVersion = runtimeContext.activeVersionDir;
   const candidates = [
     explicit,
+    runtimeContext.backendJar,
     activeVersion ? join(activeVersion, "backend", "harmonia-suite.jar") : undefined,
-    ...(installed
-      ? []
-      : [
-          resolve(process.cwd(), "target", "harmonia-suite.jar"),
-          resolve(moduleDir, "../../../target/harmonia-suite.jar"),
-        ]),
+    resolve(process.cwd(), "target", "harmonia-suite.jar"),
+    resolve(moduleDir, "../../../target/harmonia-suite.jar"),
   ].filter((candidate): candidate is string => Boolean(candidate));
   return candidates.find((candidate) => existsSync(candidate));
 }
 
-function defaultJavaBinary(): string {
-  if (process.env.HARMONIA_RUNTIME_MODE === "installed") {
-    const managed = process.env.HARMONIA_JAVA_BINARY;
-    if (!managed) {
-      throw new Error(
-        "managed Java is required in installed runtime mode; set HARMONIA_JAVA_BINARY",
-      );
-    }
-    return managed;
+function defaultJavaBinary(runtimeContext: DesktopRuntimeContext): string {
+  if (runtimeContext.mode === "installed") {
+    throw new Error("managed Java is required in installed runtime mode");
   }
   const javaHome = process.env.JAVA_HOME;
   if (javaHome) {

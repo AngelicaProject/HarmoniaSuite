@@ -101,29 +101,35 @@ pub fn validate_published_binary(
     ensure_executable(binary)
 }
 
-/// Publish the stable launcher beside the setup helper. The launcher uses the
-/// same executable image and dispatches by its installed filename, so the
-/// production bootstrap does not need a second self-modifying code path.
-pub fn publish_stable_launcher(paths: &InstallationPaths) -> Result<PathBuf, HelperError> {
-    let source = env::current_exe()?;
-    if !source.is_file() {
-        return Err(HelperError::InvalidPath(source));
+/// Remove the pre-0.1.2 Rust proxy after the direct Electron target and OS integration have
+/// already been published. The operation is deliberately idempotent so interrupted migrations
+/// can be retried by repair.
+pub fn remove_legacy_launcher(paths: &InstallationPaths) -> Result<(), HelperError> {
+    let legacy = paths.legacy_launcher_path();
+    validate_managed_path(&paths.app_root, &legacy)?;
+    remove_managed_file_if_present(&legacy)?;
+    let metadata = legacy.with_file_name(format!(
+        "{}.json",
+        legacy
+            .file_name()
+            .ok_or_else(|| HelperError::InvalidPath(legacy.clone()))?
+            .to_string_lossy()
+    ));
+    validate_managed_path(&paths.app_root, &metadata)?;
+    remove_managed_file_if_present(&metadata)?;
+    Ok(())
+}
+
+fn remove_managed_file_if_present(path: &Path) -> Result<(), HelperError> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_file() || metadata.file_type().is_symlink() => {
+            fs::remove_file(path)?;
+        }
+        Ok(_) => return Err(HelperError::InvalidPath(path.to_path_buf())),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
     }
-    let destination = paths.stable_launcher_path();
-    validate_managed_path(&paths.app_root, &destination)?;
-    fs::create_dir_all(paths.bin_dir())?;
-    let staging = paths
-        .bin_dir()
-        .join(format!(".stable-launcher.{}.tmp", Uuid::new_v4().simple()));
-    copy_to_staging(&source, &staging)?;
-    if let Err(error) = crate::state::durable_replace_file(&staging, &destination) {
-        let _ = fs::remove_file(&staging);
-        return Err(error.into());
-    }
-    set_executable(&destination)?;
-    let metadata = helper_metadata(paths, &destination)?;
-    crate::state::atomic_write_json(&paths.stable_launcher_metadata_path(), &metadata)?;
-    Ok(destination)
+    Ok(())
 }
 
 /// Hand off deletion of an installed setup binary to a copy that can outlive
@@ -380,5 +386,31 @@ mod tests {
             publish_installer_helper(&paths),
             Ok(path) if path == destination
         ));
+    }
+
+    #[test]
+    fn removes_the_legacy_proxy_idempotently() {
+        let root = tempdir().unwrap();
+        let paths = InstallationPaths {
+            platform: Platform::Linux,
+            architecture: TargetArchitecture::X64,
+            app_root: root.path().join("app"),
+            user_data_root: root.path().join("data"),
+            state_root: root.path().join("state"),
+            cache_root: root.path().join("cache"),
+        };
+        fs::create_dir_all(paths.bin_dir()).unwrap();
+        let legacy = paths.legacy_launcher_path();
+        let legacy_metadata = legacy.with_file_name(format!(
+            "{}.json",
+            legacy.file_name().unwrap().to_string_lossy()
+        ));
+        fs::write(&legacy, b"old Rust proxy").unwrap();
+        fs::write(&legacy_metadata, b"legacy metadata").unwrap();
+
+        remove_legacy_launcher(&paths).unwrap();
+        remove_legacy_launcher(&paths).unwrap();
+        assert!(!legacy.exists());
+        assert!(!legacy_metadata.exists());
     }
 }

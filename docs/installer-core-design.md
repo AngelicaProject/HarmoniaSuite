@@ -24,31 +24,34 @@ corresponding `AppData` roots; there is no public-profile fallback. Linux applic
 ignored in favor of these absolute fallbacks. If no absolute per-user root can be determined, path
 resolution fails rather than using a shared or temporary directory.
 
-Managed application files are grouped below `app_root`: `bin`, `versions`, `toolchain`, `source`,
-`build`, `cache` and `state`. User data is never a child of a version or staging directory and is
-not created or removed by core initialization.
+Managed application files are grouped below `app_root`: `bin`, `current`, `versions`, `toolchain`,
+`source`, `build` and `cache`. Windows additionally stores `state` below `app_root`; Linux uses
+the separate XDG `state_root` described above. `current` is a managed pointer to one full-SHA
+directory under `versions`; it is never a copied version. User data is never a child of a version or
+staging directory and is not created or removed by core initialization.
 
 ## Persistent state и transaction journal
 
-`state/install.json` is the machine-readable installation state. Writes use a sibling temporary file,
-flush/sync, and platform replacement semantics. `state/transaction.json` is the last active or
+`state_root/install.json` is the machine-readable installation state. Writes use a sibling temporary
+file, flush/sync, and platform replacement semantics. `state_root/transaction.json` is the last active or
 completed transaction record. Every state-machine transition is persisted before the next operation
 may rely on it. The record contains operation, phase, target/current commit metadata when known,
 owned temporary paths, activation marker and failure diagnostics.
 
 Recovery is conservative. A pre-activation interrupted transaction can be resumed or have only its
-explicitly owned temporary paths cleaned. A journal that reached activation/health-check is reported
-for explicit recovery/rollback handling; core does not guess that a partially switched installation
-is safe. Unknown paths and user-data paths are never deleted from a recovery scan. Cleanup rejects
-parent-directory components, refuses to remove a managed root itself, and fails closed if any
-existing ancestor is a symlink or Windows reparse point.
+explicitly owned temporary paths cleaned. The activation journal records the pointer/state boundary;
+recovery restores the pointer from the pre-activation snapshot before restoring state whenever health
+completion was not durable, and repairs a missing or stale pointer from trusted state. Unknown paths
+and user-data paths are never deleted from a recovery scan. Cleanup rejects parent-directory
+components, refuses to remove a managed root itself, and fails closed if any existing ancestor is a
+symlink or Windows reparse point.
 
 ## Locking and diagnostics
 
-`state/install.lock` is an OS-backed exclusive lock held for the complete installer operation. The
+`state_root/install.lock` is an OS-backed exclusive lock held for the complete installer operation. The
 file contains non-secret owner metadata for diagnostics, with a small owner sidecar used when the
 platform does not permit reading the locked file; the OS lock, not a stale timestamp, is the
-authority. Persistent diagnostics are JSON Lines under `state/diagnostics/`, with event,
+authority. Persistent diagnostics are JSON Lines under `state_root/diagnostics/`, with event,
 level, timestamp and structured fields. Commands must be passed as argv and logged after redaction;
 environment values, credentials and authorization headers are not logged.
 

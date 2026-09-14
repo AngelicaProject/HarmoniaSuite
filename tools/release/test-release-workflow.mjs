@@ -83,9 +83,7 @@ test("release staging and optional Windows signing use the manifest target direc
   assert.doesNotMatch(workflow, /(?<!apps\/installer\/)target\/release\//);
   for (const binary of [
     "HarmoniaSetup.exe",
-    "HarmoniaSuite.exe",
     "harmonia-setup",
-    "harmonia-suite",
   ]) {
     assert.match(
       workflow,
@@ -102,21 +100,16 @@ test("release staging and optional Windows signing use the manifest target direc
   );
   assert.match(
     signingStep,
-    /signtool sign[\s\S]*apps\/installer\/target\/release\/HarmoniaSuite\.exe/,
-  );
-  assert.match(
-    signingStep,
     /signtool verify[\s\S]*apps\/installer\/target\/release\/HarmoniaSetup\.exe/,
-  );
-  assert.match(
-    signingStep,
-    /signtool verify[\s\S]*apps\/installer\/target\/release\/HarmoniaSuite\.exe/,
   );
   assert.match(signingStep, /if: runner\.os == 'Windows'/);
   assert.match(
     signingStep,
     /Authenticode credentials are absent; release binaries remain unsigned/,
   );
+  assert.doesNotMatch(workflow, /target\/release\/HarmoniaSuite\.exe/);
+  assert.doesNotMatch(workflow, /target\/release\/harmonia-suite(?:\s|$)/);
+  assert.doesNotMatch(workflow, /Copy-Item .*HarmoniaSuite\.exe release/);
 });
 
 test("Linux checksum entries are basename-only for downloaded artifacts", () => {
@@ -126,11 +119,11 @@ test("Linux checksum entries are basename-only for downloaded artifacts", () => 
   assert.ok(stagingStep);
   assert.match(
     stagingStep,
-    /cd release[\s\S]*sha256sum harmonia-setup harmonia-suite > sha256sums-linux\.txt/,
+    /cd release[\s\S]*sha256sum harmonia-setup > sha256sums-linux\.txt/,
   );
   assert.doesNotMatch(
     stagingStep,
-    /sha256sum release\/harmonia-setup release\/harmonia-suite/,
+    /sha256sum release\/harmonia-setup/,
   );
 });
 

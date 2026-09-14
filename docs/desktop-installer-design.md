@@ -15,13 +15,14 @@
 Application root содержит только управляемые артефакты:
 
 ```text
-bin/                 launchers and activator
+bin/                 installer helper and activator
 versions/<sha>/      immutable staged versions
+current              filesystem pointer to the active immutable version
 toolchain/           side-by-side managed Java/Node
 source/              managed bare Git mirror
 build/<sha>/         disposable detached worktrees
 cache/               downloads and build caches
-state/               install-state, lock and diagnostics
+state/               install-state, lock and diagnostics (Windows; Linux uses XDG state_root)
 ```
 
 User-data root содержит `data/harmonia.db`, WAL/SHM sidecars, `backups/`, `projects/`, source
@@ -67,11 +68,32 @@ transaction: незавершённый staging удаляется только 
 `versions/<full-sha>/`. Внутри находятся `desktop/`, `frontend/`, `gateway/`, `extractor/` и
 `metadata.json`; immutable version directories не изменяются после activation.
 
-`state/install.json` хранит `currentCommit`, `previousCommit`, transaction id и component
-metadata. Activation сначала пишет и fsync-ит временный state, затем атомарно заменяет state-файл
-(с platform-specific replace semantics). Current всегда разрешается через этот state; никакого
-in-place обновления исполняемого current нет. Updater/activator — отдельный process, поэтому
-самый старый running executable не заменяет себя.
+`state_root/install.json` хранит `currentCommit`, `previousCommit`, transaction id и component
+metadata. Activation сначала публикует crash-safe filesystem pointer `current` на полностью
+проверенную версию, затем сохраняет state (с platform-specific replace semantics). Pointer и
+transaction journal используются вместе: rollback сначала возвращает pointer на snapshot current,
+затем восстанавливает installation state. Current не является копией версии, а только symlink
+(Linux) или managed directory junction (Windows); immutable version directories не изменяются
+после activation. Updater/activator — отдельный process, поэтому самый старый running executable
+не заменяет себя.
+
+Для fresh 0.1.2 и мигрированных установок обычный пользовательский запуск идёт напрямую в
+`current/desktop/HarmoniaSuite.exe` на Windows или `current/desktop/harmonia-suite` на Linux.
+Это настоящий Electron runtime, не Rust proxy.
+В переходном payload installer 0.1.2 также оставляет `desktop/electron.exe`/`desktop/electron`
+как hardlink для старых updater 0.1.0/0.1.1; alias можно удалить только после повышения
+compatibility floor в отдельном rollout.
+Существующие установки с engine 0.1.0/0.1.1 не получают замену installer engine из rolling
+BuildPipeline. Сначала такой клиент должен получить обычный signed rolling update до transition
+commit PR44-or-later с canonical executable и compatibility alias; затем запускается доверенный
+prebuilt 0.1.2 `repair`. Без первого шага repair возвращает `rolling application update required
+first` и сохраняет legacy proxy и shortcut.
+
+Installed Electron получает runtime context из canonicalized `process.resourcesPath` и
+`versions/<sha>/metadata.json`: backend, managed Java, installer и `state` проверяются внутри
+управляемого application root. Launcher-specific `HARMONIA_*` environment variables не являются
+частью installed-runtime contract; для update handoff допускаются только operation-scoped launch
+acknowledgement variables.
 
 ## Manifest baseline
 

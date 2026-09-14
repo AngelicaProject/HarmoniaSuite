@@ -16,16 +16,43 @@ published release title is `HarmoniaSuite vX.Y.Z`, and the tag must equal the st
 `versions.json.productVersion`. The release workflow also requires the checked-out commit to be
 the exact tag commit.
 
-Assets may include the platform bootstrap/launcher binaries and their checksums:
+Release assets contain the platform setup/bootstrap binaries and their checksums:
 
 ```text
 HarmoniaSetup.exe
-HarmoniaSuite.exe
 harmonia-setup
-harmonia-suite
 release-metadata.json
 checksums
 ```
+
+The standalone Rust `HarmoniaSuite.exe`/`harmonia-suite` proxy is not published. The installed
+application is launched from the real Electron executable under the managed `current` pointer
+after a fresh install or completed migration.
+Installer 0.1.2 uses a transition payload containing the branded Electron filename plus a temporary
+`desktop/electron.exe`/`desktop/electron` hardlink so existing 0.1.0/0.1.1 updaters can still stage
+it. The compatibility alias is removed only in a later rollout after the minimum installer floor
+has been raised deliberately.
+
+### Existing-installation rollout
+
+The rolling BuildPipeline builds application components; it does not replace the installer engine
+already installed on a client. Consequently, a 0.1.0/0.1.1 installation that rolls forward keeps
+its legacy `bin/HarmoniaSuite.exe`/`bin/harmonia-suite` proxy and proxy shortcuts. This PR leaves
+`minimumInstallerVersion` unchanged and does not claim that those installations are already on the
+direct launch path.
+
+Migration is staged in two steps. First, the existing 0.1.0/0.1.1 client performs a normal signed
+rolling update to a PR44-or-later transition commit containing the canonical Electron executable
+and compatibility alias. After that update, verify and run the trusted, prebuilt and checksum-
+verified 0.1.2 setup asset with `HarmoniaSetup.exe repair` (or `harmonia-setup repair`) for the
+existing per-user installation. If the exact current payload has no canonical executable, repair
+returns `rolling application update required first` and preserves the proxy; it does not rebuild
+that pre-transition exact commit into the new layout. For a transition payload, the new engine
+publishes `current`, rewrites shortcuts/`DisplayIcon` and Linux desktop integration, verifies that
+surface, and only then removes the legacy proxy. The order is crash-safe and idempotent: failures
+before successful integration preserve the proxy, and retrying repair repeats the safe checks.
+Fresh 0.1.2 installs use direct launch immediately; automatic installer-engine replacement for
+existing installs is not part of this PR.
 
 The tagged installer is compiled with the exact tag commit and stable product version. A fresh
 install uses that embedded release bootstrap seed, builds only the exact seed commit, and fails
