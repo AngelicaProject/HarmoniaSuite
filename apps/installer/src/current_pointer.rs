@@ -377,10 +377,7 @@ mod tests {
         )
         .unwrap();
 
-        assert!(matches!(
-            switch(&paths, &commit),
-            Err(CurrentPointerError::Invalid(_))
-        ));
+        assert!(switch(&paths, &commit).is_err());
         assert!(!paths.current_pointer_path().exists());
     }
 

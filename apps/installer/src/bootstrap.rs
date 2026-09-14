@@ -1518,6 +1518,8 @@ mod tests {
             } else if package_command {
                 let payload = directory.join("artifacts/linux-x64");
                 fs::create_dir_all(payload.join("resources/app/dist")).unwrap();
+                let canonical = payload.join("harmonia-suite");
+                fs::write(&canonical, b"electron").unwrap();
                 fs::write(payload.join("electron"), b"electron").unwrap();
                 fs::write(payload.join("resources/app/package.json"), b"{}").unwrap();
                 fs::write(payload.join("resources/app/dist/main.js"), b"desktop").unwrap();
@@ -1526,6 +1528,7 @@ mod tests {
                 #[cfg(unix)]
                 {
                     use std::os::unix::fs::PermissionsExt;
+                    fs::set_permissions(&canonical, fs::Permissions::from_mode(0o755)).unwrap();
                     fs::set_permissions(
                         payload.join("electron"),
                         fs::Permissions::from_mode(0o755),
