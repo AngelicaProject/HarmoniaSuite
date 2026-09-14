@@ -84,7 +84,7 @@ The production lifecycle around those engines provides:
 - release CI targets Windows/Linux x64, publishes setup artifacts with optional Authenticode, and
   publishes signed platform manifests. MSI, portable ZIP, and macOS artifacts are out of scope.
 
-The supported installer baseline is 0.1.2. `HarmoniaSetup.exe`/`harmonia-setup` is the installer,
+The supported installer baseline is 0.1.3. `HarmoniaSetup.exe`/`harmonia-setup` is the installer,
 updater, repair, and uninstall helper; `HarmoniaSuite.exe`/`harmonia-suite` is the real Electron
 runtime. New rolling payloads contain only the canonical desktop executable under the immutable
 version and are activated through `current`. A signed manifest with a higher

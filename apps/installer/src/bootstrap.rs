@@ -1599,7 +1599,7 @@ mod tests {
             ("pom.xml", b"<project/>".as_slice()),
             (
                 "versions.json",
-                br#"{"schemaVersion":1,"productVersion":"1.0.11","installerVersion":"0.1.3","minimumInstallerVersion":"0.1.2"}"#.as_slice(),
+                br#"{"schemaVersion":1,"productVersion":"1.0.11","installerVersion":"0.1.3","minimumInstallerVersion":"0.1.3"}"#.as_slice(),
             ),
             (
                 ".mvn/wrapper/maven-wrapper.properties",
@@ -1725,7 +1725,7 @@ mod tests {
             generation: 1,
             product_version: "1.0.11".to_owned(),
             target_commit,
-            min_installer_version: Some("0.1.2".to_owned()),
+            min_installer_version: Some("0.1.3".to_owned()),
             jdk,
             node,
         };
@@ -1911,7 +1911,7 @@ mod tests {
             ("pom.xml", b"<project/>".as_slice()),
             (
                 "versions.json",
-                br#"{"schemaVersion":1,"productVersion":"1.0.11","installerVersion":"0.1.3","minimumInstallerVersion":"0.1.2"}"#.as_slice(),
+                br#"{"schemaVersion":1,"productVersion":"1.0.11","installerVersion":"0.1.3","minimumInstallerVersion":"0.1.3"}"#.as_slice(),
             ),
             (
                 ".mvn/wrapper/maven-wrapper.properties",

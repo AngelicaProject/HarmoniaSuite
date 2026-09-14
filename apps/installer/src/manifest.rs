@@ -572,7 +572,7 @@ mod tests {
     #[test]
     fn accepts_valid_minimum_version_and_serializes_required_channel() {
         let mut value = manifest();
-        value.min_installer_version = Some("0.1.2".to_owned());
+        value.min_installer_version = Some("0.1.3".to_owned());
         let document = serde_json::to_value(value).unwrap();
         assert_eq!(document["channel"], "rolling");
     }
@@ -632,7 +632,7 @@ mod tests {
                     "--product-version",
                     "1.0.11-SNAPSHOT",
                     "--min-installer-version",
-                    "0.1.2",
+                    "0.1.3",
                     "--generation",
                     "1",
                     "--out",

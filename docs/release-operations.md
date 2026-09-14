@@ -28,7 +28,7 @@ checksums
 The installed application is launched from the real Electron executable under the managed `current`
 pointer. `HarmoniaSetup.exe`/`harmonia-setup` remains the installer, updater, repair, and uninstall
 helper; the desktop payload contains only the canonical Electron executable.
-The minimum supported installer engine is 0.1.2, so signed rolling manifests requiring that floor
+The minimum supported installer engine is 0.1.3, so signed rolling manifests requiring that floor
 are rejected by older engines through `UpdaterUpgradeRequired`.
 
 ### Existing-installation updates

@@ -291,7 +291,7 @@ the installed application launches the real Electron executable through the mana
 pointer for supported installations. MSI, portable ZIP, and macOS releases are outside
 the release contract.
 
-The supported installer baseline is 0.1.2. Rolling manifests that require this floor must fail
+The supported installer baseline is 0.1.3. Rolling manifests that require this floor must fail
 closed through the generic `UpdaterUpgradeRequired` mechanism on older engines. Installed launches
 use the canonical Electron executable under the managed `current` pointer.
 

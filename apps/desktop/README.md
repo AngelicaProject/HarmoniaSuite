@@ -39,7 +39,7 @@ backend JAR, managed Java, installer helper, state root, and user-data root ther
 launcher-provided `HARMONIA_*` variables. Dev-only overrides remain available for local development
 and tests. Update handoff may still pass operation-scoped launch acknowledgement variables.
 
-Supported installed installations use this direct layout with installer engine 0.1.2 or newer.
+Supported installed installations use this direct layout with installer engine 0.1.3 or newer.
 Rolling manifests requiring a newer engine are rejected through the installer's
 `UpdaterUpgradeRequired` contract before an update can be staged.
 

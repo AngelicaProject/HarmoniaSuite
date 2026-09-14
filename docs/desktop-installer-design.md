@@ -104,7 +104,7 @@ artifact URLs:
   "artifacts": [{"component": "desktop", "platform": "windows", "arch": "x64",
     "url": "https://...", "sha256": "<64 lowercase hex>"}],
   "toolchain": {"java": "21.x", "node": "24.x", "git": "<version>"},
-  "minimumInstallerVersion": "1",
+  "minimumInstallerVersion": "0.1.3",
   "signature": {"algorithm": "ed25519", "keyId": "<id>", "value": "<base64>"}
 }
 ```

@@ -35,8 +35,8 @@ is the signed manifest's `minInstallerVersion`; it is not automatically copied f
 `installerVersion`. It must be less than or equal to `installerVersion` and is raised only when a
 new rolling contract cannot safely run on older engines.
 
-The two values are separate by definition. The current rolling contract requires installer
-`0.1.2`, while the current engine is `0.1.3`.
+The two values are separate by definition. The current alias-free rolling contract requires
+installer `0.1.3`, which is also the current engine.
 
 The compatible installer must be published and available to users before a later main commit
 raises this floor. Otherwise an old client could create an update deadlock. If the running engine
@@ -113,16 +113,15 @@ next main:        1.0.12-SNAPSHOT
 Installer lifecycle:
 
 ```text
-Product v1.0.12 -> installer 0.1.2
 Product v1.0.13 -> installer 0.1.3
-minimumInstallerVersion remains 0.1.2 for the rolling contract
+minimumInstallerVersion remains 0.1.3 for the alias-free rolling contract
 ```
 
 It is valid for product releases to reuse an unchanged engine:
 
 ```text
-Product v1.0.12 -> installer 0.1.2
 Product v1.0.13 -> installer 0.1.3
+Product v1.0.14 -> installer 0.1.3
 ```
 
 ## SemVer policy and tooling
@@ -132,7 +131,7 @@ Use the version tooling for all coordinated changes:
 ```bash
 node tools/version/set-version.mjs product 1.0.12-SNAPSHOT
 node tools/version/set-version.mjs installer 0.1.3
-node tools/version/set-version.mjs minimum-installer 0.1.2
+node tools/version/set-version.mjs minimum-installer 0.1.3
 node tools/version/check-versions.mjs
 ```
 

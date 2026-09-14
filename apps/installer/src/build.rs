@@ -1188,7 +1188,7 @@ mod tests {
   "schemaVersion": 1,
   "productVersion": "1.0.12-SNAPSHOT",
   "installerVersion": "0.1.3",
-  "minimumInstallerVersion": "0.1.2"
+  "minimumInstallerVersion": "0.1.3"
 }
 "#,
             )

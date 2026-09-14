@@ -1721,7 +1721,7 @@ mod tests {
         )
         .unwrap();
         let versions = format!(
-            r#"{{"schemaVersion":1,"productVersion":"{product_version}","installerVersion":"0.1.3","minimumInstallerVersion":"0.1.2"}}"#
+            r#"{{"schemaVersion":1,"productVersion":"{product_version}","installerVersion":"0.1.3","minimumInstallerVersion":"0.1.3"}}"#
         );
         root.insert(
             "versions.json",
@@ -2358,11 +2358,11 @@ mod tests {
     }
 
     #[test]
-    fn minimum_installer_floor_keeps_012_supported_and_rejects_older_engines() {
-        assert!(ensure_minimum_installer_version(Some("0.1.2"), "0.1.2").is_ok());
+    fn minimum_installer_floor_rejects_012_and_accepts_013() {
+        assert!(ensure_minimum_installer_version(Some("0.1.3"), "0.1.3").is_ok());
         assert!(matches!(
-            ensure_minimum_installer_version(Some("0.1.2"), "0.1.1"),
-            Err(ManifestError::UpdaterUpgradeRequired(minimum)) if minimum == "0.1.2"
+            ensure_minimum_installer_version(Some("0.1.3"), "0.1.2"),
+            Err(ManifestError::UpdaterUpgradeRequired(minimum)) if minimum == "0.1.3"
         ));
     }
 
