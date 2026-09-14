@@ -18,12 +18,16 @@ const compiledShell = join(desktopRoot, "dist");
 const frontendDistribution = join(checkoutRoot, "frontend", "dist");
 const output = join(desktopRoot, "artifacts", `${platform}-${architecture}`);
 const appPayload = join(output, "resources", "app");
+const canonicalIcon = join(checkoutRoot, "assets", "branding", "harmonia-suite.ico");
 const sourceExecutableName = platform === "windows" ? "electron.exe" : "electron";
 const canonicalExecutableName = platform === "windows" ? "HarmoniaSuite.exe" : "harmonia-suite";
 
 await assertDirectory(electronDistribution, "Electron runtime");
 await assertFile(join(compiledShell, "main.js"), "compiled Electron main process");
 await assertFile(join(frontendDistribution, "index.html"), "frontend production output");
+if (platform === "windows") {
+  await assertFile(canonicalIcon, "canonical Windows application icon");
+}
 
 await rm(output, { recursive: true, force: true });
 await mkdir(output, { recursive: true });
@@ -33,6 +37,10 @@ await mkdir(output, { recursive: true });
 // contract consumed by Phase 5 activation.
 await cp(electronDistribution, output, { recursive: true, dereference: true });
 await rename(join(output, sourceExecutableName), join(output, canonicalExecutableName));
+if (platform === "windows") {
+  const { applyWindowsIcon } = await import("./windows-icon.mjs");
+  await applyWindowsIcon(join(output, canonicalExecutableName), canonicalIcon);
+}
 // Keep one hardlink under Electron's historical name during the staged rollout. Existing
 // installer 0.1.0/0.1.1 validates that name, while the canonical executable remains user-facing.
 try {

@@ -112,6 +112,9 @@ jobs:
       - name: Package desktop
         run: npm run package
         working-directory: apps/desktop
+      - name: Verify Windows desktop icon resource
+        if: runner.os == 'Windows'
+        run: node tools/release/verify-windows-icon.mjs apps/desktop/artifacts/windows-x64/HarmoniaSuite.exe assets/branding/harmonia-suite.ico
       - name: Build backend with checksum-protected Maven Wrapper
         if: runner.os != 'Windows'
         run: ./mvnw -B -q -DskipTests package
@@ -126,6 +129,9 @@ jobs:
           cargo test --manifest-path apps/installer/Cargo.toml
       - name: Build installer
         run: cargo build --manifest-path apps/installer/Cargo.toml --release --bins
+      - name: Verify Windows installer icon resource
+        if: runner.os == 'Windows'
+        run: node tools/release/verify-windows-icon.mjs apps/installer/target/release/HarmoniaSetup.exe assets/branding/harmonia-suite.ico
       - name: Sign Windows binaries
         if: runner.os == 'Windows'
         shell: pwsh

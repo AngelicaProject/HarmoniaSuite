@@ -3,6 +3,7 @@ name = "harmonia-installer"
 version = "0.1.2"
 edition = "2021"
 rust-version = "1.89"
+build = "build.rs"
 description = "Transactional installation and update primitives for Harmonia Suite"
 license = "AGPL-3.0-only"
 
@@ -52,6 +53,9 @@ windows-sys = { version = "0.59", features = [
     "Win32_System_Ioctl",
     "Win32_UI_Shell",
 ] }
+
+[build-dependencies]
+winresource = "=0.1.31"
 
 [dev-dependencies]
 tempfile = "3"

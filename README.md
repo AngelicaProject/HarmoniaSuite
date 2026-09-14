@@ -1,5 +1,5 @@
 <p align="center">
-<img src="frontend/public/img/yuki-banner.jpg" alt="Harmonia Suite" width="100%">
+<img src="frontend/public/img/yuki-banner.png" alt="Harmonia Suite" width="100%">
 </p>
 
 # Harmonia Suite

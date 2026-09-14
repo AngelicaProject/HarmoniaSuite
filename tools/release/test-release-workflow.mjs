@@ -110,6 +110,19 @@ test("release staging and optional Windows signing use the manifest target direc
   assert.doesNotMatch(workflow, /target\/release\/HarmoniaSuite\.exe/);
   assert.doesNotMatch(workflow, /target\/release\/harmonia-suite(?:\s|$)/);
   assert.doesNotMatch(workflow, /Copy-Item .*HarmoniaSuite\.exe release/);
+  const buildStep = workflow.match(
+    /- name: Build installer[\s\S]*?(?=\n\s+- name: Sign Windows binaries)/,
+  )?.[0];
+  assert.ok(buildStep);
+  assert.match(buildStep, /verify-windows-icon\.mjs[\s\S]*HarmoniaSetup\.exe/);
+  const buildIndex = workflow.indexOf("- name: Build installer");
+  const verifyIndex = workflow.indexOf("verify-windows-icon.mjs", buildIndex);
+  const signIndex = workflow.indexOf("- name: Sign Windows binaries", buildIndex);
+  assert.ok(buildIndex < verifyIndex && verifyIndex < signIndex);
+  assert.doesNotMatch(signingStep, /verify-windows-icon|rcedit|set_icon/);
+  const checksumIndex = workflow.indexOf("Get-FileHash release/HarmoniaSetup.exe", signIndex);
+  const publishIndex = workflow.indexOf("\n  publish:", signIndex);
+  assert.ok(signIndex < checksumIndex && checksumIndex < publishIndex);
 });
 
 test("Linux checksum entries are basename-only for downloaded artifacts", () => {
