@@ -73,7 +73,7 @@ export class LocalGateway {
       cwd: resolve(jarPath, ".."),
       env: {
         ...process.env,
-        // Kept while old source checkouts are still supported during migration.
+        // Keep browser auto-open disabled for the owned gateway process.
         HARMONIA_NO_BROWSER: "1",
       },
       stdio: ["ignore", "pipe", "pipe"],

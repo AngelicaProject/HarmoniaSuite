@@ -1,7 +1,7 @@
 # Harmonia Suite desktop and installer design
 
-Статус: design baseline для поэтапной миграции из browser-centric запуска. Этот документ фиксирует
-границы Phase 1 и решения, которые должен соблюдать будущий Rust installer core.
+Статус: design baseline для desktop запуска и Rust installer core. Этот документ фиксирует
+границы Phase 1 и решения, которые должен соблюдать installer core.
 
 ## Пути и владение данными
 
@@ -77,17 +77,11 @@ transaction journal используются вместе: rollback сначал
 после activation. Updater/activator — отдельный process, поэтому самый старый running executable
 не заменяет себя.
 
-Для fresh 0.1.2 и мигрированных установок обычный пользовательский запуск идёт напрямую в
+Поддерживаемая установка запускает настоящий Electron runtime напрямую из
 `current/desktop/HarmoniaSuite.exe` на Windows или `current/desktop/harmonia-suite` на Linux.
-Это настоящий Electron runtime, не Rust proxy.
-В переходном payload installer 0.1.2 также оставляет `desktop/electron.exe`/`desktop/electron`
-как hardlink для старых updater 0.1.0/0.1.1; alias можно удалить только после повышения
-compatibility floor в отдельном rollout.
-Существующие установки с engine 0.1.0/0.1.1 не получают замену installer engine из rolling
-BuildPipeline. Сначала такой клиент должен получить обычный signed rolling update до transition
-commit PR44-or-later с canonical executable и compatibility alias; затем запускается доверенный
-prebuilt 0.1.2 `repair`. Без первого шага repair возвращает `rolling application update required
-first` и сохраняет legacy proxy и shortcut.
+`HarmoniaSetup.exe`/`harmonia-setup` остаётся installer/updater/repair/uninstall helper. В payload
+создаётся только canonical executable; signed manifest с `minimumInstallerVersion` выше текущего
+engine отклоняется через `UpdaterUpgradeRequired` до staging.
 
 Installed Electron получает runtime context из canonicalized `process.resourcesPath` и
 `versions/<sha>/metadata.json`: backend, managed Java, installer и `state` проверяются внутри
@@ -110,7 +104,7 @@ artifact URLs:
   "artifacts": [{"component": "desktop", "platform": "windows", "arch": "x64",
     "url": "https://...", "sha256": "<64 lowercase hex>"}],
   "toolchain": {"java": "21.x", "node": "24.x", "git": "<version>"},
-  "minimumInstallerVersion": "1",
+  "minimumInstallerVersion": "0.1.3",
   "signature": {"algorithm": "ed25519", "keyId": "<id>", "value": "<base64>"}
 }
 ```
@@ -133,9 +127,9 @@ schema, recovery uses the pre-update DB backup through an explicit, diagnosed re
 preserving the failed target and current data. No migration may delete/overwrite translations
 without a deliberate migration and backup coverage.
 
-## Known migration delta
+## Known non-production update path
 
 The current Java `UpdateService` still performs `git pull` and `git reset --hard` in a checkout.
-That legacy path is not the production release/update contract; responsibility belongs to the
+That path is not the production release/update contract; responsibility belongs to the
 transactional `apps/installer` flow. Release platform and artifact boundaries are documented in
 [`release-operations.md`](release-operations.md).

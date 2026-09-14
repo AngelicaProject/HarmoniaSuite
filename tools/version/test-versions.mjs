@@ -21,7 +21,7 @@ import {
 const exec = promisify(execFile);
 const repo = join(import.meta.dirname, "..", "..");
 
-async function fixture({ product = "1.0.12-SNAPSHOT", installer = "0.1.0", minimum = "0.1.0" } = {}) {
+async function fixture({ product = "1.0.12-SNAPSHOT", installer = "0.1.3", minimum = "0.1.3" } = {}) {
   const root = await mkdtemp(join(tmpdir(), "harmonia-versions-"));
   await writeFile(join(root, "versions.json"), `${JSON.stringify({
     schemaVersion: 1,
@@ -45,16 +45,16 @@ async function fixture({ product = "1.0.12-SNAPSHOT", installer = "0.1.0", minim
 }
 
 test("valid development contract accepts independent installer version", async () => {
-  const root = await fixture({ installer: "0.2.0", minimum: "0.1.0" });
+  const root = await fixture({ installer: "0.2.0", minimum: "0.1.3" });
   const contract = await assertVersions(root);
   assert.equal(contract.productVersion, "1.0.12-SNAPSHOT");
-  assert.equal(compareSemVer("0.1.0", "0.2.0") < 0, true);
+  assert.equal(compareSemVer("0.1.3", "0.2.0") < 0, true);
 });
 
 test("component drift is reported", async () => {
   const root = await fixture();
   const packagePath = join(root, "apps/desktop/package.json");
-  await writeFile(packagePath, JSON.stringify({ name: "desktop", version: "0.1.0", private: true }));
+  await writeFile(packagePath, JSON.stringify({ name: "desktop", version: "9.9.9", private: true }));
   const result = await checkVersions(root);
   assert.ok(result.mismatches.some((value) => value.includes("apps/desktop/package.json version")));
 });
@@ -70,7 +70,7 @@ test("all canonical component mismatches fail the contract", async () => {
     const path = join(root, relative);
     const original = await readFile(path, "utf8");
     const mismatched = relative.includes("installer")
-      ? original.replace('version = "0.1.0"', 'version = "0.1.1"')
+      ? original.replace('version = "0.1.3"', 'version = "0.1.4"')
       : original.replaceAll("1.0.12-SNAPSHOT", "1.0.10");
     await writeFile(path, mismatched);
     await assert.rejects(() => assertVersions(root), /version contract mismatch/);
@@ -78,7 +78,7 @@ test("all canonical component mismatches fail the contract", async () => {
 });
 
 test("minimum installer cannot exceed current installer", async () => {
-  const root = await fixture({ installer: "0.1.0", minimum: "0.2.0" });
+  const root = await fixture({ installer: "0.1.3", minimum: "0.2.0" });
   await assert.rejects(() => assertVersions(root), /greater than installerVersion/);
 });
 
@@ -87,13 +87,13 @@ test("stable release tag must equal stable product version", () => {
     productVersion: "1.0.11",
   }), "1.0.11");
   assert.throws(() => validateReleaseTag("v1.0.11", { productVersion: "1.0.12-SNAPSHOT" }), /prerelease/);
-  assert.throws(() => validateReleaseTag("v0.1.0", { productVersion: "1.0.11" }), /does not match/);
+  assert.throws(() => validateReleaseTag("v0.0.1", { productVersion: "1.0.11" }), /does not match/);
 });
 
 test("changed installer source requires a higher engine version", () => {
-  assert.throws(() => validateInstallerReleaseBump("0.1.0", "0.1.0", true), /not greater/);
-  assert.doesNotThrow(() => validateInstallerReleaseBump("0.2.0", "0.1.0", true));
-  assert.doesNotThrow(() => validateInstallerReleaseBump("0.1.0", "0.1.0", false));
+  assert.throws(() => validateInstallerReleaseBump("0.1.3", "0.1.3", true), /not greater/);
+  assert.doesNotThrow(() => validateInstallerReleaseBump("0.2.0", "0.1.3", true));
+  assert.doesNotThrow(() => validateInstallerReleaseBump("0.1.3", "0.1.3", false));
 });
 
 test("product releases must progress beyond the previous product release", () => {
@@ -113,13 +113,13 @@ test("version setters update only their contract domain", async () => {
   const script = join(repo, "tools/version/set-version.mjs");
   await exec(process.execPath, [script, "product", "1.0.13-SNAPSHOT", "--root", root], { cwd: repo });
   await exec(process.execPath, [script, "installer", "0.2.0", "--root", root], { cwd: repo });
-  await exec(process.execPath, [script, "minimum-installer", "0.1.0", "--root", root], { cwd: repo });
+  await exec(process.execPath, [script, "minimum-installer", "0.1.3", "--root", root], { cwd: repo });
   const contract = await assertVersions(root);
   assert.deepEqual(contract, {
     schemaVersion: 1,
     productVersion: "1.0.13-SNAPSHOT",
     installerVersion: "0.2.0",
-    minimumInstallerVersion: "0.1.0",
+    minimumInstallerVersion: "0.1.3",
   });
 });
 
@@ -152,8 +152,8 @@ test("version transactions roll back every domain after injected failures", asyn
     { kind: "product", version: "1.0.13-SNAPSHOT", failAfterReplacement: 0 },
     { kind: "product", version: "1.0.13-SNAPSHOT", failAfterReplacement: 3 },
     { kind: "installer", version: "0.2.0", failAfterReplacement: 1 },
-    { kind: "minimum-installer", version: "0.1.0", failAfterReplacement: 0 },
-    { kind: "minimum-installer", version: "0.1.0", failAfterReplacement: 1 },
+    { kind: "minimum-installer", version: "0.1.3", failAfterReplacement: 0 },
+    { kind: "minimum-installer", version: "0.1.3", failAfterReplacement: 1 },
   ];
   for (const transactionCase of cases) {
     const root = await fixture();

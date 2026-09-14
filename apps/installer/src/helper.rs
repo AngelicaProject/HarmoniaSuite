@@ -101,37 +101,6 @@ pub fn validate_published_binary(
     ensure_executable(binary)
 }
 
-/// Remove the pre-0.1.2 Rust proxy after the direct Electron target and OS integration have
-/// already been published. The operation is deliberately idempotent so interrupted migrations
-/// can be retried by repair.
-pub fn remove_legacy_launcher(paths: &InstallationPaths) -> Result<(), HelperError> {
-    let legacy = paths.legacy_launcher_path();
-    validate_managed_path(&paths.app_root, &legacy)?;
-    remove_managed_file_if_present(&legacy)?;
-    let metadata = legacy.with_file_name(format!(
-        "{}.json",
-        legacy
-            .file_name()
-            .ok_or_else(|| HelperError::InvalidPath(legacy.clone()))?
-            .to_string_lossy()
-    ));
-    validate_managed_path(&paths.app_root, &metadata)?;
-    remove_managed_file_if_present(&metadata)?;
-    Ok(())
-}
-
-fn remove_managed_file_if_present(path: &Path) -> Result<(), HelperError> {
-    match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.is_file() || metadata.file_type().is_symlink() => {
-            fs::remove_file(path)?;
-        }
-        Ok(_) => return Err(HelperError::InvalidPath(path.to_path_buf())),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error.into()),
-    }
-    Ok(())
-}
-
 /// Hand off deletion of an installed setup binary to a copy that can outlive
 /// the parent process. No shell is involved and the helper derives all roots
 /// from InstallationPaths before deleting anything.
@@ -386,31 +355,5 @@ mod tests {
             publish_installer_helper(&paths),
             Ok(path) if path == destination
         ));
-    }
-
-    #[test]
-    fn removes_the_legacy_proxy_idempotently() {
-        let root = tempdir().unwrap();
-        let paths = InstallationPaths {
-            platform: Platform::Linux,
-            architecture: TargetArchitecture::X64,
-            app_root: root.path().join("app"),
-            user_data_root: root.path().join("data"),
-            state_root: root.path().join("state"),
-            cache_root: root.path().join("cache"),
-        };
-        fs::create_dir_all(paths.bin_dir()).unwrap();
-        let legacy = paths.legacy_launcher_path();
-        let legacy_metadata = legacy.with_file_name(format!(
-            "{}.json",
-            legacy.file_name().unwrap().to_string_lossy()
-        ));
-        fs::write(&legacy, b"old Rust proxy").unwrap();
-        fs::write(&legacy_metadata, b"legacy metadata").unwrap();
-
-        remove_legacy_launcher(&paths).unwrap();
-        remove_legacy_launcher(&paths).unwrap();
-        assert!(!legacy.exists());
-        assert!(!legacy_metadata.exists());
     }
 }

@@ -19,8 +19,6 @@ test("production manifest generator uses the signed rolling wire contract", asyn
     "0123456789abcdef0123456789abcdef01234567",
     "--product-version",
     "1.0.11-SNAPSHOT",
-    "--min-installer-version",
-    "0.1.0",
     "--generation",
     "1",
     "--out",
@@ -30,7 +28,7 @@ test("production manifest generator uses the signed rolling wire contract", asyn
   assert.equal(manifest.schemaVersion, 1);
   assert.equal(manifest.channel, "rolling");
   assert.equal(manifest.targetCommit, "0123456789abcdef0123456789abcdef01234567");
-  assert.equal(manifest.minInstallerVersion, "0.1.0");
+  assert.equal(manifest.minInstallerVersion, "0.1.3");
   assert.equal(manifest.jdk.homeDir, "jdk-21.0.12+8");
   assert.equal(manifest.node.homeDir, "node-v24.15.0-linux-x64");
   assert.equal(manifest.schema_version, undefined);
@@ -51,7 +49,7 @@ test("rolling manifest keeps product version separate from identity fields", asy
     "--product-version",
     productVersion,
     "--min-installer-version",
-    "0.1.0",
+    "0.1.3",
     "--generation",
     "125",
     "--out",
@@ -75,14 +73,14 @@ test("rolling manifest keeps installer engine and compatibility floor independen
     "--product-version",
     "1.0.11",
     "--min-installer-version",
-    "0.1.0",
+    "0.1.3",
     "--generation",
     "2",
     "--out",
     output,
   ], { cwd: join(import.meta.dirname, "..", "..") });
   const manifest = JSON.parse(await readFile(output, "utf8"));
-  assert.equal(manifest.minInstallerVersion, "0.1.0");
+  assert.equal(manifest.minInstallerVersion, "0.1.3");
   assert.notEqual("0.2.0", manifest.minInstallerVersion);
 });
 

@@ -72,11 +72,11 @@ The production lifecycle around those engines provides:
 
 - `install`, `update`, `check-update`, `repair`, and `uninstall` are strict per-user operations with
   documented stable exit codes and optional JSON output;
-- repair migrates a direct-capable transition payload and can rebuild its trusted exact current
-  commit when the immutable version is corrupted; uninstall stops the bound desktop session and
+- repair validates the direct current payload and can rebuild its trusted exact current commit
+  when the immutable version is corrupted; uninstall stops the bound desktop session and
   preserves user data unless `--remove-user-data` is explicit;
 - `bin/HarmoniaSetup.exe`/`harmonia-setup` is the setup, update, repair, and uninstall contract.
-  Fresh and migrated installations expose the active immutable version through the managed
+  Supported installations expose the active immutable version through the managed
   `current` pointer, and the real Electron executable is `current/desktop/HarmoniaSuite.exe` on
   Windows or `current/desktop/harmonia-suite` on Linux;
 - Windows per-user Start Menu/Desktop shortcuts and HKCU uninstall registration, plus Linux XDG
@@ -84,30 +84,11 @@ The production lifecycle around those engines provides:
 - release CI targets Windows/Linux x64, publishes setup artifacts with optional Authenticode, and
   publishes signed platform manifests. MSI, portable ZIP, and macOS artifacts are out of scope.
 
-Installer 0.1.2 publishes a transition payload with both the branded Electron executable and a
-temporary `desktop/electron.exe`/`desktop/electron` hardlink for older 0.1.0/0.1.1 updaters. The
-legacy `bin/HarmoniaSuite.exe`/`bin/harmonia-suite` Rust proxy is removed only after the direct
-payload, `current` pointer, and OS integration are verified successfully.
-
-### Existing pre-0.1.2 installations
-
-The rolling `BuildPipeline` does not replace the installer engine. Therefore an installed
-0.1.0/0.1.1 client that receives a rolling update remains on its legacy launch path: it keeps
-`bin/HarmoniaSuite.exe`/`bin/harmonia-suite` and its existing proxy shortcuts. This release does
-not automatically download or replace an installer binary, and it does not raise
-`minimumInstallerVersion` to force that change.
-
-The staged migration has an explicit two-step order. First, the old client performs a normal
-signed rolling update to a PR44-or-later transition commit containing the canonical Electron
-executable and the temporary compatibility alias. Only then does the operator obtain the trusted,
-prebuilt and checksum-verified 0.1.2 `HarmoniaSetup.exe`/`harmonia-setup` release asset and run its
-`repair` command against the existing installation. If the exact current payload has no canonical
-executable, 0.1.2 returns `rolling application update required first` and leaves the proxy in
-place; it does not pretend to convert that old commit. For a transition payload, repair publishes
-the `current` pointer, rewrites shortcuts/desktop integration and `DisplayIcon`, and only then
-removes the legacy proxy. A failure before integration succeeds leaves the old proxy in place;
-repeating `repair` is safe and idempotent. Fresh 0.1.2 installations and repaired installations
-use the direct Electron launch contract.
+The supported installer baseline is 0.1.3. `HarmoniaSetup.exe`/`harmonia-setup` is the installer,
+updater, repair, and uninstall helper; `HarmoniaSuite.exe`/`harmonia-suite` is the real Electron
+runtime. New rolling payloads contain only the canonical desktop executable under the immutable
+version and are activated through `current`. A signed manifest with a higher
+`minimumInstallerVersion` fails closed through `UpdaterUpgradeRequired` before staging.
 
 Run the checks from the repository root with:
 

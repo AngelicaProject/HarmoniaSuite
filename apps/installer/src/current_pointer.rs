@@ -562,10 +562,10 @@ mod tests {
             "/src/current_pointer.rs"
         ));
         let forbidden_shell = ["cmd", "exe"].join(".");
-        let forbidden_legacy_command = ["mk", "link"].concat();
+        let forbidden_hardlink_command = ["mk", "link"].concat();
         let forbidden_command = ["std::process::", "Command"].concat();
         assert!(!source.contains(&forbidden_shell));
-        assert!(!source.contains(&forbidden_legacy_command));
+        assert!(!source.contains(&forbidden_hardlink_command));
         assert!(!source.contains(&forbidden_command));
     }
 

@@ -33,17 +33,15 @@ the actual loopback port, waits for `/api/status`, and stops that child when the
 
 The packaged user-facing executable is the real Electron runtime: `HarmoniaSuite.exe` on Windows
 and `harmonia-suite` on Linux. It is launched directly through the installer-managed `current`
-pointer (`current/desktop/...`), not through a Rust proxy. Electron derives the installed runtime
+pointer (`current/desktop/...`). Electron derives the installed runtime
 context from canonicalized `process.resourcesPath` and the active version's `metadata.json`; the
 backend JAR, managed Java, installer helper, state root, and user-data root therefore do not require
 launcher-provided `HARMONIA_*` variables. Dev-only overrides remain available for local development
 and tests. Update handoff may still pass operation-scoped launch acknowledgement variables.
 
-This direct-launch statement applies to fresh 0.1.2 installations and installations that have
-completed the staged migration. Existing clients with installer engine 0.1.0/0.1.1 are not
-silently migrated by a rolling build in this release; they first need a signed rolling update to
-a PR44-or-later transition payload, followed by a trusted prebuilt 0.1.2 setup binary running
-`repair`. Until both steps complete, they intentionally retain their legacy proxy and shortcuts.
+Supported installed installations use this direct layout with installer engine 0.1.3 or newer.
+Rolling manifests requiring a newer engine are rejected through the installer's
+`UpdaterUpgradeRequired` contract before an update can be staged.
 
 ## Gateway profiles
 

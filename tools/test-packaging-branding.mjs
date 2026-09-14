@@ -14,7 +14,7 @@ async function assertMissing(relativePath) {
   );
 }
 
-test("legacy Maven distribution is removed", async () => {
+test("removed Maven distribution is absent", async () => {
   for (const path of [
     "src/main/dist/run.cmd",
     "src/main/dist/VERSION.txt",
