@@ -1,6 +1,6 @@
 {
   "name": "@harmonia-suite/desktop",
-  "version": "1.0.12-SNAPSHOT",
+  "version": "1.0.12",
   "private": true,
   "description": "Electron desktop shell for Harmonia Suite",
   "type": "module",
