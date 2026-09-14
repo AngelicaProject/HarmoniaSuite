@@ -1,5 +1,5 @@
 //! Per-user OS integration. These files point directly at the immutable Electron runtime through
-//! the stable `current` filesystem pointer; no Rust proxy is part of the launch path.
+//! the stable `current` filesystem pointer.
 
 use std::fs;
 #[cfg(windows)]

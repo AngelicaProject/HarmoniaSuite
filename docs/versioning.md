@@ -24,8 +24,8 @@ or repeated tag.
 `installerVersion` is the independent SemVer version of the Rust installer/updater engine. It must
 equal `apps/installer/Cargo.toml` and the corresponding package entry in
 `Cargo.lock` when that entry is tracked. Changing installer behavior requires a higher engine
-version before a new installer binary is published. An installer-only compatible fix can bump
-`0.1.0` to `0.1.1`; a substantial engine capability or protocol change can bump the minor line to
+version before a new installer binary is published. The current engine is `0.1.3`; a substantial
+engine capability or protocol change can bump the minor line to
 `0.2.0` while the product version remains independent.
 
 ## Minimum Installer Version
@@ -35,9 +35,8 @@ is the signed manifest's `minInstallerVersion`; it is not automatically copied f
 `installerVersion`. It must be less than or equal to `installerVersion` and is raised only when a
 new rolling contract cannot safely run on older engines.
 
-The two values are separate by definition: they may be equal in the initial release, but a new
-installer engine does not automatically raise the compatibility floor. The floor changes only
-after the required installer engine is published and the new rolling contract has been reviewed.
+The two values are separate by definition. The current rolling contract requires installer
+`0.1.2`, while the current engine is `0.1.3`.
 
 The compatible installer must be published and available to users before a later main commit
 raises this floor. Otherwise an old client could create an update deadlock. If the running engine
@@ -71,7 +70,7 @@ Every tagged release also publishes `release-metadata.json`:
 {
   "schemaVersion": 1,
   "productVersion": "1.0.11",
-  "installerVersion": "0.1.0",
+  "installerVersion": "0.1.3",
   "commit": "<exact tag commit>"
 }
 ```
@@ -114,30 +113,17 @@ next main:        1.0.12-SNAPSHOT
 Installer lifecycle:
 
 ```text
-Product v1.0.11 -> installer 0.1.0
-installer gets compatible fixes -> installer 0.1.1
-minimum remains 0.1.0
-Product v1.0.12 publishes installer 0.1.1
-later rolling functionality needs 0.1.1
-minimumInstallerVersion becomes 0.1.1 in a subsequent main commit
+Product v1.0.12 -> installer 0.1.2
+Product v1.0.13 -> installer 0.1.3
+minimumInstallerVersion remains 0.1.2 for the rolling contract
 ```
 
 It is valid for product releases to reuse an unchanged engine:
 
 ```text
-Product v1.0.12 -> installer 0.1.1
-Product v1.0.13 -> installer 0.1.1
+Product v1.0.12 -> installer 0.1.2
+Product v1.0.13 -> installer 0.1.3
 ```
-
-The 0.1.0/0.1.1 to 0.1.2 migration is staged separately from rolling application publication. The
-old client first performs a normal signed rolling update to a PR44-or-later transition commit with
-the canonical Electron executable and compatibility alias. The user then runs a trusted, prebuilt
-0.1.2 setup binary's `repair` command, which publishes the direct-launch `current` surface and
-removes the legacy proxy only after integration succeeds. If the exact current payload has no
-canonical executable, repair returns `rolling application update required first` and leaves the
-proxy in place. Until the two steps complete, existing clients remain on their legacy proxy
-contract. The rolling manifest's `minimumInstallerVersion` stays at `0.1.0` until this upgrade path
-is available and adopted; this change does not raise the floor.
 
 ## SemVer policy and tooling
 
@@ -145,8 +131,8 @@ Use the version tooling for all coordinated changes:
 
 ```bash
 node tools/version/set-version.mjs product 1.0.12-SNAPSHOT
-node tools/version/set-version.mjs installer 0.1.1
-node tools/version/set-version.mjs minimum-installer 0.1.1
+node tools/version/set-version.mjs installer 0.1.3
+node tools/version/set-version.mjs minimum-installer 0.1.2
 node tools/version/check-versions.mjs
 ```
 

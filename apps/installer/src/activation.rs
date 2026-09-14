@@ -729,11 +729,6 @@ impl ActivationEngine {
         let desktop_target = staging_dir.join("desktop");
         let backend_target = staging_dir.join("backend").join("harmonia-suite.jar");
         copy_tree(&desktop_source, &desktop_target)?;
-        consolidate_desktop_compatibility_alias(
-            &desktop_target,
-            self.paths.desktop_executable_name(),
-            self.paths.compatibility_desktop_executable_name(),
-        )?;
         if let Some(parent) = backend_target.parent() {
             fs::create_dir_all(parent)?;
         }
@@ -2064,52 +2059,6 @@ fn copy_regular_file(source: &Path, destination: &Path) -> Result<(), Activation
     Ok(())
 }
 
-/// Keep the transition filename as a hardlink to the branded Electron runtime whenever the
-/// filesystem supports it. If the payload already contains a copied compatibility file, retain it
-/// as a safe fallback instead of making an otherwise valid activation fail on a filesystem without
-/// hardlink support.
-fn consolidate_desktop_compatibility_alias(
-    desktop_dir: &Path,
-    canonical_name: &str,
-    compatibility_name: &str,
-) -> Result<(), ActivationError> {
-    if canonical_name == compatibility_name {
-        return Ok(());
-    }
-    let canonical = desktop_dir.join(canonical_name);
-    let compatibility = desktop_dir.join(compatibility_name);
-    if !canonical.is_file() {
-        return Err(ActivationError::ArtifactVerification(
-            "canonical desktop runtime executable is missing".to_owned(),
-        ));
-    }
-    if compatibility.is_file() {
-        let temporary = desktop_dir.join(format!(
-            ".{compatibility_name}.{}.tmp",
-            Uuid::new_v4().simple()
-        ));
-        match fs::hard_link(&canonical, &temporary) {
-            Ok(()) => {
-                fs::remove_file(&compatibility)?;
-                if let Err(error) = fs::rename(&temporary, &compatibility) {
-                    let _ = fs::remove_file(&temporary);
-                    return Err(error.into());
-                }
-            }
-            Err(_) => {
-                let _ = fs::remove_file(&temporary);
-            }
-        }
-    } else {
-        fs::hard_link(&canonical, &compatibility).map_err(|error| {
-            ActivationError::ArtifactVerification(format!(
-                "compatibility Electron executable is missing and could not be created: {error}"
-            ))
-        })?;
-    }
-    Ok(())
-}
-
 fn validate_sha(value: &str) -> Result<(), ActivationError> {
     if value.len() != 40 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return Err(ActivationError::InvalidInput(
@@ -3150,7 +3099,6 @@ mod tests {
         fs::write(frontend.join("index.html"), b"frontend").unwrap();
         fs::write(&backend, b"backend").unwrap();
         fs::write(desktop.join(paths.desktop_executable_name()), b"electron").unwrap();
-        fs::write(desktop.join("electron"), b"electron").unwrap();
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -3159,8 +3107,6 @@ mod tests {
                 fs::Permissions::from_mode(0o755),
             )
             .unwrap();
-            fs::set_permissions(desktop.join("electron"), fs::Permissions::from_mode(0o755))
-                .unwrap();
         }
         fs::write(desktop.join("resources/app/package.json"), b"{}\n").unwrap();
         fs::write(desktop.join("resources/app/dist/main.js"), b"main").unwrap();
@@ -3273,13 +3219,14 @@ mod tests {
                 .join("backend/harmonia-suite.jar")
         );
         assert!(runtime.desktop_executable.is_file());
+        assert!(!runtime.version_dir.join("desktop/electron").exists());
         assert!(!runtime.version_dir.join("frontend").exists());
         assert!(!runtime.version_dir.starts_with(&paths.user_data_root));
         assert!(!runtime.version_dir.join("source").exists());
     }
 
     #[test]
-    fn repair_replaces_corrupt_current_without_self_recovery_rollback() {
+    fn repair_replaces_corrupt_canonical_executable_without_self_recovery_rollback() {
         let root = tempdir().unwrap();
         let paths = paths(root.path());
         let engine = ActivationEngine::new(paths.clone());
@@ -3300,7 +3247,8 @@ mod tests {
             paths
                 .versions_dir()
                 .join(&first.target_commit)
-                .join("backend/harmonia-suite.jar"),
+                .join("desktop")
+                .join(paths.desktop_executable_name()),
             b"corrupt",
         )
         .unwrap();
@@ -3325,6 +3273,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(runtime.metadata.target_commit, repair_result.target_commit);
+        assert_eq!(fs::read(&runtime.desktop_executable).unwrap(), b"electron");
         assert_eq!(
             StateStore::new(paths.clone())
                 .load_installation()

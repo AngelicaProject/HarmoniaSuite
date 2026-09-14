@@ -348,7 +348,7 @@ mod tests {
     }
 
     #[test]
-    fn cli_rejects_legacy_check_command() {
+    fn cli_rejects_removed_check_command() {
         assert!(parse_cli(&args(&["check"])).is_err());
     }
 

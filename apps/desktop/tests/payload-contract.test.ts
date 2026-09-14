@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -21,7 +21,7 @@ afterEach(async () => {
 });
 
 describe("packaged desktop payload", () => {
-  it("requires and applies the canonical Windows icon before the compatibility alias", async () => {
+  it("renames and brands the canonical Windows executable without an alias", async () => {
     const icon = await readFile(
       join(import.meta.dirname, "..", "..", "..", "assets", "branding", "harmonia-suite.ico"),
     );
@@ -39,11 +39,11 @@ describe("packaged desktop payload", () => {
       "await rename(join(output, sourceExecutableName), join(output, canonicalExecutableName))",
     );
     const branded = packagePayloadSource.indexOf("await applyWindowsIcon(");
-    const aliased = packagePayloadSource.indexOf("await link(");
     expect(copied).toBeGreaterThanOrEqual(0);
     expect(renamed).toBeGreaterThan(copied);
     expect(branded).toBeGreaterThan(renamed);
-    expect(aliased).toBeGreaterThan(branded);
+    expect(packagePayloadSource).not.toContain("await link(");
+    expect(packagePayloadSource).not.toContain("compatibility alias");
   });
 
   it("enforces the Windows Electron and ESM payload contract", async () => {
@@ -52,7 +52,6 @@ describe("packaged desktop payload", () => {
     await mkdir(join(output, "resources", "app", "dist"), { recursive: true });
     await mkdir(join(output, "frontend", "dist"), { recursive: true });
     await writeFile(join(output, "HarmoniaSuite.exe"), "electron");
-    await writeFile(join(output, "electron.exe"), "electron");
     await writeFile(
       join(output, "resources", "app", "package.json"),
       JSON.stringify({ type: "module", main: "dist/main.js" }),
@@ -66,8 +65,31 @@ describe("packaged desktop payload", () => {
     await writeFile(join(output, "frontend", "dist", "index.html"), "<!doctype html>");
 
     await expect(
-      verifyPackagedPayload(output, "HarmoniaSuite.exe", "electron.exe"),
+      verifyPackagedPayload(output, "HarmoniaSuite.exe"),
     ).resolves.toBeUndefined();
+    await expect(stat(join(output, "electron.exe"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("enforces the Linux canonical executable without an alias", async () => {
+    const output = await mkdtemp(join(tmpdir(), "harmonia-desktop-payload-"));
+    temporaryRoots.push(output);
+    await mkdir(join(output, "resources", "app", "dist"), { recursive: true });
+    await mkdir(join(output, "frontend", "dist"), { recursive: true });
+    await writeFile(join(output, "harmonia-suite"), "electron");
+    await writeFile(
+      join(output, "resources", "app", "package.json"),
+      JSON.stringify({ type: "module", main: "dist/main.js" }),
+    );
+    await writeFile(join(output, "resources", "app", "dist", "main.js"), "import './preload.js';\n");
+    await writeFile(join(output, "resources", "app", "dist", "preload.js"), "export {};\n");
+    await writeFile(
+      join(output, "resources", "app", "dist", "runtime-paths.js"),
+      `export const moduleDir = ${JSON.stringify(join(output, "resources", "app", "dist"))};\n`,
+    );
+    await writeFile(join(output, "frontend", "dist", "index.html"), "<!doctype html>");
+
+    await expect(verifyPackagedPayload(output, "harmonia-suite")).resolves.toBeUndefined();
+    await expect(stat(join(output, "electron"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("rejects a compiled main that reintroduces CommonJS globals", async () => {
@@ -76,7 +98,6 @@ describe("packaged desktop payload", () => {
     await mkdir(join(output, "resources", "app", "dist"), { recursive: true });
     await mkdir(join(output, "frontend", "dist"), { recursive: true });
     await writeFile(join(output, "HarmoniaSuite.exe"), "electron");
-    await writeFile(join(output, "electron.exe"), "electron");
     await writeFile(
       join(output, "resources", "app", "package.json"),
       JSON.stringify({ type: "module", main: "dist/main.js" }),
@@ -89,7 +110,7 @@ describe("packaged desktop payload", () => {
     );
     await writeFile(join(output, "frontend", "dist", "index.html"), "<!doctype html>");
 
-    await expect(verifyPackagedPayload(output, "HarmoniaSuite.exe", "electron.exe"))
+    await expect(verifyPackagedPayload(output, "HarmoniaSuite.exe"))
       .rejects.toThrow("must not use CommonJS runtime globals");
   });
 });

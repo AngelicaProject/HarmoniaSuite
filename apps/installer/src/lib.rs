@@ -49,8 +49,7 @@ pub use download::{
 pub use extract::ExtractionError;
 pub use git::{GitError, ManagedCheckout, ManagedGitRepository, ResolvedCommit};
 pub use helper::{
-    publish_installer_helper, remove_legacy_launcher, run_cleanup_helper, HelperError,
-    InstallerHelperMetadata,
+    publish_installer_helper, run_cleanup_helper, HelperError, InstallerHelperMetadata,
 };
 pub use integration::{
     install as install_os_integration, remove as remove_os_integration, IntegrationError,

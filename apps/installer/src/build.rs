@@ -1045,7 +1045,6 @@ mod tests {
                 fs::create_dir_all(&output)?;
                 let canonical = output.join("harmonia-suite");
                 fs::write(&canonical, b"fixture electron payload")?;
-                fs::hard_link(canonical, output.join("electron"))?;
             } else if is_maven_command(command) {
                 let output = current_dir.join("target");
                 fs::create_dir_all(&output)?;
@@ -1188,8 +1187,8 @@ mod tests {
                 br#"{
   "schemaVersion": 1,
   "productVersion": "1.0.12-SNAPSHOT",
-  "installerVersion": "0.1.0",
-  "minimumInstallerVersion": "0.1.0"
+  "installerVersion": "0.1.3",
+  "minimumInstallerVersion": "0.1.2"
 }
 "#,
             )

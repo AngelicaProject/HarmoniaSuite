@@ -186,14 +186,6 @@ impl InstallationPaths {
         })
     }
 
-    pub fn legacy_launcher_path(&self) -> PathBuf {
-        self.bin_dir().join(if self.platform == Platform::Windows {
-            "HarmoniaSuite.exe"
-        } else {
-            "harmonia-suite"
-        })
-    }
-
     pub fn current_pointer_path(&self) -> PathBuf {
         self.app_root.join("current")
     }
@@ -203,14 +195,6 @@ impl InstallationPaths {
             "HarmoniaSuite.exe"
         } else {
             "harmonia-suite"
-        }
-    }
-
-    pub fn compatibility_desktop_executable_name(&self) -> &'static str {
-        if self.platform == Platform::Windows {
-            "electron.exe"
-        } else {
-            "electron"
         }
     }
 
@@ -569,7 +553,7 @@ mod tests {
     }
 
     #[test]
-    fn direct_and_compatibility_desktop_names_are_distinct() {
+    fn linux_uses_canonical_desktop_name() {
         let root = PathBuf::from("/tmp/harmonia");
         let linux = InstallationPaths {
             platform: Platform::Linux,
@@ -580,7 +564,6 @@ mod tests {
             cache_root: root.join("cache"),
         };
         assert_eq!(linux.desktop_executable_name(), "harmonia-suite");
-        assert_eq!(linux.compatibility_desktop_executable_name(), "electron");
         assert_eq!(
             linux.current_desktop_executable_path(),
             root.join("current/desktop/harmonia-suite")
@@ -588,7 +571,7 @@ mod tests {
     }
 
     #[test]
-    fn windows_uses_branded_canonical_and_electron_compatibility_names() {
+    fn windows_uses_branded_canonical_desktop_name() {
         let root = PathBuf::from("C:/Users/tester/AppData/Local/HarmoniaSuite");
         let windows = InstallationPaths {
             platform: Platform::Windows,
@@ -599,10 +582,6 @@ mod tests {
             cache_root: root.join("cache"),
         };
         assert_eq!(windows.desktop_executable_name(), "HarmoniaSuite.exe");
-        assert_eq!(
-            windows.compatibility_desktop_executable_name(),
-            "electron.exe"
-        );
         assert_eq!(
             windows.current_desktop_executable_path(),
             root.join("current/desktop/HarmoniaSuite.exe")

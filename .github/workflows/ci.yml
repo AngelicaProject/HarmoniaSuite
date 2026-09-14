@@ -77,7 +77,7 @@ jobs:
         shell: bash
         run: |
           test -x apps/desktop/artifacts/linux-x64/harmonia-suite
-          test -x apps/desktop/artifacts/linux-x64/electron
+          test ! -e apps/desktop/artifacts/linux-x64/electron
           test -f apps/desktop/artifacts/linux-x64/resources/app/package.json
           test -f apps/desktop/artifacts/linux-x64/resources/app/dist/main.js
           test -f apps/desktop/artifacts/linux-x64/frontend/dist/index.html
@@ -87,7 +87,7 @@ jobs:
         run: |
           $payload = 'apps/desktop/artifacts/windows-x64'
           if (-not (Test-Path "$payload/HarmoniaSuite.exe" -PathType Leaf)) { throw 'missing canonical Electron runtime executable' }
-          if (-not (Test-Path "$payload/electron.exe" -PathType Leaf)) { throw 'missing Electron compatibility executable' }
+          if (Test-Path "$payload/electron.exe") { throw 'unexpected Electron compatibility executable' }
           if (-not (Test-Path "$payload/resources/app/package.json" -PathType Leaf)) { throw 'missing app package.json' }
           if (-not (Test-Path "$payload/resources/app/dist/main.js" -PathType Leaf)) { throw 'missing compiled desktop main' }
           if (-not (Test-Path "$payload/frontend/dist/index.html" -PathType Leaf)) { throw 'missing bundled frontend' }

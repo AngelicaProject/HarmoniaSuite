@@ -194,6 +194,23 @@ impl UpdateJournal {
     }
 }
 
+fn ensure_minimum_installer_version(
+    minimum: Option<&str>,
+    current_version: &str,
+) -> Result<(), ManifestError> {
+    let Some(minimum) = minimum else {
+        return Ok(());
+    };
+    let current = semver::Version::parse(current_version)
+        .map_err(|_| ManifestError::InvalidMinimumInstallerVersion(current_version.to_owned()))?;
+    let required = semver::Version::parse(minimum)
+        .map_err(|_| ManifestError::InvalidMinimumInstallerVersion(minimum.to_owned()))?;
+    if current < required {
+        return Err(ManifestError::UpdaterUpgradeRequired(minimum.to_owned()));
+    }
+    Ok(())
+}
+
 pub struct UpdateEngine<D, P> {
     paths: InstallationPaths,
     downloader: D,
@@ -1070,16 +1087,10 @@ impl<D: DownloadClient, P: ProcessRunner> UpdateEngine<D, P> {
             self.paths.platform,
             &self.paths.architecture,
         )?;
-        if let Some(minimum) = signed.manifest.min_installer_version.as_deref() {
-            let current = semver::Version::parse(env!("CARGO_PKG_VERSION")).map_err(|_| {
-                ManifestError::InvalidMinimumInstallerVersion(env!("CARGO_PKG_VERSION").to_owned())
-            })?;
-            let required = semver::Version::parse(minimum)
-                .map_err(|_| ManifestError::InvalidMinimumInstallerVersion(minimum.to_owned()))?;
-            if current < required {
-                return Err(ManifestError::UpdaterUpgradeRequired(minimum.to_owned()));
-            }
-        }
+        ensure_minimum_installer_version(
+            signed.manifest.min_installer_version.as_deref(),
+            env!("CARGO_PKG_VERSION"),
+        )?;
         crate::state::atomic_write_bytes(&self.paths.update_manifest_cache_path(), &manifest)
             .map_err(|error| ManifestError::Io(std::io::Error::other(error.to_string())))?;
         crate::state::atomic_write_bytes(
@@ -1395,14 +1406,6 @@ mod tests {
                     "harmonia-suite"
                 });
                 fs::write(&runtime, b"controlled electron")?;
-                fs::write(
-                    payload.join(if cfg!(windows) {
-                        "electron.exe"
-                    } else {
-                        "electron"
-                    }),
-                    b"controlled electron",
-                )?;
                 fs::write(payload.join("resources/app/package.json"), b"{}")?;
                 fs::write(payload.join("resources/app/dist/main.js"), b"desktop")?;
                 fs::create_dir_all(payload.join("frontend/dist"))?;
@@ -1411,10 +1414,6 @@ mod tests {
                 {
                     use std::os::unix::fs::PermissionsExt;
                     fs::set_permissions(&runtime, fs::Permissions::from_mode(0o755))?;
-                    fs::set_permissions(
-                        payload.join("electron"),
-                        fs::Permissions::from_mode(0o755),
-                    )?;
                 }
             } else if is_maven {
                 fs::create_dir_all(directory.join("target"))?;
@@ -1722,7 +1721,7 @@ mod tests {
         )
         .unwrap();
         let versions = format!(
-            r#"{{"schemaVersion":1,"productVersion":"{product_version}","installerVersion":"0.1.0","minimumInstallerVersion":"0.1.0"}}"#
+            r#"{{"schemaVersion":1,"productVersion":"{product_version}","installerVersion":"0.1.3","minimumInstallerVersion":"0.1.2"}}"#
         );
         root.insert(
             "versions.json",
@@ -2356,6 +2355,15 @@ mod tests {
             )
             .unwrap();
         assert!(matches!(trust.status, UpdateStatus::TrustFailure { .. }));
+    }
+
+    #[test]
+    fn minimum_installer_floor_keeps_012_supported_and_rejects_older_engines() {
+        assert!(ensure_minimum_installer_version(Some("0.1.2"), "0.1.2").is_ok());
+        assert!(matches!(
+            ensure_minimum_installer_version(Some("0.1.2"), "0.1.1"),
+            Err(ManifestError::UpdaterUpgradeRequired(minimum)) if minimum == "0.1.2"
+        ));
     }
 
     #[test]

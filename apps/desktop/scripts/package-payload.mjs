@@ -1,4 +1,4 @@
-import { cp, link, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { cp, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -41,14 +41,6 @@ if (platform === "windows") {
   const { applyWindowsIcon } = await import("./windows-icon.mjs");
   await applyWindowsIcon(join(output, canonicalExecutableName), canonicalIcon);
 }
-// Keep one hardlink under Electron's historical name during the staged rollout. Existing
-// installer 0.1.0/0.1.1 validates that name, while the canonical executable remains user-facing.
-try {
-  await link(join(output, canonicalExecutableName), join(output, sourceExecutableName));
-} catch {
-  // Some filesystems do not permit hardlinks; retain compatibility with a copied alias there.
-  await cp(join(output, canonicalExecutableName), join(output, sourceExecutableName));
-}
 await mkdir(appPayload, { recursive: true });
 await cp(compiledShell, join(appPayload, "dist"), { recursive: true, dereference: true });
 await cp(frontendDistribution, join(output, "frontend", "dist"), {
@@ -70,7 +62,7 @@ await writeFile(
   "utf8",
 );
 
-await verifyPackagedPayload(output, canonicalExecutableName, sourceExecutableName);
+await verifyPackagedPayload(output, canonicalExecutableName);
 
 async function assertFile(path, label) {
   try {

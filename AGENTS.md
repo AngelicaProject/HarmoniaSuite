@@ -288,14 +288,12 @@ Use portable distributions inside the application installation. Do not invoke sy
 
 Current release artifacts target Windows x64 and Linux x64 setup binaries and rolling manifests;
 the installed application launches the real Electron executable through the managed `current`
-pointer for fresh or migrated installations. MSI, portable ZIP, and macOS releases are outside
+pointer for supported installations. MSI, portable ZIP, and macOS releases are outside
 the release contract.
 
-Existing clients running installer engine 0.1.0/0.1.1 are not migrated by a rolling application
-build alone. They must first receive a signed rolling update to a transition commit with the
-canonical Electron payload, then a trusted prebuilt 0.1.2 setup migration may publish and verify
-the direct `current` integration. Keep their legacy proxy and shortcut compatibility contract until
-both steps complete; do not raise `minimumInstallerVersion` before that upgrade path is available.
+The supported installer baseline is 0.1.2. Rolling manifests that require this floor must fail
+closed through the generic `UpdaterUpgradeRequired` mechanism on older engines. Installed launches
+use the canonical Electron executable under the managed `current` pointer.
 
 A release must not depend on the end user having Java, Git or Node installed globally.
 

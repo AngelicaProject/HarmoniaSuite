@@ -18,7 +18,7 @@ use crate::catalog::production_descriptors;
 use crate::detached::{DetachedLaunchSpec, DetachedLauncher};
 use crate::diagnostics::{DiagnosticError, DiagnosticLogger};
 use crate::download::DownloadClient;
-use crate::helper::{publish_installer_helper, remove_legacy_launcher};
+use crate::helper::publish_installer_helper;
 use crate::integration;
 use crate::lock::{InstallationLock, LockError};
 use crate::paths::InstallationPaths;
@@ -347,10 +347,8 @@ fn desktop_launch_spec(
 fn publish_direct_desktop_surface(
     paths: &InstallationPaths,
 ) -> Result<(), crate::helper::HelperError> {
-    integration::install(paths, false).map_err(|error| {
-        crate::helper::HelperError::Io(std::io::Error::other(error.to_string()))
-    })?;
-    remove_legacy_launcher(paths)
+    integration::install(paths, false)
+        .map_err(|error| crate::helper::HelperError::Io(std::io::Error::other(error.to_string())))
 }
 
 pub fn wait_for_runtime_launch_ack(
@@ -775,7 +773,7 @@ impl<D: DownloadClient, P: ProcessRunner, L: DetachedLauncher> BootstrapInstalle
         let installation = store.load_installation()?;
         if let Some(commit) = installation.current_commit.clone() {
             match activation.ensure_current_pointer_with_lock(&lock) {
-                Ok(Some(runtime)) if paths.current_desktop_executable_path().is_file() => {
+                Ok(Some(runtime)) => {
                     let existing_commit = commit.clone();
                     if let Err(error) = publish_direct_desktop_surface(&paths) {
                         let reason =
@@ -812,24 +810,6 @@ impl<D: DownloadClient, P: ProcessRunner, L: DetachedLauncher> BootstrapInstalle
                         status,
                         Some(existing_commit),
                         installation.current_toolchains,
-                        false,
-                        false,
-                    );
-                }
-                Ok(Some(runtime)) => {
-                    let reason = "installed version uses the legacy desktop payload and requires repair migration"
-                        .to_owned();
-                    let status = BootstrapStatus::RepairRequired { commit, reason };
-                    return finish_result(
-                        &paths,
-                        logger.as_ref(),
-                        &operation_id,
-                        &options,
-                        started_at_ms,
-                        journal,
-                        status,
-                        None,
-                        runtime.metadata.toolchains,
                         false,
                         false,
                     );
@@ -1386,33 +1366,6 @@ mod tests {
     }
 
     #[test]
-    fn broken_current_returns_repair_required_without_building_or_cleanup() {
-        let root = tempdir().unwrap();
-        let paths = test_paths(root.path());
-        let store = StateStore::new(paths.clone());
-        let mut installation = store.load_installation().unwrap();
-        installation.current_commit = Some("a".repeat(40));
-        store.save_installation(&installation).unwrap();
-        fs::create_dir_all(paths.bin_dir()).unwrap();
-        let legacy_launcher = paths.legacy_launcher_path();
-        fs::write(&legacy_launcher, b"legacy Rust proxy").unwrap();
-        fs::create_dir_all(&paths.user_data_root).unwrap();
-        let user_file = paths.user_data_root.join("keep.txt");
-        fs::write(&user_file, b"keep").unwrap();
-
-        let result = no_op_installer(paths.clone())
-            .install(BootstrapOptions::default())
-            .unwrap();
-        assert!(matches!(
-            result.status,
-            BootstrapStatus::RepairRequired { .. }
-        ));
-        assert_eq!(fs::read(&user_file).unwrap(), b"keep");
-        assert_eq!(fs::read(&legacy_launcher).unwrap(), b"legacy Rust proxy");
-        assert!(!paths.build_dir().join("staging").exists());
-    }
-
-    #[test]
     fn review_required_blocks_fresh_install() {
         let root = tempdir().unwrap();
         let paths = test_paths(root.path());
@@ -1524,7 +1477,6 @@ mod tests {
                 fs::create_dir_all(payload.join("resources/app/dist")).unwrap();
                 let canonical = payload.join("harmonia-suite");
                 fs::write(&canonical, b"electron").unwrap();
-                fs::write(payload.join("electron"), b"electron").unwrap();
                 fs::write(payload.join("resources/app/package.json"), b"{}").unwrap();
                 fs::write(payload.join("resources/app/dist/main.js"), b"desktop").unwrap();
                 fs::create_dir_all(payload.join("frontend/dist")).unwrap();
@@ -1533,11 +1485,6 @@ mod tests {
                 {
                     use std::os::unix::fs::PermissionsExt;
                     fs::set_permissions(&canonical, fs::Permissions::from_mode(0o755)).unwrap();
-                    fs::set_permissions(
-                        payload.join("electron"),
-                        fs::Permissions::from_mode(0o755),
-                    )
-                    .unwrap();
                 }
             } else if maven_command {
                 fs::create_dir_all(directory.join("target")).unwrap();
@@ -1652,7 +1599,7 @@ mod tests {
             ("pom.xml", b"<project/>".as_slice()),
             (
                 "versions.json",
-                br#"{"schemaVersion":1,"productVersion":"1.0.11","installerVersion":"0.1.0","minimumInstallerVersion":"0.1.0"}"#.as_slice(),
+                br#"{"schemaVersion":1,"productVersion":"1.0.11","installerVersion":"0.1.3","minimumInstallerVersion":"0.1.2"}"#.as_slice(),
             ),
             (
                 ".mvn/wrapper/maven-wrapper.properties",
@@ -1778,7 +1725,7 @@ mod tests {
             generation: 1,
             product_version: "1.0.11".to_owned(),
             target_commit,
-            min_installer_version: Some("0.1.0".to_owned()),
+            min_installer_version: Some("0.1.2".to_owned()),
             jdk,
             node,
         };
@@ -1948,8 +1895,8 @@ mod tests {
         let remote_path = workspace.join("remote");
         let repository = Repository::init(&remote_path).unwrap();
         fs::create_dir_all(&paths.user_data_root).unwrap();
-        let legacy_file = paths.user_data_root.join("legacy data.txt");
-        fs::write(&legacy_file, b"preserve").unwrap();
+        let preserved_file = paths.user_data_root.join("preserved data.txt");
+        fs::write(&preserved_file, b"preserve").unwrap();
         for (relative, contents) in [
             (
                 "frontend/package.json",
@@ -1964,7 +1911,7 @@ mod tests {
             ("pom.xml", b"<project/>".as_slice()),
             (
                 "versions.json",
-                br#"{"schemaVersion":1,"productVersion":"1.0.11","installerVersion":"0.1.0","minimumInstallerVersion":"0.1.0"}"#.as_slice(),
+                br#"{"schemaVersion":1,"productVersion":"1.0.11","installerVersion":"0.1.3","minimumInstallerVersion":"0.1.2"}"#.as_slice(),
             ),
             (
                 ".mvn/wrapper/maven-wrapper.properties",
@@ -2076,7 +2023,7 @@ mod tests {
             Some(paths.desktop_executable_name())
         );
         assert!(paths.current_pointer_path().is_dir());
-        assert_eq!(fs::read(&legacy_file).unwrap(), b"preserve");
+        assert_eq!(fs::read(&preserved_file).unwrap(), b"preserve");
 
         let journal_path = paths.bootstrap_operation_path();
         let mut journal: BootstrapJournal =
