@@ -18,6 +18,9 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: frontend/.node-version
       - uses: dtolnay/rust-toolchain@1.89.0
         with:
           components: rustfmt, clippy
@@ -35,6 +38,9 @@ jobs:
         run: cargo test --manifest-path apps/installer/Cargo.toml production_toolchain_smoke -- --ignored --nocapture
       - run: cargo test --manifest-path apps/installer/Cargo.toml --lib fetches_public_https_origin_main -- --ignored --nocapture
       - run: cargo build --release --manifest-path apps/installer/Cargo.toml
+      - name: verify Windows installer icon resource
+        if: runner.os == 'Windows'
+        run: node tools/release/verify-windows-icon.mjs apps/installer/target/release/HarmoniaSetup.exe assets/branding/harmonia-suite.ico
 
   desktop:
     name: desktop (${{ matrix.os }})
@@ -85,6 +91,9 @@ jobs:
           if (-not (Test-Path "$payload/resources/app/package.json" -PathType Leaf)) { throw 'missing app package.json' }
           if (-not (Test-Path "$payload/resources/app/dist/main.js" -PathType Leaf)) { throw 'missing compiled desktop main' }
           if (-not (Test-Path "$payload/frontend/dist/index.html" -PathType Leaf)) { throw 'missing bundled frontend' }
+      - name: verify Windows desktop icon resource
+        if: runner.os == 'Windows'
+        run: node tools/release/verify-windows-icon.mjs apps/desktop/artifacts/windows-x64/HarmoniaSuite.exe assets/branding/harmonia-suite.ico
 
   build:
     runs-on: ubuntu-latest
@@ -120,6 +129,7 @@ jobs:
       - run: ./mvnw -B -q test
       - run: node --test tools/test-release-notes.mjs
       - run: node --test tools/version/test-versions.mjs
+      - run: node --test tools/test-packaging-branding.mjs
       - run: node --test tools/release/test-release-workflow.mjs
       - run: node --test tools/release/test-manifest.mjs
       - run: node --test tools/release/test-rolling-policy.mjs

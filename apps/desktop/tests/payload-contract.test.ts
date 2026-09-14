@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -7,12 +7,45 @@ import { afterEach, describe, expect, it } from "vitest";
 import { verifyPackagedPayload } from "../scripts/payload-contract.mjs";
 
 const temporaryRoots: string[] = [];
+const packagePayloadSource = await readFile(
+  join(import.meta.dirname, "..", "scripts", "package-payload.mjs"),
+  "utf8",
+);
+const windowsIconSource = await readFile(
+  join(import.meta.dirname, "..", "scripts", "windows-icon.mjs"),
+  "utf8",
+);
 
 afterEach(async () => {
   await Promise.all(temporaryRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
 describe("packaged desktop payload", () => {
+  it("requires and applies the canonical Windows icon before the compatibility alias", async () => {
+    const icon = await readFile(
+      join(import.meta.dirname, "..", "..", "..", "assets", "branding", "harmonia-suite.ico"),
+    );
+    expect(icon.byteLength).toBeGreaterThan(0);
+    expect(packagePayloadSource).toContain(
+      'join(checkoutRoot, "assets", "branding", "harmonia-suite.ico")',
+    );
+    expect(packagePayloadSource).toContain('if (platform === "windows")');
+    expect(windowsIconSource).toContain('import rcedit from "rcedit"');
+
+    const copied = packagePayloadSource.indexOf(
+      "await cp(electronDistribution, output, { recursive: true, dereference: true })",
+    );
+    const renamed = packagePayloadSource.indexOf(
+      "await rename(join(output, sourceExecutableName), join(output, canonicalExecutableName))",
+    );
+    const branded = packagePayloadSource.indexOf("await applyWindowsIcon(");
+    const aliased = packagePayloadSource.indexOf("await link(");
+    expect(copied).toBeGreaterThanOrEqual(0);
+    expect(renamed).toBeGreaterThan(copied);
+    expect(branded).toBeGreaterThan(renamed);
+    expect(aliased).toBeGreaterThan(branded);
+  });
+
   it("enforces the Windows Electron and ESM payload contract", async () => {
     const output = await mkdtemp(join(tmpdir(), "harmonia-desktop-payload-"));
     temporaryRoots.push(output);
