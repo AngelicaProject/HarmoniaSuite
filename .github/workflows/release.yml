@@ -55,7 +55,7 @@ jobs:
           set -euo pipefail
           git config --global core.autocrlf false
           git config --global core.eol lf
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.resolve-release.outputs.release_tag }}
           fetch-depth: 0
@@ -181,7 +181,7 @@ jobs:
     env:
       RELEASE_TAG: ${{ needs.resolve-release.outputs.release_tag }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.resolve-release.outputs.release_tag }}
           fetch-depth: 0
