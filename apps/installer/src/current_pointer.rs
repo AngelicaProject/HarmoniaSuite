@@ -1,7 +1,8 @@
 //! Crash-recoverable publication of the stable `current` version pointer.
 //!
-//! Unix uses a relative symlink. Windows uses a directory junction so the pointer works for a
-//! normal per-user installation without requiring Developer Mode or administrator privileges.
+//! Unix uses a relative symlink. Windows uses a native directory junction so the pointer works
+//! for a normal per-user installation without requiring Developer Mode or administrator
+//! privileges. Pointer creation does not invoke a shell.
 
 use std::fs;
 use std::io;
@@ -220,20 +221,206 @@ fn create_pointer(link: &Path, target: &Path) -> Result<(), CurrentPointerError>
 
 #[cfg(windows)]
 fn create_pointer(link: &Path, target: &Path) -> Result<(), CurrentPointerError> {
-    use std::process::{Command, Stdio};
-    let status = Command::new("cmd.exe")
-        .args(["/d", "/c", "mklink", "/J"])
-        .arg(link)
-        .arg(target)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()?;
-    if !status.success() {
-        return Err(CurrentPointerError::Io(io::Error::other(format!(
-            "mklink /J failed with status {status}"
-        ))));
+    use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+    use windows_sys::Win32::Storage::FileSystem::{
+        CreateDirectoryW, CreateFileW, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
+        FILE_GENERIC_WRITE, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
+    };
+    use windows_sys::Win32::System::Ioctl::FSCTL_SET_REPARSE_POINT;
+    use windows_sys::Win32::System::IO::DeviceIoControl;
+
+    let link_wide = wide_path(link);
+    if unsafe { CreateDirectoryW(link_wide.as_ptr(), std::ptr::null()) } == 0 {
+        return Err(io::Error::last_os_error().into());
     }
-    Ok(())
+
+    let handle = unsafe {
+        CreateFileW(
+            link_wide.as_ptr(),
+            FILE_GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            std::ptr::null(),
+            OPEN_EXISTING,
+            FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS,
+            std::ptr::null_mut(),
+        )
+    };
+    if handle == INVALID_HANDLE_VALUE {
+        let error = io::Error::last_os_error();
+        let _ = fs::remove_dir(link);
+        return Err(error.into());
+    }
+
+    let result = {
+        let _handle = WindowsHandle(handle);
+        let reparse_data = junction_reparse_data(target)?;
+        let mut bytes_returned = 0;
+        let success = unsafe {
+            DeviceIoControl(
+                handle,
+                FSCTL_SET_REPARSE_POINT,
+                reparse_data.as_ptr().cast(),
+                reparse_data.len() as u32,
+                std::ptr::null_mut(),
+                0,
+                &mut bytes_returned,
+                std::ptr::null_mut(),
+            )
+        };
+        if success == 0 {
+            Err(io::Error::last_os_error().into())
+        } else {
+            Ok(())
+        }
+    };
+    if result.is_err() {
+        let _ = fs::remove_dir(link);
+    }
+    result
+}
+
+#[cfg(windows)]
+struct WindowsHandle(windows_sys::Win32::Foundation::HANDLE);
+
+#[cfg(windows)]
+impl Drop for WindowsHandle {
+    fn drop(&mut self) {
+        unsafe {
+            windows_sys::Win32::Foundation::CloseHandle(self.0);
+        }
+    }
+}
+
+#[cfg(windows)]
+fn wide_path(path: &Path) -> Vec<u16> {
+    use std::os::windows::ffi::OsStrExt;
+    path.as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect()
+}
+
+/// Encode the native mount-point reparse buffer used by directory junctions.
+///
+/// The substitute name must use the NT namespace (`\\??\\...`), while the print name is the
+/// normal absolute target path. The buffer is constructed explicitly so no command-line parser
+/// can reinterpret the target path.
+#[cfg(windows)]
+fn junction_reparse_data(target: &Path) -> Result<Vec<u8>, CurrentPointerError> {
+    const UNICODE_NULL_SIZE: usize = 2;
+
+    let print_name = junction_print_name(target)?;
+    let substitute_name = junction_substitute_name(&print_name)?;
+    let substitute_name_length = substitute_name
+        .len()
+        .checked_mul(2)
+        .ok_or_else(|| CurrentPointerError::Invalid("junction target is too long".to_owned()))?;
+    let print_name_length = print_name
+        .len()
+        .checked_mul(2)
+        .ok_or_else(|| CurrentPointerError::Invalid("junction target is too long".to_owned()))?;
+    let path_buffer_length = substitute_name_length
+        .checked_add(UNICODE_NULL_SIZE)
+        .and_then(|length| length.checked_add(print_name_length))
+        .and_then(|length| length.checked_add(UNICODE_NULL_SIZE))
+        .ok_or_else(|| CurrentPointerError::Invalid("junction target is too long".to_owned()))?;
+    let reparse_data_length = 8usize
+        .checked_add(path_buffer_length)
+        .ok_or_else(|| CurrentPointerError::Invalid("junction target is too long".to_owned()))?;
+    let total_length = 8usize
+        .checked_add(reparse_data_length)
+        .ok_or_else(|| CurrentPointerError::Invalid("junction target is too long".to_owned()))?;
+    if substitute_name_length > u16::MAX as usize
+        || print_name_length > u16::MAX as usize
+        || path_buffer_length > u16::MAX as usize
+        || reparse_data_length > u16::MAX as usize
+        || total_length > 16 * 1024
+    {
+        return Err(CurrentPointerError::Invalid(
+            "junction target is too long for a Windows reparse point".to_owned(),
+        ));
+    }
+
+    let mut data = Vec::with_capacity(total_length);
+    push_u32(&mut data, 0xA0000003); // IO_REPARSE_TAG_MOUNT_POINT
+    push_u16(&mut data, reparse_data_length as u16);
+    push_u16(&mut data, 0);
+    push_u16(&mut data, 0);
+    push_u16(&mut data, substitute_name_length as u16);
+    push_u16(
+        &mut data,
+        (substitute_name_length + UNICODE_NULL_SIZE) as u16,
+    );
+    push_u16(&mut data, print_name_length as u16);
+    for value in substitute_name {
+        data.extend_from_slice(&value.to_le_bytes());
+    }
+    data.extend_from_slice(&0u16.to_le_bytes());
+    for value in print_name {
+        data.extend_from_slice(&value.to_le_bytes());
+    }
+    data.extend_from_slice(&0u16.to_le_bytes());
+    debug_assert_eq!(data.len(), total_length);
+    Ok(data)
+}
+
+#[cfg(windows)]
+fn junction_print_name(target: &Path) -> Result<Vec<u16>, CurrentPointerError> {
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
+
+    let target: Vec<u16> = target.as_os_str().encode_wide().collect();
+    let prefix = |value: &str| OsStr::new(value).encode_wide().collect::<Vec<_>>();
+    let extended_unc_prefix = prefix(r"\\?\UNC\");
+    let extended_prefix = prefix(r"\\?\");
+    let result = if target.starts_with(&extended_unc_prefix) {
+        let mut result = prefix(r"\\");
+        result.extend_from_slice(&target[extended_unc_prefix.len()..]);
+        result
+    } else if target.starts_with(&extended_prefix) {
+        target[extended_prefix.len()..].to_vec()
+    } else {
+        target
+    };
+    if result.contains(&0) {
+        return Err(CurrentPointerError::Invalid(
+            "junction target contains a NUL character".to_owned(),
+        ));
+    }
+    Ok(result)
+}
+
+#[cfg(windows)]
+fn junction_substitute_name(target: &[u16]) -> Result<Vec<u16>, CurrentPointerError> {
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
+
+    let prefix = |value: &str| OsStr::new(value).encode_wide().collect::<Vec<_>>();
+    let result = if target.starts_with(&prefix(r"\\")) {
+        let mut result = prefix(r"\??\UNC\");
+        result.extend_from_slice(&target[2..]);
+        result
+    } else {
+        let mut result = prefix(r"\??\");
+        result.extend_from_slice(target);
+        result
+    };
+    if result.contains(&0) {
+        return Err(CurrentPointerError::Invalid(
+            "junction target contains a NUL character".to_owned(),
+        ));
+    }
+    Ok(result)
+}
+
+#[cfg(windows)]
+fn push_u16(buffer: &mut Vec<u8>, value: u16) {
+    buffer.extend_from_slice(&value.to_le_bytes());
+}
+
+#[cfg(windows)]
+fn push_u32(buffer: &mut Vec<u8>, value: u32) {
+    buffer.extend_from_slice(&value.to_le_bytes());
 }
 
 fn replace_pointer(temporary: &Path, pointer: &Path) -> Result<(), CurrentPointerError> {
@@ -345,6 +532,41 @@ mod tests {
         assert_eq!(target(&paths).unwrap(), Some(a));
         switch(&paths, &b).unwrap();
         assert_eq!(target(&paths).unwrap(), Some(b));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn creates_and_switches_a_native_junction_for_shell_metacharacter_path() {
+        let root = tempdir().unwrap();
+        let app_root = root.path().join("Harmonia&Suite");
+        let paths = InstallationPaths {
+            platform: Platform::Windows,
+            architecture: TargetArchitecture::X64,
+            app_root: app_root.clone(),
+            user_data_root: root.path().join("data"),
+            state_root: root.path().join("state"),
+            cache_root: root.path().join("cache"),
+        };
+        let a = "a".repeat(40);
+        let b = "b".repeat(40);
+        fs::create_dir_all(paths.versions_dir().join(&a)).unwrap();
+        fs::create_dir_all(paths.versions_dir().join(&b)).unwrap();
+
+        switch(&paths, &a).unwrap();
+        assert_eq!(target(&paths).unwrap(), Some(a));
+        switch(&paths, &b).unwrap();
+        assert_eq!(target(&paths).unwrap(), Some(b));
+
+        let source = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/current_pointer.rs"
+        ));
+        let forbidden_shell = ["cmd", "exe"].join(".");
+        let forbidden_legacy_command = ["mk", "link"].concat();
+        let forbidden_command = ["std::process::", "Command"].concat();
+        assert!(!source.contains(&forbidden_shell));
+        assert!(!source.contains(&forbidden_legacy_command));
+        assert!(!source.contains(&forbidden_command));
     }
 
     #[cfg(unix)]
