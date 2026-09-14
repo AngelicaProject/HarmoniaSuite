@@ -18,7 +18,7 @@ use crate::catalog::production_descriptors;
 use crate::detached::{DetachedLaunchSpec, DetachedLauncher};
 use crate::diagnostics::{DiagnosticError, DiagnosticLogger};
 use crate::download::DownloadClient;
-use crate::helper::{publish_installer_helper, publish_stable_launcher};
+use crate::helper::{publish_installer_helper, remove_legacy_launcher};
 use crate::integration;
 use crate::lock::{InstallationLock, LockError};
 use crate::paths::InstallationPaths;
@@ -311,74 +311,21 @@ fn wait_for_launch_ack(
 }
 
 pub fn runtime_launch_spec(
-    paths: &InstallationPaths,
+    _paths: &InstallationPaths,
     runtime: &crate::activation::RuntimePaths,
     operation_id: &str,
     ack_path: &Path,
     nonce: &str,
 ) -> DetachedLaunchSpec {
-    let mut spec = installed_runtime_spec(paths, runtime);
-    spec = spec
+    DetachedLaunchSpec::new(runtime.desktop_executable.clone())
+        .current_dir(runtime.version_dir.clone())
         .env("HARMONIA_LAUNCH_ACK", ack_path.display().to_string())
         .env("HARMONIA_LAUNCH_OPERATION_ID", operation_id.to_owned())
         .env(
             "HARMONIA_LAUNCH_COMMIT",
             runtime.metadata.target_commit.clone(),
         )
-        .env("HARMONIA_LAUNCH_NONCE", nonce.to_owned());
-    spec
-}
-
-/// Runtime contract used by the stable OS launcher. Unlike an install/update
-/// handoff it has no operation-scoped launch acknowledgement.
-pub fn stable_runtime_launch_spec(
-    paths: &InstallationPaths,
-    runtime: &crate::activation::RuntimePaths,
-) -> DetachedLaunchSpec {
-    installed_runtime_spec(paths, runtime)
-}
-
-fn installed_runtime_spec(
-    paths: &InstallationPaths,
-    runtime: &crate::activation::RuntimePaths,
-) -> DetachedLaunchSpec {
-    let mut spec = DetachedLaunchSpec::new(runtime.desktop_executable.clone())
-        .current_dir(runtime.version_dir.clone())
-        .env("HARMONIA_RUNTIME_MODE", "installed")
-        .env(
-            "HARMONIA_ACTIVE_VERSION_DIR",
-            runtime.version_dir.display().to_string(),
-        )
-        .env(
-            "HARMONIA_BACKEND_JAR",
-            runtime.backend_jar.display().to_string(),
-        )
-        .env(
-            "HARMONIA_JAVA_BINARY",
-            runtime.java_binary.display().to_string(),
-        )
-        .env(
-            "HARMONIA_USER_DATA_ROOT",
-            paths.user_data_root.display().to_string(),
-        )
-        .env(
-            "HARMONIA_WORKSPACE",
-            paths.user_data_root.display().to_string(),
-        )
-        .env(
-            "HARMONIA_INSTALL_STATE_ROOT",
-            paths.state_root.display().to_string(),
-        );
-    let installer_name = if paths.platform.as_str() == "windows" {
-        "HarmoniaSetup.exe"
-    } else {
-        "harmonia-setup"
-    };
-    spec = spec.env(
-        "HARMONIA_INSTALLER_BINARY",
-        paths.bin_dir().join(installer_name).display().to_string(),
-    );
-    spec
+        .env("HARMONIA_LAUNCH_NONCE", nonce.to_owned())
 }
 
 fn desktop_launch_spec(
@@ -395,6 +342,15 @@ fn desktop_launch_spec(
         .as_ref()
         .expect("bootstrap launch nonce initialized");
     runtime_launch_spec(paths, runtime, &journal.operation_id, ack_path, nonce)
+}
+
+fn publish_direct_desktop_surface(
+    paths: &InstallationPaths,
+) -> Result<(), crate::helper::HelperError> {
+    integration::install(paths, false).map_err(|error| {
+        crate::helper::HelperError::Io(std::io::Error::other(error.to_string()))
+    })?;
+    remove_legacy_launcher(paths)
 }
 
 pub fn wait_for_runtime_launch_ack(
@@ -511,12 +467,8 @@ fn reconcile_running_activation<L: DetachedLauncher>(
             false,
         );
     }
-    if let Err(error) = publish_stable_launcher(paths).and_then(|_| {
-        integration::install(paths, false).map_err(|error| {
-            crate::helper::HelperError::Io(std::io::Error::other(error.to_string()))
-        })
-    }) {
-        let reason = format!("stable launcher/OS integration publication failed: {error}");
+    if let Err(error) = publish_direct_desktop_surface(paths) {
+        let reason = format!("direct desktop/OS integration publication failed: {error}");
         journal.failure = Some(reason.clone());
         return finish_result(
             paths,
@@ -822,16 +774,12 @@ impl<D: DownloadClient, P: ProcessRunner, L: DetachedLauncher> BootstrapInstalle
         persist_bootstrap_journal(&paths, &journal)?;
         let installation = store.load_installation()?;
         if let Some(commit) = installation.current_commit.clone() {
-            match activation.resolve_current() {
-                Ok(Some(runtime)) => {
+            match activation.ensure_current_pointer_with_lock(&lock) {
+                Ok(Some(runtime)) if paths.current_desktop_executable_path().is_file() => {
                     let existing_commit = commit.clone();
-                    if let Err(error) = publish_stable_launcher(&paths).and_then(|_| {
-                        integration::install(&paths, false).map_err(|error| {
-                            crate::helper::HelperError::Io(std::io::Error::other(error.to_string()))
-                        })
-                    }) {
+                    if let Err(error) = publish_direct_desktop_surface(&paths) {
                         let reason =
-                            format!("stable launcher/OS integration repair failed: {error}");
+                            format!("direct desktop/OS integration repair failed: {error}");
                         journal.failure = Some(reason.clone());
                         return finish_result(
                             &paths,
@@ -864,6 +812,24 @@ impl<D: DownloadClient, P: ProcessRunner, L: DetachedLauncher> BootstrapInstalle
                         status,
                         Some(existing_commit),
                         installation.current_toolchains,
+                        false,
+                        false,
+                    );
+                }
+                Ok(Some(runtime)) => {
+                    let reason = "installed version uses the legacy desktop payload and requires repair migration"
+                        .to_owned();
+                    let status = BootstrapStatus::RepairRequired { commit, reason };
+                    return finish_result(
+                        &paths,
+                        logger.as_ref(),
+                        &operation_id,
+                        &options,
+                        started_at_ms,
+                        journal,
+                        status,
+                        None,
+                        runtime.metadata.toolchains,
                         false,
                         false,
                     );
@@ -1009,12 +975,8 @@ impl<D: DownloadClient, P: ProcessRunner, L: DetachedLauncher> BootstrapInstalle
                 false,
             );
         }
-        if let Err(error) = publish_stable_launcher(&paths).and_then(|_| {
-            integration::install(&paths, false).map_err(|error| {
-                crate::helper::HelperError::Io(std::io::Error::other(error.to_string()))
-            })
-        }) {
-            let reason = format!("stable launcher/OS integration publication failed: {error}");
+        if let Err(error) = publish_direct_desktop_surface(&paths) {
+            let reason = format!("direct desktop/OS integration publication failed: {error}");
             journal.failure = Some(reason.clone());
             return finish_result(
                 &paths,
@@ -2080,39 +2042,19 @@ mod tests {
             Some(target.as_str())
         );
         let launch = launcher.last.lock().unwrap().clone().unwrap();
-        assert_eq!(
-            launch.environment.get("HARMONIA_RUNTIME_MODE"),
-            Some(&"installed".to_owned())
-        );
-        assert_eq!(
-            launch.environment.get("HARMONIA_USER_DATA_ROOT"),
-            Some(&paths.user_data_root.display().to_string())
-        );
-        assert_eq!(
-            launch.environment.get("HARMONIA_WORKSPACE"),
-            Some(&paths.user_data_root.display().to_string())
-        );
-        assert_eq!(
-            launch.environment.get("HARMONIA_INSTALL_STATE_ROOT"),
-            Some(&paths.state_root.display().to_string())
-        );
-        let active_version_dir = paths.versions_dir().join(&target);
-        assert_eq!(
-            launch.environment.get("HARMONIA_ACTIVE_VERSION_DIR"),
-            Some(&active_version_dir.display().to_string())
-        );
-        for variable in ["HARMONIA_BACKEND_JAR", "HARMONIA_JAVA_BINARY"] {
-            let value = launch
-                .environment
-                .get(variable)
-                .expect("runtime environment variable");
+        for variable in [
+            "HARMONIA_RUNTIME_MODE",
+            "HARMONIA_ACTIVE_VERSION_DIR",
+            "HARMONIA_BACKEND_JAR",
+            "HARMONIA_JAVA_BINARY",
+            "HARMONIA_USER_DATA_ROOT",
+            "HARMONIA_WORKSPACE",
+            "HARMONIA_INSTALL_STATE_ROOT",
+            "HARMONIA_INSTALLER_BINARY",
+        ] {
             assert!(
-                Path::new(value).is_absolute(),
-                "{variable} must be absolute"
-            );
-            assert!(
-                Path::new(value).is_file(),
-                "{variable} must point to a file"
+                !launch.environment.contains_key(variable),
+                "direct launch must not depend on {variable}"
             );
         }
         assert!(launch.environment.contains_key("HARMONIA_LAUNCH_ACK"));
@@ -2122,12 +2064,11 @@ mod tests {
         assert!(launch.environment.contains_key("HARMONIA_LAUNCH_COMMIT"));
         assert!(launch.environment.contains_key("HARMONIA_LAUNCH_NONCE"));
         assert!(launch.program.is_file());
-        let helper = paths.installer_binary_path();
-        assert!(helper.is_file());
         assert_eq!(
-            launch.environment.get("HARMONIA_INSTALLER_BINARY"),
-            Some(&helper.display().to_string())
+            launch.program.file_name().and_then(|name| name.to_str()),
+            Some(paths.desktop_executable_name())
         );
+        assert!(paths.current_pointer_path().is_dir());
         assert_eq!(fs::read(&legacy_file).unwrap(), b"preserve");
 
         let journal_path = paths.bootstrap_operation_path();

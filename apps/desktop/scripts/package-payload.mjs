@@ -1,4 +1,4 @@
-import { cp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { cp, link, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -18,6 +18,8 @@ const compiledShell = join(desktopRoot, "dist");
 const frontendDistribution = join(checkoutRoot, "frontend", "dist");
 const output = join(desktopRoot, "artifacts", `${platform}-${architecture}`);
 const appPayload = join(output, "resources", "app");
+const sourceExecutableName = platform === "windows" ? "electron.exe" : "electron";
+const canonicalExecutableName = platform === "windows" ? "HarmoniaSuite.exe" : "harmonia-suite";
 
 await assertDirectory(electronDistribution, "Electron runtime");
 await assertFile(join(compiledShell, "main.js"), "compiled Electron main process");
@@ -30,6 +32,15 @@ await mkdir(output, { recursive: true });
 // step. The app itself is placed in resources/app, which is the unpacked Electron payload
 // contract consumed by Phase 5 activation.
 await cp(electronDistribution, output, { recursive: true, dereference: true });
+await rename(join(output, sourceExecutableName), join(output, canonicalExecutableName));
+// Keep one hardlink under Electron's historical name during the staged rollout. Existing
+// installer 0.1.0/0.1.1 validates that name, while the canonical executable remains user-facing.
+try {
+  await link(join(output, canonicalExecutableName), join(output, sourceExecutableName));
+} catch {
+  // Some filesystems do not permit hardlinks; retain compatibility with a copied alias there.
+  await cp(join(output, canonicalExecutableName), join(output, sourceExecutableName));
+}
 await mkdir(appPayload, { recursive: true });
 await cp(compiledShell, join(appPayload, "dist"), { recursive: true, dereference: true });
 await cp(frontendDistribution, join(output, "frontend", "dist"), {
@@ -51,7 +62,7 @@ await writeFile(
   "utf8",
 );
 
-await verifyPackagedPayload(output, platform === "windows" ? "electron.exe" : "electron");
+await verifyPackagedPayload(output, canonicalExecutableName, sourceExecutableName);
 
 async function assertFile(path, label) {
   try {

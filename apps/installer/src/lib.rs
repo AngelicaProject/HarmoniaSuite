@@ -3,6 +3,7 @@ pub mod bootstrap;
 pub mod build;
 pub mod catalog;
 pub mod checksum;
+pub mod current_pointer;
 pub mod desktop_control;
 pub mod detached;
 pub mod diagnostics;
@@ -27,8 +28,8 @@ pub use activation::{
     VersionComponent, VersionMetadata,
 };
 pub use bootstrap::{
-    stable_runtime_launch_spec, BootstrapError, BootstrapInstaller, BootstrapOptions,
-    BootstrapResult, BootstrapStatus, DEFAULT_REMOTE_URL,
+    BootstrapError, BootstrapInstaller, BootstrapOptions, BootstrapResult, BootstrapStatus,
+    DEFAULT_REMOTE_URL,
 };
 pub use build::{BuildArtifact, BuildConfig, BuildError, BuildPipeline, BuildResult, BuildStatus};
 pub use catalog::{production_catalog, production_descriptors, PRODUCTION_CATALOG_SCHEMA_VERSION};
@@ -48,7 +49,7 @@ pub use download::{
 pub use extract::ExtractionError;
 pub use git::{GitError, ManagedCheckout, ManagedGitRepository, ResolvedCommit};
 pub use helper::{
-    publish_installer_helper, publish_stable_launcher, run_cleanup_helper, HelperError,
+    publish_installer_helper, remove_legacy_launcher, run_cleanup_helper, HelperError,
     InstallerHelperMetadata,
 };
 pub use integration::{

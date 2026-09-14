@@ -1043,10 +1043,9 @@ mod tests {
             } else if is_desktop_package_command(command) {
                 let output = current_dir.join("artifacts/linux-x64");
                 fs::create_dir_all(&output)?;
-                fs::write(
-                    output.join("harmonia-electron"),
-                    b"fixture electron payload",
-                )?;
+                let canonical = output.join("harmonia-suite");
+                fs::write(&canonical, b"fixture electron payload")?;
+                fs::hard_link(canonical, output.join("electron"))?;
             } else if is_maven_command(command) {
                 let output = current_dir.join("target");
                 fs::create_dir_all(&output)?;

@@ -286,8 +286,9 @@ Node
 
 Use portable distributions inside the application installation. Do not invoke system-wide installers for these dependencies.
 
-Current release artifacts target Windows x64 and Linux x64 setup/launcher binaries and rolling
-manifests; MSI, portable ZIP, and macOS releases are outside the release contract.
+Current release artifacts target Windows x64 and Linux x64 setup binaries and rolling manifests;
+the installed application launches the real Electron executable through the managed `current`
+pointer. MSI, portable ZIP, and macOS releases are outside the release contract.
 
 A release must not depend on the end user having Java, Git or Node installed globally.
 

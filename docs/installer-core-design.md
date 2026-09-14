@@ -24,9 +24,10 @@ corresponding `AppData` roots; there is no public-profile fallback. Linux applic
 ignored in favor of these absolute fallbacks. If no absolute per-user root can be determined, path
 resolution fails rather than using a shared or temporary directory.
 
-Managed application files are grouped below `app_root`: `bin`, `versions`, `toolchain`, `source`,
-`build`, `cache` and `state`. User data is never a child of a version or staging directory and is
-not created or removed by core initialization.
+Managed application files are grouped below `app_root`: `bin`, `current`, `versions`, `toolchain`,
+`source`, `build`, `cache` and `state`. `current` is a managed pointer to one full-SHA directory
+under `versions`; it is never a copied version. User data is never a child of a version or staging
+directory and is not created or removed by core initialization.
 
 ## Persistent state и transaction journal
 
@@ -37,11 +38,12 @@ may rely on it. The record contains operation, phase, target/current commit meta
 owned temporary paths, activation marker and failure diagnostics.
 
 Recovery is conservative. A pre-activation interrupted transaction can be resumed or have only its
-explicitly owned temporary paths cleaned. A journal that reached activation/health-check is reported
-for explicit recovery/rollback handling; core does not guess that a partially switched installation
-is safe. Unknown paths and user-data paths are never deleted from a recovery scan. Cleanup rejects
-parent-directory components, refuses to remove a managed root itself, and fails closed if any
-existing ancestor is a symlink or Windows reparse point.
+explicitly owned temporary paths cleaned. The activation journal records the pointer/state boundary;
+recovery restores the pointer from the pre-activation snapshot before restoring state whenever health
+completion was not durable, and repairs a missing or stale pointer from trusted state. Unknown paths
+and user-data paths are never deleted from a recovery scan. Cleanup rejects parent-directory
+components, refuses to remove a managed root itself, and fails closed if any existing ancestor is a
+symlink or Windows reparse point.
 
 ## Locking and diagnostics
 

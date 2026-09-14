@@ -58,11 +58,13 @@ operation:
 - the global installation lock is held across recovery, build, activation and detached launch
   handoff, using locked engine APIs to avoid nested lock deadlocks;
 - `--json` emits a machine-readable outcome alongside stable exit codes;
-- the final desktop handoff uses a separate detached launcher, so the setup process's health-process
-  containment does not kill the installed desktop when setup exits. It passes the exact
-  `HARMONIA_USER_DATA_ROOT` contract to Electron and waits for an operation-bound, durable
-  acknowledgement after Electron readiness. A bounded early-exit check remains a fast-failure signal;
-  an already-running primary can acknowledge a recovery request received through `second-instance`;
+- the final desktop handoff starts the real Electron executable from the active immutable version in a
+  separate detached process, so the setup process's health-process containment does not kill the
+  installed desktop when setup exits. Only operation-scoped launch acknowledgement variables are
+  passed to Electron; installed runtime paths are resolved from `process.resourcesPath` and
+  `metadata.json`. The installer waits for an operation-bound, durable acknowledgement after Electron
+  readiness. A bounded early-exit check remains a fast-failure signal; an already-running primary can
+  acknowledge a recovery request received through `second-instance`;
 - production setup accepts no arbitrary source URL or product-version override. Custom repositories
   and descriptors remain restricted to internal fixture seams.
 
@@ -73,13 +75,19 @@ The production lifecycle around those engines provides:
 - repair rebuilds the trusted exact current commit and atomically republishes a corrupted immutable
   version; uninstall stops the bound desktop session and preserves user data unless
   `--remove-user-data` is explicit;
-- `bin/HarmoniaSetup.exe`/`harmonia-setup` and `bin/HarmoniaSuite.exe`/`harmonia-suite` are the
-  setup and stable launcher contracts. The stable launcher resolves current and passes managed Java,
-  workspace, and user-data paths explicitly;
+- `bin/HarmoniaSetup.exe`/`harmonia-setup` is the setup, update, repair, and uninstall contract.
+  The active immutable version is exposed through the managed `current` pointer, and the real
+  Electron executable is `current/desktop/HarmoniaSuite.exe` on Windows or
+  `current/desktop/harmonia-suite` on Linux;
 - Windows per-user Start Menu/Desktop shortcuts and HKCU uninstall registration, plus Linux XDG
-  desktop entry/icon integration, target only the stable launcher;
-- release CI targets Windows/Linux x64, publishes setup/launcher artifacts with optional Authenticode,
-  and publishes signed platform manifests. MSI, portable ZIP, and macOS artifacts are out of scope.
+  desktop entry/icon integration, target the direct Electron executable through `current`;
+- release CI targets Windows/Linux x64, publishes setup artifacts with optional Authenticode, and
+  publishes signed platform manifests. MSI, portable ZIP, and macOS artifacts are out of scope.
+
+Installer 0.1.2 publishes a transition payload with both the branded Electron executable and a
+temporary `desktop/electron.exe`/`desktop/electron` hardlink for older 0.1.0/0.1.1 updaters. The
+legacy `bin/HarmoniaSuite.exe`/`bin/harmonia-suite` Rust proxy is removed only after the direct
+payload, `current` pointer, and OS integration are verified successfully.
 
 Run the checks from the repository root with:
 

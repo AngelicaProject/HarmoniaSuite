@@ -7,6 +7,7 @@ import { PassThrough } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 
 import { LocalGateway, parseGatewayReadyLine } from "../src/local-gateway.js";
+import type { DesktopRuntimeContext } from "../src/runtime-context.js";
 
 class FakeChild extends EventEmitter {
   readonly stdout = new PassThrough();
@@ -83,20 +84,21 @@ describe("local gateway lifecycle", () => {
   });
 
   it("fails closed without managed Java in installed mode", async () => {
-    const jarPath = await fakeJar();
-    const previousMode = process.env.HARMONIA_RUNTIME_MODE;
-    const previousJava = process.env.HARMONIA_JAVA_BINARY;
-    process.env.HARMONIA_RUNTIME_MODE = "installed";
-    delete process.env.HARMONIA_JAVA_BINARY;
-    try {
-      await expect(new LocalGateway({ jarPath }).start()).rejects.toThrow(
-        "managed Java is required",
-      );
-    } finally {
-      if (previousMode === undefined) delete process.env.HARMONIA_RUNTIME_MODE;
-      else process.env.HARMONIA_RUNTIME_MODE = previousMode;
-      if (previousJava === undefined) delete process.env.HARMONIA_JAVA_BINARY;
-      else process.env.HARMONIA_JAVA_BINARY = previousJava;
-    }
+    const root = await mkdtemp(join(tmpdir(), "harmonia-desktop-test-"));
+    const jarPath = join(root, "harmonia-suite.jar");
+    await writeFile(jarPath, "test");
+    const runtimeContext: DesktopRuntimeContext = {
+      mode: "installed",
+      appRoot: root,
+      activeVersionDir: root,
+      backendJar: jarPath,
+      userDataRoot: root,
+      workspace: root,
+      stateRoot: root,
+      installerBinary: join(root, "bin", "HarmoniaSetup.exe"),
+    };
+    await expect(new LocalGateway({ jarPath, runtimeContext }).start()).rejects.toThrow(
+      "managed Java is required",
+    );
   });
 });

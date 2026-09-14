@@ -4,6 +4,11 @@ import { isAbsolute, join } from "node:path";
 
 import { ipcMain } from "electron";
 
+import {
+  createDesktopRuntimeContext,
+  type DesktopRuntimeContext,
+} from "./runtime-context.js";
+
 export type UpdateStatus =
   | { state: "idle" }
   | { state: "checking" }
@@ -14,12 +19,14 @@ export type UpdateStatus =
 
 let status: UpdateStatus = { state: "idle" };
 
-export function registerUpdaterIpc(): void {
+export function registerUpdaterIpc(
+  runtimeContext: DesktopRuntimeContext = createDesktopRuntimeContext(),
+): void {
   ipcMain.handle("harmonia:update:getUpdateStatus", () => status);
   ipcMain.handle("harmonia:update:checkForUpdates", async () => {
     status = { state: "checking" };
     try {
-      const result = await runInstaller(["check", "--json"]);
+      const result = await runInstaller(["check", "--json"], runtimeContext);
       status = { state: updateResultState(result), result };
       return result;
     } catch (error) {
@@ -29,8 +36,8 @@ export function registerUpdaterIpc(): void {
   });
   ipcMain.handle("harmonia:update:installUpdate", async () => {
     try {
-      const installer = installerBinary();
-      const acceptancePath = updateAcceptancePath();
+      const installer = installerBinary(runtimeContext);
+      const acceptancePath = updateAcceptancePath(runtimeContext);
       rmSync(acceptancePath, { force: true });
       // The updater is an independent process. Acceptance confirms only that it owns the
       // operation; the desktop remains alive until the updater reaches activation and requests
@@ -40,7 +47,7 @@ export function registerUpdaterIpc(): void {
         shell: false,
         windowsHide: true,
         stdio: "ignore",
-        env: updaterEnvironment({
+        env: updaterEnvironment(runtimeContext, {
           HARMONIA_UPDATE_ACCEPT_PATH: acceptancePath,
           HARMONIA_UPDATE_FROM_DESKTOP: "1",
         }),
@@ -56,15 +63,16 @@ export function registerUpdaterIpc(): void {
   });
 }
 
-function installerBinary(): string {
+function installerBinary(runtimeContext: DesktopRuntimeContext): string {
+  if (runtimeContext.mode === "installed") return runtimeContext.installerBinary;
   const value = process.env.HARMONIA_INSTALLER_BINARY;
-  if (!value || !isAbsolute(value)) {
-    throw new Error("installed runtime requires an absolute HARMONIA_INSTALLER_BINARY");
-  }
-  return value;
+  return value && isAbsolute(value) ? value : runtimeContext.installerBinary;
 }
 
-function updaterEnvironment(overrides: Record<string, string> = {}): NodeJS.ProcessEnv {
+function updaterEnvironment(
+  _runtimeContext: DesktopRuntimeContext,
+  overrides: Record<string, string> = {},
+): NodeJS.ProcessEnv {
   const environment = updaterEnvironmentBase();
   return { ...environment, ...overrides };
 }
@@ -88,25 +96,11 @@ function updaterEnvironmentBase(): NodeJS.ProcessEnv {
   for (const name of allowed) {
     if (process.env[name]) environment[name] = process.env[name];
   }
-  for (const name of [
-    "HARMONIA_RUNTIME_MODE",
-    "HARMONIA_USER_DATA_ROOT",
-    "HARMONIA_WORKSPACE",
-    "HARMONIA_INSTALL_STATE_ROOT",
-    "HARMONIA_INSTALLER_BINARY",
-    "HARMONIA_UPDATE_FROM_DESKTOP",
-  ]) {
-    if (process.env[name]) environment[name] = process.env[name];
-  }
   return environment;
 }
 
-function updateAcceptancePath(): string {
-  const stateRoot = process.env.HARMONIA_INSTALL_STATE_ROOT;
-  if (!stateRoot || !isAbsolute(stateRoot)) {
-    throw new Error("installed runtime requires an absolute HARMONIA_INSTALL_STATE_ROOT");
-  }
-  return join(stateRoot, "update-accepted.json");
+function updateAcceptancePath(runtimeContext: DesktopRuntimeContext): string {
+  return join(runtimeContext.stateRoot, "update-accepted.json");
 }
 
 async function waitForUpdaterAcceptance(
@@ -150,15 +144,18 @@ function updateResultState(result: unknown): "up-to-date" | "available" {
   return "available";
 }
 
-async function runInstaller(args: string[]): Promise<unknown> {
-  const installer = installerBinary();
+async function runInstaller(
+  args: string[],
+  runtimeContext: DesktopRuntimeContext,
+): Promise<unknown> {
+  const installer = installerBinary(runtimeContext);
   return new Promise((resolve, reject) => {
     const child = spawn(installer, args, {
       detached: false,
       shell: false,
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],
-      env: updaterEnvironment(),
+      env: updaterEnvironment(runtimeContext),
     });
     let stdout = "";
     let stderr = "";

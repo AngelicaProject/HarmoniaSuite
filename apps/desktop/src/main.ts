@@ -18,9 +18,13 @@ import {
   writeLaunchAcknowledgement,
   type LaunchRequest,
 } from "./launch-ack.js";
-import { userDataRoot } from "./paths.js";
 import { registerHarmoniaProtocol } from "./protocol.js";
 import { moduleDir } from "./runtime-paths.js";
+import {
+  createDesktopRuntimeContext,
+  installedUserDataRoot,
+  type DesktopRuntimeContext,
+} from "./runtime-context.js";
 import { registerUpdaterIpc } from "./updater-ipc.js";
 import { writeDesktopStartupFailure } from "./startup-diagnostics.js";
 import {
@@ -37,15 +41,22 @@ protocol.registerSchemesAsPrivileged([
   },
 ]);
 
-const initialLaunchRequest = launchRequestFromEnvironment();
+let runtimeContext: DesktopRuntimeContext | undefined;
+let runtimeContextError: unknown;
+try {
+  runtimeContext = createDesktopRuntimeContext();
+} catch (error) {
+  runtimeContextError = error;
+}
+const initialLaunchRequest = launchRequestFromEnvironment(process.env, runtimeContext?.stateRoot);
 const hasLock = app.requestSingleInstanceLock(
   initialLaunchRequest ? { harmoniaLaunch: initialLaunchRequest } : undefined,
 );
 if (!hasLock) {
   app.quit();
 } else {
-  app.setPath("userData", userDataRoot());
-  registerUpdaterIpc();
+  app.setPath("userData", runtimeContext?.userDataRoot || installedUserDataRoot());
+  if (runtimeContext) registerUpdaterIpc(runtimeContext);
 
   let window: BrowserWindow | undefined;
   let localGateway: LocalGateway | undefined;
@@ -56,7 +67,7 @@ if (!hasLock) {
   const pendingLaunchRequests = new Map<string, LaunchRequest>();
 
   app.on("second-instance", (_event, _commandLine, _workingDirectory, additionalData) => {
-    const request = launchRequestFromAdditionalData(additionalData);
+    const request = launchRequestFromAdditionalData(additionalData, process.env, runtimeContext?.stateRoot);
     if (request) {
       if (startupReady) {
         void acknowledgeLaunchRequest(request);
@@ -82,6 +93,8 @@ if (!hasLock) {
 
   app.whenReady().then(async () => {
     try {
+      if (runtimeContextError) throw runtimeContextError;
+      if (!runtimeContext) throw new Error("desktop runtime context could not be resolved");
       registerDesktopSession();
       const allowInsecureRemote = process.env.HARMONIA_ALLOW_INSECURE_REMOTE === "1";
       const config = await loadGatewayConfig(join(app.getPath("userData"), "desktop.json"), {
@@ -114,6 +127,7 @@ if (!hasLock) {
       }
       const diagnosticWritten = await writeDesktopStartupFailure(error, {
         productVersion,
+        runtimeContext,
       });
       if (!diagnosticWritten) {
         console.warn("Harmonia desktop startup diagnostic could not be written");
@@ -124,8 +138,8 @@ if (!hasLock) {
 
   async function startLocalGateway(): Promise<string> {
     localGateway = new LocalGateway({
-      javaBinary: process.env.HARMONIA_JAVA_BINARY,
-      workspace: process.env.HARMONIA_WORKSPACE || app.getPath("userData"),
+      runtimeContext,
+      workspace: runtimeContext?.workspace || app.getPath("userData"),
       log: (message) => console.log(message),
     });
     return localGateway.start();
@@ -182,12 +196,12 @@ if (!hasLock) {
 
   function frontendDist(): string {
     const configured = process.env.HARMONIA_FRONTEND_DIST;
-    const activeVersion = process.env.HARMONIA_ACTIVE_VERSION_DIR;
-    const installed = process.env.HARMONIA_RUNTIME_MODE === "installed";
     const candidates = [
       configured,
-      activeVersion ? join(activeVersion, "desktop", "frontend", "dist") : undefined,
-      ...(installed
+      runtimeContext?.activeVersionDir
+        ? join(runtimeContext.activeVersionDir, "desktop", "frontend", "dist")
+        : undefined,
+      ...(runtimeContext?.mode === "installed"
         ? []
         : [
             resolve(moduleDir, "../../../frontend/dist"),
@@ -212,7 +226,7 @@ if (!hasLock) {
     try {
       await localGateway?.stop();
       if (requestId) {
-        const stateRoot = process.env.HARMONIA_INSTALL_STATE_ROOT;
+        const stateRoot = runtimeContext?.stateRoot;
         if (!stateRoot || !desktopSession) {
           throw new Error("shutdown acknowledgement requires the current installed desktop session");
         }
@@ -233,11 +247,9 @@ if (!hasLock) {
   }
 
   function registerDesktopSession(): void {
-    if (process.env.HARMONIA_RUNTIME_MODE !== "installed") return;
-    const stateRoot = process.env.HARMONIA_INSTALL_STATE_ROOT;
-    if (!stateRoot || !isAbsolutePath(stateRoot)) {
-      throw new Error("installed runtime requires an absolute HARMONIA_INSTALL_STATE_ROOT");
-    }
+    if (runtimeContext?.mode !== "installed") return;
+    const stateRoot = runtimeContext.stateRoot;
+    if (!isAbsolutePath(stateRoot)) throw new Error("installed runtime state root is not absolute");
     desktopSession = {
       sessionId: randomUUID(),
       pid: process.pid,
@@ -247,8 +259,9 @@ if (!hasLock) {
   }
 
   function clearDesktopSession(): void {
-    const stateRoot = process.env.HARMONIA_INSTALL_STATE_ROOT;
-    if (!stateRoot || !isAbsolutePath(stateRoot)) return;
+    if (runtimeContext?.mode !== "installed") return;
+    const stateRoot = runtimeContext.stateRoot;
+    if (!isAbsolutePath(stateRoot)) return;
     try {
       unlinkSync(join(stateRoot, "desktop-session.json"));
     } catch (error) {
@@ -257,8 +270,8 @@ if (!hasLock) {
   }
 
   function startShutdownWatcher(): void {
-    const stateRoot = process.env.HARMONIA_INSTALL_STATE_ROOT;
-    if (process.env.HARMONIA_RUNTIME_MODE !== "installed" || !stateRoot) return;
+    if (runtimeContext?.mode !== "installed") return;
+    const stateRoot = runtimeContext.stateRoot;
     shutdownWatcher = setInterval(() => {
       if (shuttingDown) return;
       try {

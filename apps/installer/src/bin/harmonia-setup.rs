@@ -3,12 +3,11 @@ use std::process::ExitCode;
 
 use harmonia_installer::uninstall::uninstall;
 use harmonia_installer::{
-    stable_runtime_launch_spec, ActivationEngine, BootstrapInstaller, BootstrapOptions,
-    BootstrapResult, BootstrapStatus, DesktopShutdownHooks, DetachedLauncher, DiagnosticLogger,
-    HttpDownloader, HttpManifestFetcher, InstallationPaths, LocalBackendHealthChecker,
-    ManifestVerifier, RepairEngine, RepairResult, RepairStatus, SystemDetachedLauncher,
-    SystemProcessRunner, UninstallResult, UninstallStatus, UpdateEngine, UpdateResult,
-    UpdateStatus,
+    BootstrapInstaller, BootstrapOptions, BootstrapResult, BootstrapStatus, DesktopShutdownHooks,
+    DiagnosticLogger, HttpDownloader, HttpManifestFetcher, InstallationPaths,
+    LocalBackendHealthChecker, ManifestVerifier, RepairEngine, RepairResult, RepairStatus,
+    SystemDetachedLauncher, SystemProcessRunner, UninstallResult, UninstallStatus, UpdateEngine,
+    UpdateResult, UpdateStatus,
 };
 
 const EXIT_INSTALLED: u8 = 0;
@@ -22,89 +21,12 @@ const EXIT_UPGRADE_REQUIRED: u8 = 42;
 const EXIT_USAGE: u8 = 64;
 const EXIT_INTERNAL: u8 = 70;
 
-fn is_stable_launcher_process() -> bool {
-    let Some(name) = env::current_exe().ok().and_then(|path| {
-        path.file_stem()
-            .map(|value| value.to_string_lossy().to_ascii_lowercase())
-    }) else {
-        return false;
-    };
-    name == "harmoniasuite" || name == "harmonia-suite"
-}
-
-fn run_stable_launcher() -> ExitCode {
-    let paths = match InstallationPaths::current() {
-        Ok(paths) => paths,
-        Err(error) => return report_error(false, EXIT_INTERNAL, &error.to_string()),
-    };
-    let logger =
-        DiagnosticLogger::open(paths.diagnostics_dir().join("desktop-launcher.jsonl")).ok();
-    let activation = ActivationEngine::new(paths.clone());
-    let runtime = match activation.resolve_current() {
-        Ok(Some(runtime)) => runtime,
-        Ok(None) => {
-            return report_stable_launcher_failure(
-                logger.as_ref(),
-                None,
-                EXIT_REPAIR_REQUIRED,
-                "HarmoniaSuite is not installed",
-            );
-        }
-        Err(error) => {
-            return report_stable_launcher_failure(
-                logger.as_ref(),
-                None,
-                EXIT_LAUNCH_FAILED,
-                &error.to_string(),
-            );
-        }
-    };
-    match SystemDetachedLauncher.launch(&stable_runtime_launch_spec(&paths, &runtime)) {
-        Ok(_) => ExitCode::from(EXIT_INSTALLED),
-        Err(error) => report_stable_launcher_failure(
-            logger.as_ref(),
-            Some(&runtime),
-            EXIT_LAUNCH_FAILED,
-            &error.to_string(),
-        ),
-    }
-}
-
-fn report_stable_launcher_failure(
-    logger: Option<&DiagnosticLogger>,
-    runtime: Option<&harmonia_installer::RuntimePaths>,
-    code: u8,
-    message: &str,
-) -> ExitCode {
-    if let Some(logger) = logger {
-        let mut fields = vec![
-            ("runtime_mode".to_owned(), serde_json::json!("installed")),
-            ("error_message".to_owned(), serde_json::json!(message)),
-        ];
-        if let Some(runtime) = runtime {
-            fields.push((
-                "product_version".to_owned(),
-                serde_json::json!(runtime.metadata.product_version),
-            ));
-            fields.push((
-                "desktop_executable".to_owned(),
-                serde_json::json!(runtime.desktop_executable),
-            ));
-        }
-        let _ = logger.log("error", "desktop_launch_failed", fields);
-    }
-    report_error(false, code, message)
-}
-
 fn main() -> ExitCode {
     if env::args().nth(1).as_deref() == Some("__cleanup") {
         return match harmonia_installer::run_cleanup_helper() {
             Ok(()) => ExitCode::from(EXIT_INSTALLED),
             Err(error) => report_error(false, EXIT_INTERNAL, &error.to_string()),
         };
-    }
-    if is_stable_launcher_process() {
-        return run_stable_launcher();
     }
     let arguments = env::args().skip(1).collect::<Vec<_>>();
     let cli = match parse_cli(&arguments) {

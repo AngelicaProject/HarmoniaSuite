@@ -21,8 +21,8 @@ or repeated tag.
 
 ## Installer Engine Version
 
-`installerVersion` is the independent SemVer version of the Rust installer/updater/launcher
-engine. It must equal `apps/installer/Cargo.toml` and the corresponding package entry in
+`installerVersion` is the independent SemVer version of the Rust installer/updater engine. It must
+equal `apps/installer/Cargo.toml` and the corresponding package entry in
 `Cargo.lock` when that entry is tracked. Changing installer behavior requires a higher engine
 version before a new installer binary is published. An installer-only compatible fix can bump
 `0.1.0` to `0.1.1`; a substantial engine capability or protocol change can bump the minor line to

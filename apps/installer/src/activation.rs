@@ -14,6 +14,7 @@ use uuid::Uuid;
 
 use crate::build::{hash_directory, BuildResult, BuildStatus};
 use crate::checksum::sha256_file;
+use crate::current_pointer;
 use crate::lock::{InstallationLock, LockError};
 use crate::paths::InstallationPaths;
 use crate::process::{CommandSpec, ManagedProcess, ProcessError, ProcessRunner};
@@ -728,6 +729,11 @@ impl ActivationEngine {
         let desktop_target = staging_dir.join("desktop");
         let backend_target = staging_dir.join("backend").join("harmonia-suite.jar");
         copy_tree(&desktop_source, &desktop_target)?;
+        consolidate_desktop_compatibility_alias(
+            &desktop_target,
+            self.paths.desktop_executable_name(),
+            self.paths.compatibility_desktop_executable_name(),
+        )?;
         if let Some(parent) = backend_target.parent() {
             fs::create_dir_all(parent)?;
         }
@@ -741,11 +747,7 @@ impl ActivationEngine {
                 "staged artifact hash differs from BuildResult".to_owned(),
             ));
         }
-        let executable = desktop_target.join(if self.paths.platform.as_str() == "windows" {
-            "electron.exe"
-        } else {
-            "electron"
-        });
+        let executable = desktop_target.join(self.paths.desktop_executable_name());
         if !executable.is_file() {
             return Err(ActivationError::ArtifactVerification(
                 "desktop runtime executable is missing".to_owned(),
@@ -777,13 +779,8 @@ impl ActivationEngine {
             ]),
             toolchains: result.toolchains.clone(),
             runtime: RuntimeMetadata {
-                desktop_executable: PathBuf::from("desktop").join(
-                    if self.paths.platform.as_str() == "windows" {
-                        "electron.exe"
-                    } else {
-                        "electron"
-                    },
-                ),
+                desktop_executable: PathBuf::from("desktop")
+                    .join(self.paths.desktop_executable_name()),
                 backend_jar: PathBuf::from("backend/harmonia-suite.jar"),
                 managed_java_binary: managed_java,
             },
@@ -844,6 +841,8 @@ impl ActivationEngine {
                 "final version failed completeness verification".to_owned(),
             ));
         }
+        current_pointer::switch(&self.paths, &result.target_commit)
+            .map_err(|error| ActivationError::InvalidInput(error.to_string()))?;
         if installation.current_commit == Some(result.target_commit.clone()) {
             let mut next = installation.clone();
             next.product_version = Some(result.product_version.clone());
@@ -906,9 +905,11 @@ impl ActivationEngine {
                 }
             }
         }
-        store.save_installation(&snapshot)?;
         if let Some(commit) = snapshot.current_commit.as_deref() {
             let runtime = self.resolve_version(commit)?;
+            current_pointer::switch(&self.paths, commit)
+                .map_err(|error| ActivationError::InvalidInput(error.to_string()))?;
+            store.save_installation(&snapshot)?;
             let mut health_config = config.clone();
             health_config.java_binary = runtime.java_binary.clone();
             if let Err(error) =
@@ -918,6 +919,10 @@ impl ActivationEngine {
                     "previous version health check failed: {error}"
                 )));
             }
+        } else {
+            current_pointer::remove(&self.paths)
+                .map_err(|error| ActivationError::InvalidInput(error.to_string()))?;
+            store.save_installation(&snapshot)?;
         }
         transaction.mark_rollback_completed()?;
         Ok(())
@@ -1030,6 +1035,12 @@ impl ActivationEngine {
         if installation.current_commit.as_deref() == Some(target.as_str())
             && record.health_check_passed
         {
+            if let Err(error) = current_pointer::ensure(&self.paths, &target) {
+                let reason =
+                    format!("failed to repair current pointer after health check: {error}");
+                let _ = transaction.mark_review_required(reason.clone());
+                return Err(ActivationError::ReviewRequired(reason));
+            }
             if let Err(error) = self.clear_pending_version(Some(&target)) {
                 let reason = format!("failed to clear pending activation state: {error}");
                 let _ = transaction.mark_review_required(reason.clone());
@@ -1538,10 +1549,45 @@ impl ActivationEngine {
 
     pub fn resolve_current(&self) -> Result<Option<RuntimePaths>, ActivationError> {
         let state = StateStore::new(self.paths.clone()).load_installation()?;
-        state
-            .current_commit
-            .map(|commit| self.resolve_version(&commit))
-            .transpose()
+        let Some(commit) = state.current_commit else {
+            return Ok(None);
+        };
+        let runtime = self.resolve_version(&commit)?;
+        match current_pointer::target(&self.paths)
+            .map_err(|error| ActivationError::InvalidInput(error.to_string()))?
+        {
+            Some(actual) if actual == commit => Ok(Some(runtime)),
+            Some(actual) => Err(ActivationError::InvalidInput(format!(
+                "installation state current {commit} disagrees with filesystem current {actual}"
+            ))),
+            None => Err(ActivationError::InvalidInput(
+                "installation current pointer is missing".to_owned(),
+            )),
+        }
+    }
+
+    /// Recreate or correct the stable pointer from the trusted installation state. Repair uses
+    /// this before checking the rest of the installed surface, so a missing or stale pointer is
+    /// recoverable without rebuilding an otherwise valid immutable version.
+    pub fn ensure_current_pointer_with_lock(
+        &self,
+        lock: &InstallationLock,
+    ) -> Result<Option<RuntimePaths>, ActivationError> {
+        if lock.path() != self.paths.lock_path() {
+            return Err(ActivationError::InvalidInput(
+                "caller lock does not belong to this installation".to_owned(),
+            ));
+        }
+        let state = StateStore::new(self.paths.clone()).load_installation()?;
+        let Some(commit) = state.current_commit else {
+            current_pointer::remove(&self.paths)
+                .map_err(|error| ActivationError::InvalidInput(error.to_string()))?;
+            return Ok(None);
+        };
+        let runtime = self.resolve_version(&commit)?;
+        current_pointer::ensure(&self.paths, &commit)
+            .map_err(|error| ActivationError::InvalidInput(error.to_string()))?;
+        Ok(Some(runtime))
     }
 
     pub fn resolve_version(&self, commit: &str) -> Result<RuntimePaths, ActivationError> {
@@ -2015,6 +2061,52 @@ fn copy_regular_file(source: &Path, destination: &Path) -> Result<(), Activation
         .write(true)
         .open(destination)?;
     file.sync_all()?;
+    Ok(())
+}
+
+/// Keep the transition filename as a hardlink to the branded Electron runtime whenever the
+/// filesystem supports it. If the payload already contains a copied compatibility file, retain it
+/// as a safe fallback instead of making an otherwise valid activation fail on a filesystem without
+/// hardlink support.
+fn consolidate_desktop_compatibility_alias(
+    desktop_dir: &Path,
+    canonical_name: &str,
+    compatibility_name: &str,
+) -> Result<(), ActivationError> {
+    if canonical_name == compatibility_name {
+        return Ok(());
+    }
+    let canonical = desktop_dir.join(canonical_name);
+    let compatibility = desktop_dir.join(compatibility_name);
+    if !canonical.is_file() {
+        return Err(ActivationError::ArtifactVerification(
+            "canonical desktop runtime executable is missing".to_owned(),
+        ));
+    }
+    if compatibility.is_file() {
+        let temporary = desktop_dir.join(format!(
+            ".{compatibility_name}.{}.tmp",
+            Uuid::new_v4().simple()
+        ));
+        match fs::hard_link(&canonical, &temporary) {
+            Ok(()) => {
+                fs::remove_file(&compatibility)?;
+                if let Err(error) = fs::rename(&temporary, &compatibility) {
+                    let _ = fs::remove_file(&temporary);
+                    return Err(error.into());
+                }
+            }
+            Err(_) => {
+                let _ = fs::remove_file(&temporary);
+            }
+        }
+    } else {
+        fs::hard_link(&canonical, &compatibility).map_err(|error| {
+            ActivationError::ArtifactVerification(format!(
+                "compatibility Electron executable is missing and could not be created: {error}"
+            ))
+        })?;
+    }
     Ok(())
 }
 
@@ -3057,10 +3149,16 @@ mod tests {
         fs::create_dir_all(desktop.join("resources/app/dist")).unwrap();
         fs::write(frontend.join("index.html"), b"frontend").unwrap();
         fs::write(&backend, b"backend").unwrap();
+        fs::write(desktop.join(paths.desktop_executable_name()), b"electron").unwrap();
         fs::write(desktop.join("electron"), b"electron").unwrap();
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(
+                desktop.join(paths.desktop_executable_name()),
+                fs::Permissions::from_mode(0o755),
+            )
+            .unwrap();
             fs::set_permissions(desktop.join("electron"), fs::Permissions::from_mode(0o755))
                 .unwrap();
         }
@@ -3161,6 +3259,10 @@ mod tests {
         let state = StateStore::new(paths.clone()).load_installation().unwrap();
         assert_eq!(state.current_commit, Some(result.target_commit.clone()));
         assert_eq!(state.previous_commit, None);
+        assert_eq!(
+            current_pointer::target(&paths).unwrap(),
+            Some(result.target_commit.clone())
+        );
         assert_eq!(state.staged_commit, None);
         assert_eq!(state.pending_commit, None);
         assert_eq!(
@@ -3357,6 +3459,10 @@ mod tests {
                 },
             )
             .unwrap();
+        assert_eq!(
+            current_pointer::target(&paths).unwrap(),
+            Some("a".repeat(40))
+        );
         let (second_path, second) = fixture_result(&paths, &"b".repeat(40), "tx-b");
         let error = engine
             .activate(
@@ -3383,6 +3489,10 @@ mod tests {
                 .metadata
                 .target_commit,
             "a".repeat(40)
+        );
+        assert_eq!(
+            current_pointer::target(&paths).unwrap(),
+            Some("a".repeat(40))
         );
     }
 
@@ -3526,6 +3636,10 @@ mod tests {
         let before = store.load_installation().unwrap();
         assert_eq!(before.current_commit, Some(a.target_commit.clone()));
         assert_eq!(before.previous_commit, Some(p.target_commit));
+        assert_eq!(
+            current_pointer::target(&paths).unwrap(),
+            Some(a.target_commit.clone())
+        );
 
         let (b_path, b) = fixture_result(&paths, &"b".repeat(40), "tx-b");
         let error = engine
@@ -3541,6 +3655,10 @@ mod tests {
             .unwrap_err();
         assert!(matches!(error, ActivationError::HealthCheck(_)));
         assert_eq!(store.load_installation().unwrap(), before);
+        assert_eq!(
+            current_pointer::target(&paths).unwrap(),
+            before.current_commit
+        );
     }
 
     #[test]
@@ -3728,6 +3846,7 @@ mod tests {
         crashed.transition(TransactionPhase::Activating).unwrap();
         let mut switched = store.load_installation().unwrap();
         switched.current_commit = Some(second.target_commit.clone());
+        current_pointer::switch(&paths, &second.target_commit).unwrap();
         store.save_installation(&switched).unwrap();
         crashed.mark_current_switched().unwrap();
         drop(crashed);
@@ -3742,6 +3861,10 @@ mod tests {
             .unwrap();
         let recovered = store.load_installation().unwrap();
         assert_eq!(recovered.current_commit, Some(first.target_commit));
+        assert_eq!(
+            current_pointer::target(&paths).unwrap(),
+            recovered.current_commit
+        );
         assert!(paths.versions_dir().join(second.target_commit).is_dir());
     }
 }

@@ -18,6 +18,7 @@ describe("packaged desktop payload", () => {
     temporaryRoots.push(output);
     await mkdir(join(output, "resources", "app", "dist"), { recursive: true });
     await mkdir(join(output, "frontend", "dist"), { recursive: true });
+    await writeFile(join(output, "HarmoniaSuite.exe"), "electron");
     await writeFile(join(output, "electron.exe"), "electron");
     await writeFile(
       join(output, "resources", "app", "package.json"),
@@ -31,7 +32,9 @@ describe("packaged desktop payload", () => {
     );
     await writeFile(join(output, "frontend", "dist", "index.html"), "<!doctype html>");
 
-    await expect(verifyPackagedPayload(output, "electron.exe")).resolves.toBeUndefined();
+    await expect(
+      verifyPackagedPayload(output, "HarmoniaSuite.exe", "electron.exe"),
+    ).resolves.toBeUndefined();
   });
 
   it("rejects a compiled main that reintroduces CommonJS globals", async () => {
@@ -39,6 +42,7 @@ describe("packaged desktop payload", () => {
     temporaryRoots.push(output);
     await mkdir(join(output, "resources", "app", "dist"), { recursive: true });
     await mkdir(join(output, "frontend", "dist"), { recursive: true });
+    await writeFile(join(output, "HarmoniaSuite.exe"), "electron");
     await writeFile(join(output, "electron.exe"), "electron");
     await writeFile(
       join(output, "resources", "app", "package.json"),
@@ -52,7 +56,7 @@ describe("packaged desktop payload", () => {
     );
     await writeFile(join(output, "frontend", "dist", "index.html"), "<!doctype html>");
 
-    await expect(verifyPackagedPayload(output, "electron.exe"))
+    await expect(verifyPackagedPayload(output, "HarmoniaSuite.exe", "electron.exe"))
       .rejects.toThrow("must not use CommonJS runtime globals");
   });
 });

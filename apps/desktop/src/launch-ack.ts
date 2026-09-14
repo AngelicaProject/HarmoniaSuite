@@ -19,10 +19,11 @@ const ACK_SCHEMA_VERSION = 1;
 
 export function launchRequestFromEnvironment(
   env: NodeJS.ProcessEnv = process.env,
+  installedStateRoot?: string,
 ): LaunchRequest | undefined {
   const values = {
     ackPath: env.HARMONIA_LAUNCH_ACK,
-    stateRoot: env.HARMONIA_INSTALL_STATE_ROOT,
+    stateRoot: installedStateRoot || env.HARMONIA_INSTALL_STATE_ROOT,
     operationId: env.HARMONIA_LAUNCH_OPERATION_ID,
     targetCommit: env.HARMONIA_LAUNCH_COMMIT,
     nonce: env.HARMONIA_LAUNCH_NONCE,
@@ -42,12 +43,13 @@ export function launchRequestFromEnvironment(
 export function launchRequestFromAdditionalData(
   value: unknown,
   env: NodeJS.ProcessEnv = process.env,
+  installedStateRoot?: string,
 ): LaunchRequest | undefined {
   if (!isRecord(value) || !isRecord(value.harmoniaLaunch)) {
     return undefined;
   }
   const request = parseLaunchRequest(value.harmoniaLaunch);
-  const trustedStateRoot = env.HARMONIA_INSTALL_STATE_ROOT;
+  const trustedStateRoot = installedStateRoot || env.HARMONIA_INSTALL_STATE_ROOT;
   if (!trustedStateRoot || resolve(trustedStateRoot) !== resolve(request.stateRoot)) {
     return undefined;
   }

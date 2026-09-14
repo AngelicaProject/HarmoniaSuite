@@ -150,7 +150,7 @@ function renderNotes({tag, prev, date, repo, groups, stat, contributors}) {
   }
   out.push('## Updating', '');
   out.push('- Installed app: version chip → Update (pulls sources and rebuilds locally, rolls back on failure).');
-  out.push('- Product release assets: see Assets below.');
+  out.push('- Product release assets: Windows/Linux setup binaries and checksums; see Assets below.');
   out.push('- From source: `git pull --ff-only` + `.\\mvnw.cmd package`.', '');
   if (prev) out.push(`**Full Changelog**: [${prev}...${tag}](${repoUrl}/compare/${prev}...${tag})`, '');
   return out.join('\n');

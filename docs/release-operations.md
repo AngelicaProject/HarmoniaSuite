@@ -16,16 +16,21 @@ published release title is `HarmoniaSuite vX.Y.Z`, and the tag must equal the st
 `versions.json.productVersion`. The release workflow also requires the checked-out commit to be
 the exact tag commit.
 
-Assets may include the platform bootstrap/launcher binaries and their checksums:
+Release assets contain the platform setup/bootstrap binaries and their checksums:
 
 ```text
 HarmoniaSetup.exe
-HarmoniaSuite.exe
 harmonia-setup
-harmonia-suite
 release-metadata.json
 checksums
 ```
+
+The standalone Rust `HarmoniaSuite.exe`/`harmonia-suite` proxy is not published. The installed
+application is launched from the real Electron executable under the managed `current` pointer.
+Installer 0.1.2 uses a transition payload containing the branded Electron filename plus a temporary
+`desktop/electron.exe`/`desktop/electron` hardlink so existing 0.1.0/0.1.1 updaters can still stage
+it. The compatibility alias is removed only in a later rollout after the minimum installer floor
+has been raised deliberately.
 
 The tagged installer is compiled with the exact tag commit and stable product version. A fresh
 install uses that embedded release bootstrap seed, builds only the exact seed commit, and fails

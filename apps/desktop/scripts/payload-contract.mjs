@@ -2,8 +2,15 @@ import { readFile, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
-export async function verifyPackagedPayload(output, executableName) {
-  await assertFile(join(output, executableName), "Electron runtime executable");
+export async function verifyPackagedPayload(
+  output,
+  executableName,
+  compatibilityExecutableName,
+) {
+  await assertFile(join(output, executableName), "canonical Electron runtime executable");
+  if (compatibilityExecutableName) {
+    await assertFile(join(output, compatibilityExecutableName), "Electron compatibility executable");
+  }
   await assertFile(join(output, "resources", "app", "package.json"), "runtime package manifest");
   await assertFile(join(output, "resources", "app", "dist", "main.js"), "compiled Electron main process");
   await assertFile(join(output, "resources", "app", "dist", "preload.js"), "compiled Electron preload");

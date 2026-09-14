@@ -1,5 +1,5 @@
-//! Per-user OS integration. These files are derived from stable launcher paths;
-//! no mutable checkout or system-wide registration is used.
+//! Per-user OS integration. These files point directly at the immutable Electron runtime through
+//! the stable `current` filesystem pointer; no Rust proxy is part of the launch path.
 
 use std::fs;
 #[cfg(windows)]
@@ -69,20 +69,27 @@ pub fn is_complete(paths: &InstallationPaths) -> bool {
 }
 
 fn linux_integration_complete(paths: &InstallationPaths) -> bool {
-    let launcher = paths.stable_launcher_path();
+    if !current_target_is_valid(paths) {
+        return false;
+    }
+    let executable = paths.current_desktop_executable_path();
     let icon = paths.linux_icon_path();
     let entry = paths.linux_desktop_entry_path();
     let Ok(content) = fs::read_to_string(&entry) else {
         return false;
     };
-    let launcher = desktop_exec_path(&launcher.display().to_string());
+    let executable = desktop_exec_path(&executable.display().to_string());
     let icon = desktop_exec_path(&icon.display().to_string());
     content
         == format!(
-            "[Desktop Entry]\nType=Application\nName=HarmoniaSuite\nExec={launcher}\nTryExec={launcher}\nIcon={icon}\nCategories=AudioVideo;\nTerminal=false\n"
+            "[Desktop Entry]\nType=Application\nName=HarmoniaSuite\nExec={executable}\nTryExec={executable}\nIcon={icon}\nCategories=AudioVideo;\nTerminal=false\n"
         )
         && paths.linux_icon_path().is_file()
-        && paths.stable_launcher_path().is_file()
+        && paths.current_desktop_executable_path().is_file()
+}
+
+fn current_target_is_valid(paths: &InstallationPaths) -> bool {
+    crate::current_pointer::target(paths).is_ok_and(|target| target.is_some())
 }
 
 #[cfg(windows)]
@@ -107,7 +114,10 @@ fn windows_registry_complete(paths: &InstallationPaths) -> bool {
         ("InstallLocation", paths.app_root.display().to_string()),
         (
             "DisplayIcon",
-            paths.stable_launcher_path().display().to_string(),
+            paths
+                .current_desktop_executable_path()
+                .display()
+                .to_string(),
         ),
         (
             "UninstallString",
@@ -160,7 +170,7 @@ fn windows_registry_complete(paths: &InstallationPaths) -> bool {
     values_match
         && windows_shortcut_targets(
             &paths.windows_start_menu_shortcut_path(),
-            &paths.stable_launcher_path(),
+            &paths.current_desktop_executable_path(),
         )
 }
 
@@ -302,13 +312,19 @@ fn installed_product_version(paths: &InstallationPaths) -> Option<String> {
 }
 
 fn install_linux(paths: &InstallationPaths) -> Result<(), IntegrationError> {
-    let launcher = paths.stable_launcher_path();
+    if !current_target_is_valid(paths) {
+        return Err(IntegrationError::InvalidPath(paths.current_pointer_path()));
+    }
+    let executable = paths.current_desktop_executable_path();
     let icon = paths.linux_icon_path();
     let entry = paths.linux_desktop_entry_path();
-    for path in [&launcher, &icon, &entry] {
+    for path in [&executable, &icon, &entry] {
         if !path.is_absolute() {
             return Err(IntegrationError::InvalidPath(path.to_path_buf()));
         }
+    }
+    if !executable.is_file() {
+        return Err(IntegrationError::InvalidPath(executable));
     }
     validate_managed_path(
         entry
@@ -330,8 +346,8 @@ fn install_linux(paths: &InstallationPaths) -> Result<(), IntegrationError> {
     )?;
     let content = format!(
         "[Desktop Entry]\nType=Application\nName=HarmoniaSuite\nExec={}\nTryExec={}\nIcon={}\nCategories=AudioVideo;\nTerminal=false\n",
-        desktop_exec_path(&launcher.display().to_string()),
-        desktop_exec_path(&launcher.display().to_string()),
+        desktop_exec_path(&executable.display().to_string()),
+        desktop_exec_path(&executable.display().to_string()),
         desktop_exec_path(&icon.display().to_string()),
     );
     crate::state::atomic_write_bytes(&entry, content.as_bytes())?;
@@ -343,14 +359,19 @@ fn install_windows(
     paths: &InstallationPaths,
     desktop_shortcut: bool,
 ) -> Result<(), IntegrationError> {
+    if !current_target_is_valid(paths) || !paths.current_desktop_executable_path().is_file() {
+        return Err(IntegrationError::InvalidPath(
+            paths.current_desktop_executable_path(),
+        ));
+    }
     write_windows_shortcut(
         &paths.windows_start_menu_shortcut_path(),
-        &paths.stable_launcher_path(),
+        &paths.current_desktop_executable_path(),
     )?;
     if desktop_shortcut {
         write_windows_shortcut(
             &paths.windows_desktop_shortcut_path(),
-            &paths.stable_launcher_path(),
+            &paths.current_desktop_executable_path(),
         )?;
     }
     write_windows_registry(paths)
@@ -507,7 +528,10 @@ fn write_windows_registry(paths: &InstallationPaths) -> Result<(), IntegrationEr
         ("InstallLocation", paths.app_root.display().to_string()),
         (
             "DisplayIcon",
-            paths.stable_launcher_path().display().to_string(),
+            paths
+                .current_desktop_executable_path()
+                .display()
+                .to_string(),
         ),
         (
             "UninstallString",
@@ -603,16 +627,22 @@ mod tests {
     }
 
     #[test]
-    fn linux_desktop_entry_uses_stable_launcher_and_icon() {
+    fn linux_desktop_entry_uses_direct_current_electron_and_icon() {
         let root = tempdir().unwrap();
         let paths = paths(root.path());
-        fs::create_dir_all(paths.bin_dir()).unwrap();
-        fs::write(paths.stable_launcher_path(), b"launcher").unwrap();
+        let commit = "a".repeat(40);
+        let desktop = paths.versions_dir().join(&commit).join("desktop");
+        fs::create_dir_all(&desktop).unwrap();
+        fs::write(desktop.join(paths.desktop_executable_name()), b"electron").unwrap();
+        crate::current_pointer::switch(&paths, &commit).unwrap();
         install(&paths, false).unwrap();
         let entry = fs::read_to_string(paths.linux_desktop_entry_path()).unwrap();
         assert!(entry.contains("Name=HarmoniaSuite"));
         assert!(entry.contains(&desktop_exec_path(
-            &paths.stable_launcher_path().display().to_string(),
+            &paths
+                .current_desktop_executable_path()
+                .display()
+                .to_string(),
         )));
         assert!(!entry.contains("%U"));
         assert!(paths.linux_icon_path().is_file());

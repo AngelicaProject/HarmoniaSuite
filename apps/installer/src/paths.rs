@@ -186,7 +186,7 @@ impl InstallationPaths {
         })
     }
 
-    pub fn stable_launcher_path(&self) -> PathBuf {
+    pub fn legacy_launcher_path(&self) -> PathBuf {
         self.bin_dir().join(if self.platform == Platform::Windows {
             "HarmoniaSuite.exe"
         } else {
@@ -194,12 +194,30 @@ impl InstallationPaths {
         })
     }
 
-    pub fn stable_launcher_metadata_path(&self) -> PathBuf {
-        self.bin_dir().join(if self.platform == Platform::Windows {
-            "HarmoniaSuite.exe.json"
+    pub fn current_pointer_path(&self) -> PathBuf {
+        self.app_root.join("current")
+    }
+
+    pub fn desktop_executable_name(&self) -> &'static str {
+        if self.platform == Platform::Windows {
+            "HarmoniaSuite.exe"
         } else {
-            "harmonia-suite.json"
-        })
+            "harmonia-suite"
+        }
+    }
+
+    pub fn compatibility_desktop_executable_name(&self) -> &'static str {
+        if self.platform == Platform::Windows {
+            "electron.exe"
+        } else {
+            "electron"
+        }
+    }
+
+    pub fn current_desktop_executable_path(&self) -> PathBuf {
+        self.current_pointer_path()
+            .join("desktop")
+            .join(self.desktop_executable_name())
     }
 
     pub fn linux_desktop_entry_path(&self) -> PathBuf {
@@ -548,5 +566,24 @@ mod tests {
             ),
             Err(PathError::MissingUserRoot(Platform::Windows))
         ));
+    }
+
+    #[test]
+    fn direct_and_compatibility_desktop_names_are_distinct() {
+        let root = PathBuf::from("/tmp/harmonia");
+        let linux = InstallationPaths {
+            platform: Platform::Linux,
+            architecture: TargetArchitecture::X64,
+            app_root: root.clone(),
+            user_data_root: root.join("data"),
+            state_root: root.join("state"),
+            cache_root: root.join("cache"),
+        };
+        assert_eq!(linux.desktop_executable_name(), "harmonia-suite");
+        assert_eq!(linux.compatibility_desktop_executable_name(), "electron");
+        assert_eq!(
+            linux.current_desktop_executable_path(),
+            root.join("current/desktop/harmonia-suite")
+        );
     }
 }

@@ -124,7 +124,7 @@ jobs:
           cargo fmt --manifest-path apps/installer/Cargo.toml -- --check
           cargo clippy --manifest-path apps/installer/Cargo.toml --all-targets -- -D warnings
           cargo test --manifest-path apps/installer/Cargo.toml
-      - name: Build installer and stable launcher
+      - name: Build installer
         run: cargo build --manifest-path apps/installer/Cargo.toml --release --bins
       - name: Sign Windows binaries
         if: runner.os == 'Windows'
@@ -137,9 +137,7 @@ jobs:
             $certificate = Join-Path $env:RUNNER_TEMP "harmonia-release.pfx"
             [IO.File]::WriteAllBytes($certificate, [Convert]::FromBase64String($env:WINDOWS_SIGNING_CERTIFICATE_B64))
             signtool sign /fd sha256 /f $certificate /p $env:WINDOWS_SIGNING_PASSWORD /tr http://timestamp.digicert.com /td sha256 apps/installer/target/release/HarmoniaSetup.exe
-            signtool sign /fd sha256 /f $certificate /p $env:WINDOWS_SIGNING_PASSWORD /tr http://timestamp.digicert.com /td sha256 apps/installer/target/release/HarmoniaSuite.exe
             signtool verify /pa apps/installer/target/release/HarmoniaSetup.exe
-            signtool verify /pa apps/installer/target/release/HarmoniaSuite.exe
             "authenticode=signed" | Set-Content (Join-Path $env:RUNNER_TEMP "windows-signing.txt")
           } else {
             Write-Warning "Authenticode credentials are absent; release binaries remain unsigned."
@@ -152,10 +150,9 @@ jobs:
           set -euo pipefail
           mkdir -p release
           install -m 0755 apps/installer/target/release/harmonia-setup release/harmonia-setup
-          install -m 0755 apps/installer/target/release/harmonia-suite release/harmonia-suite
           (
             cd release
-            sha256sum harmonia-setup harmonia-suite > sha256sums-linux.txt
+            sha256sum harmonia-setup > sha256sums-linux.txt
           )
       - name: Stage release files (Windows)
         if: runner.os == 'Windows'
@@ -163,9 +160,8 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force release | Out-Null
           Copy-Item apps/installer/target/release/HarmoniaSetup.exe release/HarmoniaSetup.exe
-          Copy-Item apps/installer/target/release/HarmoniaSuite.exe release/HarmoniaSuite.exe
           Copy-Item (Join-Path $env:RUNNER_TEMP "windows-signing.txt") release/windows-signing.txt
-          Get-FileHash release/HarmoniaSetup.exe, release/HarmoniaSuite.exe -Algorithm SHA256 | ForEach-Object { "$($_.Hash.ToLower()) *$($_.Path | Split-Path -Leaf)" } | Set-Content release/sha256sums-windows.txt
+          Get-FileHash release/HarmoniaSetup.exe -Algorithm SHA256 | ForEach-Object { "$($_.Hash.ToLower()) *$($_.Path | Split-Path -Leaf)" } | Set-Content release/sha256sums-windows.txt
       - uses: actions/upload-artifact@v4
         with:
           name: release-${{ matrix.platform }}

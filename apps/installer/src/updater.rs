@@ -1390,11 +1390,19 @@ mod tests {
                 let payload = directory.join("artifacts").join(platform);
                 fs::create_dir_all(payload.join("resources/app/dist"))?;
                 let runtime = payload.join(if cfg!(windows) {
-                    "electron.exe"
+                    "HarmoniaSuite.exe"
                 } else {
-                    "electron"
+                    "harmonia-suite"
                 });
                 fs::write(&runtime, b"controlled electron")?;
+                fs::write(
+                    payload.join(if cfg!(windows) {
+                        "electron.exe"
+                    } else {
+                        "electron"
+                    }),
+                    b"controlled electron",
+                )?;
                 fs::write(payload.join("resources/app/package.json"), b"{}")?;
                 fs::write(payload.join("resources/app/dist/main.js"), b"desktop")?;
                 fs::create_dir_all(payload.join("frontend/dist"))?;
@@ -1403,6 +1411,10 @@ mod tests {
                 {
                     use std::os::unix::fs::PermissionsExt;
                     fs::set_permissions(&runtime, fs::Permissions::from_mode(0o755))?;
+                    fs::set_permissions(
+                        payload.join("electron"),
+                        fs::Permissions::from_mode(0o755),
+                    )?;
                 }
             } else if is_maven {
                 fs::create_dir_all(directory.join("target"))?;

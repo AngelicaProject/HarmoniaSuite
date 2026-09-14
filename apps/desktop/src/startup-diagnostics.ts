@@ -1,17 +1,23 @@
 import { appendFile, mkdir } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 
+import type { DesktopRuntimeContext } from "./runtime-context.js";
+
 const MAX_DIAGNOSTIC_TEXT_LENGTH = 16_000;
 
 export async function writeDesktopStartupFailure(
   error: unknown,
   options: {
     environment?: NodeJS.ProcessEnv;
+    runtimeContext?: DesktopRuntimeContext;
+    stateRoot?: string;
     productVersion?: string;
   } = {},
 ): Promise<boolean> {
   const environment = options.environment || process.env;
-  const stateRoot = environment.HARMONIA_INSTALL_STATE_ROOT;
+  const stateRoot = options.runtimeContext?.stateRoot
+    || options.stateRoot
+    || environment.HARMONIA_INSTALL_STATE_ROOT;
   if (!stateRoot || !isAbsolute(stateRoot)) {
     return false;
   }
@@ -20,7 +26,7 @@ export async function writeDesktopStartupFailure(
     timestamp_ms: Date.now(),
     level: "error",
     event: "desktop_startup_failed",
-    runtime_mode: environment.HARMONIA_RUNTIME_MODE,
+    runtime_mode: options.runtimeContext?.mode || environment.HARMONIA_RUNTIME_MODE || "unknown",
     error_message: safeDiagnosticText(errorMessage(error)),
   };
   const stack = errorStack(error);

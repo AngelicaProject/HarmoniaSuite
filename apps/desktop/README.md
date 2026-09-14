@@ -29,6 +29,16 @@ different backend artifact, and `HARMONIA_WORKSPACE` to point at an existing dev
 The shell starts Spring with `--server.port=0`, consumes an identity-bound readiness marker with
 the actual loopback port, waits for `/api/status`, and stops that child when the window closes.
 
+## Installed runtime
+
+The packaged user-facing executable is the real Electron runtime: `HarmoniaSuite.exe` on Windows
+and `harmonia-suite` on Linux. It is launched directly through the installer-managed `current`
+pointer (`current/desktop/...`), not through a Rust proxy. Electron derives the installed runtime
+context from canonicalized `process.resourcesPath` and the active version's `metadata.json`; the
+backend JAR, managed Java, installer helper, state root, and user-data root therefore do not require
+launcher-provided `HARMONIA_*` variables. Dev-only overrides remain available for local development
+and tests. Update handoff may still pass operation-scoped launch acknowledgement variables.
+
 ## Gateway profiles
 
 An optional `desktop.json` is read from the Electron user-data directory. Missing configuration

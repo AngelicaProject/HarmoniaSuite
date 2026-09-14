@@ -18,7 +18,7 @@ use crate::catalog::production_descriptors;
 use crate::desktop_control::DesktopShutdownHooks;
 use crate::diagnostics::DiagnosticLogger;
 use crate::download::DownloadClient;
-use crate::helper::{publish_installer_helper, publish_stable_launcher, validate_published_binary};
+use crate::helper::{publish_installer_helper, remove_legacy_launcher, validate_published_binary};
 use crate::integration;
 use crate::lock::{InstallationLock, LockError};
 use crate::paths::InstallationPaths;
@@ -158,19 +158,15 @@ impl<D: DownloadClient, P: ProcessRunner> RepairEngine<D, P> {
                 },
             });
         };
-        if let Ok(Some(runtime)) = activation.resolve_current() {
+        if let Ok(Some(runtime)) = activation.ensure_current_pointer_with_lock(&lock) {
+            let direct_payload_complete = paths.current_desktop_executable_path().is_file();
             let surface_complete = validate_published_binary(
                 &paths,
                 &paths.installer_binary_path(),
                 &paths.installer_binary_metadata_path(),
             )
             .is_ok()
-                && validate_published_binary(
-                    &paths,
-                    &paths.stable_launcher_path(),
-                    &paths.stable_launcher_metadata_path(),
-                )
-                .is_ok()
+                && direct_payload_complete
                 && integration::is_complete(&paths);
             if surface_complete {
                 return Ok(RepairResult {
@@ -183,32 +179,34 @@ impl<D: DownloadClient, P: ProcessRunner> RepairEngine<D, P> {
                     },
                 });
             }
-            if let Err(error) = publish_installer_helper(&paths)
-                .and_then(|_| publish_stable_launcher(&paths))
-                .and_then(|_| {
-                    integration::install(&paths, false).map_err(|error| {
-                        crate::helper::HelperError::Io(std::io::Error::other(error.to_string()))
+            if direct_payload_complete {
+                if let Err(error) = publish_installer_helper(&paths)
+                    .and_then(|_| {
+                        integration::install(&paths, false).map_err(|error| {
+                            crate::helper::HelperError::Io(std::io::Error::other(error.to_string()))
+                        })
                     })
-                })
-            {
+                    .and_then(|_| remove_legacy_launcher(&paths))
+                {
+                    return Ok(RepairResult {
+                        operation_id: "repair".to_owned(),
+                        target_commit: Some(commit),
+                        toolchains: runtime.metadata.toolchains,
+                        status: RepairStatus::RepairRequired {
+                            reason: format!("installed integration surface is incomplete: {error}"),
+                        },
+                    });
+                }
                 return Ok(RepairResult {
                     operation_id: "repair".to_owned(),
                     target_commit: Some(commit),
                     toolchains: runtime.metadata.toolchains,
-                    status: RepairStatus::RepairRequired {
-                        reason: format!("installed integration surface is incomplete: {error}"),
+                    status: RepairStatus::Repaired {
+                        commit: runtime.metadata.target_commit,
+                        version_dir: runtime.version_dir,
                     },
                 });
             }
-            return Ok(RepairResult {
-                operation_id: "repair".to_owned(),
-                target_commit: Some(commit),
-                toolchains: runtime.metadata.toolchains,
-                status: RepairStatus::Repaired {
-                    commit: runtime.metadata.target_commit,
-                    version_dir: runtime.version_dir,
-                },
-            });
         }
 
         let operation_id = uuid::Uuid::new_v4().simple().to_string();
@@ -241,12 +239,12 @@ impl<D: DownloadClient, P: ProcessRunner> RepairEngine<D, P> {
         ) {
             Ok(runtime) => {
                 if let Err(error) = publish_installer_helper(&paths)
-                    .and_then(|_| publish_stable_launcher(&paths))
                     .and_then(|_| {
                         integration::install(&paths, false).map_err(|error| {
                             crate::helper::HelperError::Io(std::io::Error::other(error.to_string()))
                         })
                     })
+                    .and_then(|_| remove_legacy_launcher(&paths))
                 {
                     return Ok(RepairResult {
                         operation_id,
@@ -254,7 +252,7 @@ impl<D: DownloadClient, P: ProcessRunner> RepairEngine<D, P> {
                         toolchains: build.toolchains,
                         status: RepairStatus::ActivationFailed {
                             reason: format!(
-                                "stable launcher/OS integration publication failed: {error}"
+                                "direct desktop/OS integration publication failed: {error}"
                             ),
                         },
                     });

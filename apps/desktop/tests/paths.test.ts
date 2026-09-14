@@ -17,13 +17,14 @@ describe("userDataRoot", () => {
     ).toBe(explicit);
   });
 
-  it("fails closed for an installed runtime without an explicit root", () => {
-    expect(() => userDataRoot({ HARMONIA_RUNTIME_MODE: "installed" })).toThrow(
-      "HARMONIA_USER_DATA_ROOT",
+  it("does not use launcher mode to change the installed user-data contract", () => {
+    expect(userDataRoot({ HARMONIA_RUNTIME_MODE: "installed", APPDATA: "C:\\Users\\test\\AppData\\Roaming" })).toBe(
+      process.platform === "win32"
+        ? "C:\\Users\\test\\AppData\\Roaming\\HarmoniaSuite"
+        : userDataRoot({ APPDATA: "C:\\Users\\test\\AppData\\Roaming" }),
     );
     expect(() =>
       userDataRoot({
-        HARMONIA_RUNTIME_MODE: "installed",
         HARMONIA_USER_DATA_ROOT: "relative/user-data",
       }),
     ).toThrow("absolute path");

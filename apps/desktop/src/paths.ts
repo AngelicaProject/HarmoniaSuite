@@ -1,19 +1,15 @@
-import { homedir } from "node:os";
 import { isAbsolute, join } from "node:path";
 
+import { installedUserDataRoot } from "./runtime-context.js";
+
 export function userDataRoot(env: NodeJS.ProcessEnv = process.env): string {
-  if (env.HARMONIA_RUNTIME_MODE === "installed") {
-    const explicit = env.HARMONIA_USER_DATA_ROOT;
-    if (!explicit) {
-      throw new Error("installed runtime requires HARMONIA_USER_DATA_ROOT");
-    }
-    if (!isAbsolute(explicit)) {
+  // This helper remains as a small development/test override. Installed production startup
+  // obtains userDataRoot from DesktopRuntimeContext and never needs launcher-provided values.
+  if (env.HARMONIA_USER_DATA_ROOT) {
+    if (!isAbsolute(env.HARMONIA_USER_DATA_ROOT)) {
       throw new Error("HARMONIA_USER_DATA_ROOT must be an absolute path");
     }
-    return explicit;
+    return env.HARMONIA_USER_DATA_ROOT;
   }
-  if (process.platform === "win32") {
-    return join(env.APPDATA || join(homedir(), "AppData", "Roaming"), "HarmoniaSuite");
-  }
-  return join(env.XDG_DATA_HOME || join(homedir(), ".local", "share"), "harmonia-suite-data");
+  return installedUserDataRoot(env);
 }
