@@ -23,7 +23,7 @@ jobs:
       ledger_sha: ${{ steps.ledger-state.outputs.ledger_sha }}
     steps:
       - name: Checkout the exact green CI commit
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
           fetch-depth: 0
@@ -170,7 +170,7 @@ jobs:
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
       - name: Checkout exact committed ledger state
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ needs.publish-ledger.outputs.ledger_sha }}
           fetch-depth: 1
