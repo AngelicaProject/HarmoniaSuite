@@ -23,7 +23,7 @@ jobs:
           distribution: temurin
           java-version: '21'
           cache: maven
-      - uses: github/codeql-action/init@v3
+      - uses: github/codeql-action/init@v4
         with:
           languages: java
       # The Maven wrapper distribution is intentionally checksum-pinned and may not
@@ -31,4 +31,4 @@ jobs:
       # for CodeQL's traced compilation; production builds still use ./mvnw.
       - name: Build Java for CodeQL
         run: mvn -B -q -DskipTests package
-      - uses: github/codeql-action/analyze@v3
+      - uses: github/codeql-action/analyze@v4
