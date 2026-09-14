@@ -1393,6 +1393,9 @@ mod tests {
         let mut installation = store.load_installation().unwrap();
         installation.current_commit = Some("a".repeat(40));
         store.save_installation(&installation).unwrap();
+        fs::create_dir_all(paths.bin_dir()).unwrap();
+        let legacy_launcher = paths.legacy_launcher_path();
+        fs::write(&legacy_launcher, b"legacy Rust proxy").unwrap();
         fs::create_dir_all(&paths.user_data_root).unwrap();
         let user_file = paths.user_data_root.join("keep.txt");
         fs::write(&user_file, b"keep").unwrap();
@@ -1405,6 +1408,7 @@ mod tests {
             BootstrapStatus::RepairRequired { .. }
         ));
         assert_eq!(fs::read(&user_file).unwrap(), b"keep");
+        assert_eq!(fs::read(&legacy_launcher).unwrap(), b"legacy Rust proxy");
         assert!(!paths.build_dir().join("staging").exists());
     }
 

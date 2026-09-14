@@ -76,9 +76,9 @@ The production lifecycle around those engines provides:
   version; uninstall stops the bound desktop session and preserves user data unless
   `--remove-user-data` is explicit;
 - `bin/HarmoniaSetup.exe`/`harmonia-setup` is the setup, update, repair, and uninstall contract.
-  The active immutable version is exposed through the managed `current` pointer, and the real
-  Electron executable is `current/desktop/HarmoniaSuite.exe` on Windows or
-  `current/desktop/harmonia-suite` on Linux;
+  Fresh and migrated installations expose the active immutable version through the managed
+  `current` pointer, and the real Electron executable is `current/desktop/HarmoniaSuite.exe` on
+  Windows or `current/desktop/harmonia-suite` on Linux;
 - Windows per-user Start Menu/Desktop shortcuts and HKCU uninstall registration, plus Linux XDG
   desktop entry/icon integration, target the direct Electron executable through `current`;
 - release CI targets Windows/Linux x64, publishes setup artifacts with optional Authenticode, and
@@ -88,6 +88,22 @@ Installer 0.1.2 publishes a transition payload with both the branded Electron ex
 temporary `desktop/electron.exe`/`desktop/electron` hardlink for older 0.1.0/0.1.1 updaters. The
 legacy `bin/HarmoniaSuite.exe`/`bin/harmonia-suite` Rust proxy is removed only after the direct
 payload, `current` pointer, and OS integration are verified successfully.
+
+### Existing pre-0.1.2 installations
+
+The rolling `BuildPipeline` does not replace the installer engine. Therefore an installed
+0.1.0/0.1.1 client that receives a rolling update remains on its legacy launch path: it keeps
+`bin/HarmoniaSuite.exe`/`bin/harmonia-suite` and its existing proxy shortcuts. This release does
+not automatically download or replace an installer binary, and it does not raise
+`minimumInstallerVersion` to force that change.
+
+The staged migration is an explicit operator step: obtain the trusted, prebuilt and checksum-
+verified 0.1.2 `HarmoniaSetup.exe`/`harmonia-setup` release asset, then run its `repair` command
+against the existing installation. The 0.1.2 engine rebuilds a trusted current payload when
+needed, publishes the `current` pointer, rewrites shortcuts/desktop integration and `DisplayIcon`,
+and only then removes the legacy proxy. A failure before integration succeeds leaves the old
+proxy in place; repeating `repair` is safe and idempotent. Fresh 0.1.2 installations and repaired
+installations use the direct Electron launch contract.
 
 Run the checks from the repository root with:
 

@@ -39,6 +39,11 @@ backend JAR, managed Java, installer helper, state root, and user-data root ther
 launcher-provided `HARMONIA_*` variables. Dev-only overrides remain available for local development
 and tests. Update handoff may still pass operation-scoped launch acknowledgement variables.
 
+This direct-launch statement applies to fresh 0.1.2 installations and installations that have
+completed the staged migration. Existing clients with installer engine 0.1.0/0.1.1 are not
+silently migrated by a rolling build in this release; until a trusted prebuilt 0.1.2 setup binary
+runs `repair`, they intentionally retain their legacy proxy and shortcuts.
+
 ## Gateway profiles
 
 An optional `desktop.json` is read from the Electron user-data directory. Missing configuration

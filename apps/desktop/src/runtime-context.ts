@@ -7,6 +7,7 @@ import { moduleDir } from "./runtime-paths.js";
 const FULL_SHA = /^[0-9a-fA-F]{40}$/;
 
 export type DesktopRuntimeMode = "dev" | "installed";
+export type DesktopRuntimePlatform = "win32" | "linux";
 
 export type DesktopRuntimeContext = {
   mode: DesktopRuntimeMode;
@@ -23,6 +24,7 @@ export type DesktopRuntimeContext = {
 export type RuntimeContextOptions = {
   env?: NodeJS.ProcessEnv;
   resourcesPath?: string;
+  platform?: DesktopRuntimePlatform;
 };
 
 type RuntimeMetadata = {
@@ -41,18 +43,20 @@ export function createDesktopRuntimeContext(
   options: RuntimeContextOptions = {},
 ): DesktopRuntimeContext {
   const env = options.env || process.env;
+  const platform = options.platform || currentRuntimePlatform();
   const resourcesPath = options.resourcesPath
     ?? (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
   if (resourcesPath) {
-    const installed = resolveInstalledContext(resourcesPath, env);
+    const installed = resolveInstalledContext(resourcesPath, env, platform);
     if (installed) return installed;
   }
-  return resolveDevelopmentContext(env);
+  return resolveDevelopmentContext(env, platform);
 }
 
 function resolveInstalledContext(
   resourcesPath: string,
   env: NodeJS.ProcessEnv,
+  platform: DesktopRuntimePlatform,
 ): DesktopRuntimeContext | undefined {
   const canonicalResources = realpathOrThrow(resourcesPath, "Electron resources path");
   if (dirname(canonicalResources).split(/[\\/]/).pop() !== "desktop") return undefined;
@@ -105,27 +109,30 @@ function resolveInstalledContext(
   const installerBinary = join(
     appRoot,
     "bin",
-    process.platform === "win32" ? "HarmoniaSetup.exe" : "harmonia-setup",
+    platform === "win32" ? "HarmoniaSetup.exe" : "harmonia-setup",
   );
-  const stateRoot = join(appRoot, "state");
+  const stateRoot = installedStateRoot(appRoot, env, platform);
   return {
     mode: "installed",
     appRoot: canonicalAppRoot,
     activeVersionDir: canonicalVersion,
     backendJar: canonicalBackend,
     javaBinary: canonicalJava,
-    userDataRoot: installedUserDataRoot(env),
-    workspace: installedUserDataRoot(env),
+    userDataRoot: installedUserDataRoot(env, platform),
+    workspace: installedUserDataRoot(env, platform),
     stateRoot,
     installerBinary,
   };
 }
 
-function resolveDevelopmentContext(env: NodeJS.ProcessEnv): DesktopRuntimeContext {
+function resolveDevelopmentContext(
+  env: NodeJS.ProcessEnv,
+  platform: DesktopRuntimePlatform,
+): DesktopRuntimeContext {
   const checkoutRoot = resolve(moduleDir, "..", "..", "..");
   const userData = env.HARMONIA_USER_DATA_ROOT && isAbsolute(env.HARMONIA_USER_DATA_ROOT)
     ? env.HARMONIA_USER_DATA_ROOT
-    : installedUserDataRoot(env);
+    : installedUserDataRoot(env, platform);
   const activeVersionDir = absoluteOverride(env.HARMONIA_ACTIVE_VERSION_DIR);
   const backendJar = firstExisting([
     absoluteOverride(env.HARMONIA_BACKEND_JAR),
@@ -136,11 +143,11 @@ function resolveDevelopmentContext(env: NodeJS.ProcessEnv): DesktopRuntimeContex
   ]);
   const javaBinary = absoluteOverride(env.HARMONIA_JAVA_BINARY)
     || (env.JAVA_HOME
-      ? join(env.JAVA_HOME, "bin", process.platform === "win32" ? "java.exe" : "java")
+      ? join(env.JAVA_HOME, "bin", platform === "win32" ? "java.exe" : "java")
       : undefined);
   const stateRoot = absoluteOverride(env.HARMONIA_INSTALL_STATE_ROOT) || join(checkoutRoot, ".harmonia-state");
   const installerBinary = absoluteOverride(env.HARMONIA_INSTALLER_BINARY)
-    || join(checkoutRoot, "apps", "installer", "target", "debug", process.platform === "win32" ? "HarmoniaSetup.exe" : "harmonia-setup");
+    || join(checkoutRoot, "apps", "installer", "target", "debug", platform === "win32" ? "HarmoniaSetup.exe" : "harmonia-setup");
   return {
     mode: "dev",
     appRoot: checkoutRoot,
@@ -156,11 +163,34 @@ function resolveDevelopmentContext(env: NodeJS.ProcessEnv): DesktopRuntimeContex
   };
 }
 
-export function installedUserDataRoot(env: NodeJS.ProcessEnv = process.env): string {
-  if (process.platform === "win32") {
-    return join(env.APPDATA || join(homedir(), "AppData", "Roaming"), "HarmoniaSuite");
+export function installedUserDataRoot(
+  env: NodeJS.ProcessEnv = process.env,
+  platform: DesktopRuntimePlatform = currentRuntimePlatform(),
+): string {
+  if (platform === "win32") {
+    return join(absoluteEnvironmentRoot(env.APPDATA) || join(homedir(), "AppData", "Roaming"), "HarmoniaSuite");
   }
-  return join(env.XDG_DATA_HOME || join(homedir(), ".local", "share"), "harmonia-suite-data");
+  return join(absoluteEnvironmentRoot(env.XDG_DATA_HOME) || join(homedir(), ".local", "share"), "harmonia-suite-data");
+}
+
+export function installedStateRoot(
+  appRoot: string,
+  env: NodeJS.ProcessEnv = process.env,
+  platform: DesktopRuntimePlatform = currentRuntimePlatform(),
+): string {
+  if (platform === "win32") return join(appRoot, "state");
+  return join(
+    absoluteEnvironmentRoot(env.XDG_STATE_HOME) || join(homedir(), ".local", "state"),
+    "harmonia-suite",
+  );
+}
+
+function currentRuntimePlatform(): DesktopRuntimePlatform {
+  return process.platform === "win32" ? "win32" : "linux";
+}
+
+function absoluteEnvironmentRoot(value: string | undefined): string | undefined {
+  return value && isAbsolute(value) ? value : undefined;
 }
 
 function readVersionMetadata(path: string): VersionMetadata {

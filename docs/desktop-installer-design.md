@@ -22,7 +22,7 @@ toolchain/           side-by-side managed Java/Node
 source/              managed bare Git mirror
 build/<sha>/         disposable detached worktrees
 cache/               downloads and build caches
-state/               install-state, lock and diagnostics
+state/               install-state, lock and diagnostics (Windows; Linux uses XDG state_root)
 ```
 
 User-data root содержит `data/harmonia.db`, WAL/SHM sidecars, `backups/`, `projects/`, source
@@ -68,7 +68,7 @@ transaction: незавершённый staging удаляется только 
 `versions/<full-sha>/`. Внутри находятся `desktop/`, `frontend/`, `gateway/`, `extractor/` и
 `metadata.json`; immutable version directories не изменяются после activation.
 
-`state/install.json` хранит `currentCommit`, `previousCommit`, transaction id и component
+`state_root/install.json` хранит `currentCommit`, `previousCommit`, transaction id и component
 metadata. Activation сначала публикует crash-safe filesystem pointer `current` на полностью
 проверенную версию, затем сохраняет state (с platform-specific replace semantics). Pointer и
 transaction journal используются вместе: rollback сначала возвращает pointer на snapshot current,
@@ -77,11 +77,14 @@ transaction journal используются вместе: rollback сначал
 после activation. Updater/activator — отдельный process, поэтому самый старый running executable
 не заменяет себя.
 
-Обычный пользовательский запуск идёт напрямую в `current/desktop/HarmoniaSuite.exe` на Windows
-или `current/desktop/harmonia-suite` на Linux. Это настоящий Electron runtime, не Rust proxy.
+Для fresh 0.1.2 и мигрированных установок обычный пользовательский запуск идёт напрямую в
+`current/desktop/HarmoniaSuite.exe` на Windows или `current/desktop/harmonia-suite` на Linux.
+Это настоящий Electron runtime, не Rust proxy.
 В переходном payload installer 0.1.2 также оставляет `desktop/electron.exe`/`desktop/electron`
 как hardlink для старых updater 0.1.0/0.1.1; alias можно удалить только после повышения
 compatibility floor в отдельном rollout.
+Существующие установки с engine 0.1.0/0.1.1 не получают замену installer engine из rolling
+BuildPipeline и до запуска доверенного prebuilt 0.1.2 `repair` сохраняют legacy proxy и shortcut.
 
 Installed Electron получает runtime context из canonicalized `process.resourcesPath` и
 `versions/<sha>/metadata.json`: backend, managed Java, installer и `state` проверяются внутри

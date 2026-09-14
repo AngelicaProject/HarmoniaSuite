@@ -26,11 +26,29 @@ checksums
 ```
 
 The standalone Rust `HarmoniaSuite.exe`/`harmonia-suite` proxy is not published. The installed
-application is launched from the real Electron executable under the managed `current` pointer.
+application is launched from the real Electron executable under the managed `current` pointer
+after a fresh install or completed migration.
 Installer 0.1.2 uses a transition payload containing the branded Electron filename plus a temporary
 `desktop/electron.exe`/`desktop/electron` hardlink so existing 0.1.0/0.1.1 updaters can still stage
 it. The compatibility alias is removed only in a later rollout after the minimum installer floor
 has been raised deliberately.
+
+### Existing-installation rollout
+
+The rolling BuildPipeline builds application components; it does not replace the installer engine
+already installed on a client. Consequently, a 0.1.0/0.1.1 installation that rolls forward keeps
+its legacy `bin/HarmoniaSuite.exe`/`bin/harmonia-suite` proxy and proxy shortcuts. This PR leaves
+`minimumInstallerVersion` unchanged and does not claim that those installations are already on the
+direct launch path.
+
+Migration is staged through a trusted, prebuilt 0.1.2 setup asset. After verifying the release
+asset and checksum, run `HarmoniaSetup.exe repair` (or `harmonia-setup repair`) for the existing
+per-user installation. The new engine rebuilds the trusted current payload if necessary, publishes
+`current`, rewrites shortcuts/`DisplayIcon` and Linux desktop integration, verifies that surface,
+and only then removes the legacy proxy. The order is crash-safe and idempotent: failures before
+successful integration preserve the proxy, and retrying the repair repeats the safe checks. Fresh
+0.1.2 installs use direct launch immediately; automatic engine replacement for existing installs
+is deferred to a separately staged rollout.
 
 The tagged installer is compiled with the exact tag commit and stable product version. A fresh
 install uses that embedded release bootstrap seed, builds only the exact seed commit, and fails

@@ -5,6 +5,7 @@
 //! the verified result to ActivationEngine's immutable replacement primitive.
 
 use std::collections::BTreeMap;
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -167,7 +168,8 @@ impl<D: DownloadClient, P: ProcessRunner> RepairEngine<D, P> {
             )
             .is_ok()
                 && direct_payload_complete
-                && integration::is_complete(&paths);
+                && integration::is_complete(&paths)
+                && legacy_launcher_is_absent(&paths);
             if surface_complete {
                 return Ok(RepairResult {
                     operation_id: "repair".to_owned(),
@@ -307,4 +309,21 @@ fn resolve_build_java(
             root: jdk.root,
         })
         .map_err(RepairError::from)
+}
+
+fn legacy_launcher_is_absent(paths: &InstallationPaths) -> bool {
+    let legacy = paths.legacy_launcher_path();
+    let metadata = legacy.with_file_name(format!(
+        "{}.json",
+        legacy
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default()
+    ));
+    [legacy, metadata]
+        .iter()
+        .all(|path| match fs::symlink_metadata(path) {
+            Ok(_) => false,
+            Err(error) => error.kind() == std::io::ErrorKind::NotFound,
+        })
 }

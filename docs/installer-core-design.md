@@ -25,14 +25,15 @@ ignored in favor of these absolute fallbacks. If no absolute per-user root can b
 resolution fails rather than using a shared or temporary directory.
 
 Managed application files are grouped below `app_root`: `bin`, `current`, `versions`, `toolchain`,
-`source`, `build`, `cache` and `state`. `current` is a managed pointer to one full-SHA directory
-under `versions`; it is never a copied version. User data is never a child of a version or staging
-directory and is not created or removed by core initialization.
+`source`, `build` and `cache`. Windows additionally stores `state` below `app_root`; Linux uses
+the separate XDG `state_root` described above. `current` is a managed pointer to one full-SHA
+directory under `versions`; it is never a copied version. User data is never a child of a version or
+staging directory and is not created or removed by core initialization.
 
 ## Persistent state и transaction journal
 
-`state/install.json` is the machine-readable installation state. Writes use a sibling temporary file,
-flush/sync, and platform replacement semantics. `state/transaction.json` is the last active or
+`state_root/install.json` is the machine-readable installation state. Writes use a sibling temporary
+file, flush/sync, and platform replacement semantics. `state_root/transaction.json` is the last active or
 completed transaction record. Every state-machine transition is persisted before the next operation
 may rely on it. The record contains operation, phase, target/current commit metadata when known,
 owned temporary paths, activation marker and failure diagnostics.
@@ -47,10 +48,10 @@ symlink or Windows reparse point.
 
 ## Locking and diagnostics
 
-`state/install.lock` is an OS-backed exclusive lock held for the complete installer operation. The
+`state_root/install.lock` is an OS-backed exclusive lock held for the complete installer operation. The
 file contains non-secret owner metadata for diagnostics, with a small owner sidecar used when the
 platform does not permit reading the locked file; the OS lock, not a stale timestamp, is the
-authority. Persistent diagnostics are JSON Lines under `state/diagnostics/`, with event,
+authority. Persistent diagnostics are JSON Lines under `state_root/diagnostics/`, with event,
 level, timestamp and structured fields. Commands must be passed as argv and logged after redaction;
 environment values, credentials and authorization headers are not logged.
 

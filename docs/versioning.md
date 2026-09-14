@@ -129,6 +129,13 @@ Product v1.0.12 -> installer 0.1.1
 Product v1.0.13 -> installer 0.1.1
 ```
 
+The 0.1.0/0.1.1 to 0.1.2 migration is staged separately from rolling application publication:
+the user runs a trusted, prebuilt 0.1.2 setup binary's `repair` command, which publishes the
+direct-launch `current` surface and removes the legacy proxy only after integration succeeds.
+Until that step, existing clients remain on their legacy proxy contract. The rolling manifest's
+`minimumInstallerVersion` stays at `0.1.0` until this upgrade path is available and adopted; this
+change does not raise the floor.
+
 ## SemVer policy and tooling
 
 Use the version tooling for all coordinated changes:
