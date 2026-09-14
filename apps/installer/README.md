@@ -72,9 +72,9 @@ The production lifecycle around those engines provides:
 
 - `install`, `update`, `check-update`, `repair`, and `uninstall` are strict per-user operations with
   documented stable exit codes and optional JSON output;
-- repair rebuilds the trusted exact current commit and atomically republishes a corrupted immutable
-  version; uninstall stops the bound desktop session and preserves user data unless
-  `--remove-user-data` is explicit;
+- repair migrates a direct-capable transition payload and can rebuild its trusted exact current
+  commit when the immutable version is corrupted; uninstall stops the bound desktop session and
+  preserves user data unless `--remove-user-data` is explicit;
 - `bin/HarmoniaSetup.exe`/`harmonia-setup` is the setup, update, repair, and uninstall contract.
   Fresh and migrated installations expose the active immutable version through the managed
   `current` pointer, and the real Electron executable is `current/desktop/HarmoniaSuite.exe` on
@@ -97,13 +97,17 @@ The rolling `BuildPipeline` does not replace the installer engine. Therefore an 
 not automatically download or replace an installer binary, and it does not raise
 `minimumInstallerVersion` to force that change.
 
-The staged migration is an explicit operator step: obtain the trusted, prebuilt and checksum-
-verified 0.1.2 `HarmoniaSetup.exe`/`harmonia-setup` release asset, then run its `repair` command
-against the existing installation. The 0.1.2 engine rebuilds a trusted current payload when
-needed, publishes the `current` pointer, rewrites shortcuts/desktop integration and `DisplayIcon`,
-and only then removes the legacy proxy. A failure before integration succeeds leaves the old
-proxy in place; repeating `repair` is safe and idempotent. Fresh 0.1.2 installations and repaired
-installations use the direct Electron launch contract.
+The staged migration has an explicit two-step order. First, the old client performs a normal
+signed rolling update to a PR44-or-later transition commit containing the canonical Electron
+executable and the temporary compatibility alias. Only then does the operator obtain the trusted,
+prebuilt and checksum-verified 0.1.2 `HarmoniaSetup.exe`/`harmonia-setup` release asset and run its
+`repair` command against the existing installation. If the exact current payload has no canonical
+executable, 0.1.2 returns `rolling application update required first` and leaves the proxy in
+place; it does not pretend to convert that old commit. For a transition payload, repair publishes
+the `current` pointer, rewrites shortcuts/desktop integration and `DisplayIcon`, and only then
+removes the legacy proxy. A failure before integration succeeds leaves the old proxy in place;
+repeating `repair` is safe and idempotent. Fresh 0.1.2 installations and repaired installations
+use the direct Electron launch contract.
 
 Run the checks from the repository root with:
 

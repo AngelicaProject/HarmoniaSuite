@@ -292,9 +292,10 @@ pointer for fresh or migrated installations. MSI, portable ZIP, and macOS releas
 the release contract.
 
 Existing clients running installer engine 0.1.0/0.1.1 are not migrated by a rolling application
-build alone. Keep their legacy proxy and shortcut compatibility contract until a trusted prebuilt
-0.1.2 setup migration has published and verified the direct `current` integration; do not raise
-`minimumInstallerVersion` before that upgrade path is available.
+build alone. They must first receive a signed rolling update to a transition commit with the
+canonical Electron payload, then a trusted prebuilt 0.1.2 setup migration may publish and verify
+the direct `current` integration. Keep their legacy proxy and shortcut compatibility contract until
+both steps complete; do not raise `minimumInstallerVersion` before that upgrade path is available.
 
 A release must not depend on the end user having Java, Git or Node installed globally.
 

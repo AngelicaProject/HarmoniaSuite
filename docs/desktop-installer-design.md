@@ -84,7 +84,10 @@ transaction journal используются вместе: rollback сначал
 как hardlink для старых updater 0.1.0/0.1.1; alias можно удалить только после повышения
 compatibility floor в отдельном rollout.
 Существующие установки с engine 0.1.0/0.1.1 не получают замену installer engine из rolling
-BuildPipeline и до запуска доверенного prebuilt 0.1.2 `repair` сохраняют legacy proxy и shortcut.
+BuildPipeline. Сначала такой клиент должен получить обычный signed rolling update до transition
+commit PR44-or-later с canonical executable и compatibility alias; затем запускается доверенный
+prebuilt 0.1.2 `repair`. Без первого шага repair возвращает `rolling application update required
+first` и сохраняет legacy proxy и shortcut.
 
 Installed Electron получает runtime context из canonicalized `process.resourcesPath` и
 `versions/<sha>/metadata.json`: backend, managed Java, installer и `state` проверяются внутри

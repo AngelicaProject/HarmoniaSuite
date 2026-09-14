@@ -586,4 +586,26 @@ mod tests {
             root.join("current/desktop/harmonia-suite")
         );
     }
+
+    #[test]
+    fn windows_uses_branded_canonical_and_electron_compatibility_names() {
+        let root = PathBuf::from("C:/Users/tester/AppData/Local/HarmoniaSuite");
+        let windows = InstallationPaths {
+            platform: Platform::Windows,
+            architecture: TargetArchitecture::X64,
+            app_root: root.clone(),
+            user_data_root: PathBuf::from("C:/Users/tester/AppData/Roaming/HarmoniaSuite"),
+            state_root: root.join("state"),
+            cache_root: root.join("cache"),
+        };
+        assert_eq!(windows.desktop_executable_name(), "HarmoniaSuite.exe");
+        assert_eq!(
+            windows.compatibility_desktop_executable_name(),
+            "electron.exe"
+        );
+        assert_eq!(
+            windows.current_desktop_executable_path(),
+            root.join("current/desktop/HarmoniaSuite.exe")
+        );
+    }
 }

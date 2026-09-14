@@ -41,8 +41,9 @@ and tests. Update handoff may still pass operation-scoped launch acknowledgement
 
 This direct-launch statement applies to fresh 0.1.2 installations and installations that have
 completed the staged migration. Existing clients with installer engine 0.1.0/0.1.1 are not
-silently migrated by a rolling build in this release; until a trusted prebuilt 0.1.2 setup binary
-runs `repair`, they intentionally retain their legacy proxy and shortcuts.
+silently migrated by a rolling build in this release; they first need a signed rolling update to
+a PR44-or-later transition payload, followed by a trusted prebuilt 0.1.2 setup binary running
+`repair`. Until both steps complete, they intentionally retain their legacy proxy and shortcuts.
 
 ## Gateway profiles
 
