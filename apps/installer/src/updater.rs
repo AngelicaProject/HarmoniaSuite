@@ -2072,7 +2072,7 @@ mod tests {
             "unexpected first update status: {:?}",
             first.status
         );
-        let database = fixture.paths.user_data_root.join("data/harmonia.db");
+        let database = fixture.paths.user_data_root.join("data/core/harmonia.db");
         fs::create_dir_all(database.parent().unwrap()).unwrap();
         fs::write(&database, b"database-before-c").unwrap();
 

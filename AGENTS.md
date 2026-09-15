@@ -11,7 +11,7 @@ backend:   Spring Boot / Java
 frontend:  Vue / TypeScript / Vite
 ```
 
-The backend owns persistence, filesystem access, external AI calls, jobs, exports and update logic.
+The backend owns canonical persistence, filesystem access, source ingestion, exports and runtime infrastructure.
 
 The frontend is a web client of the backend REST API. It must remain usable both from a normal browser and from a future desktop shell. Do not couple frontend business logic to Electron or another desktop runtime.
 
@@ -21,6 +21,10 @@ Production packaging produces one Spring Boot application that serves both:
 /        frontend assets
 /api/**  REST API
 ```
+
+The legacy application runtime has been removed. Files under `db/migration/**` are compatibility-only historical migrations and are not the canonical runtime architecture. Do not model new features after the historical legacy schema or migrations.
+
+Canonical backend code is developed by bounded context. Do not introduce new top-level global architectural buckets such as `controller/`, `service/`, `repository/`, `dto/`, `mapping/` or `domain/`. New canonical modules use package-by-feature with explicit `api/application/domain/infrastructure` boundaries. MapStruct is the standard DTO mapper. Controllers remain thin, SQL belongs in repository or infrastructure adapters, and legacy data compatibility must not become a dependency of canonical domain code.
 
 ## Repository layout
 
@@ -239,27 +243,11 @@ Do not install bundled tools globally and do not modify the user's global PATH.
 
 An installed application should prefer Harmonia-managed toolchain binaries over arbitrary system binaries.
 
-## Self-update
+## Desktop updater
 
-Harmonia currently performs source-based self-update:
+The desktop Electron shell owns update orchestration, managed toolchains, installation and relaunch. Keep `apps/desktop/**` updater and packaging infrastructure independent from the Spring backend. Do not reintroduce a backend `UpdateController`, job-based source updater, or legacy Spring self-update workflow.
 
-```text
-Git update
-→ local build
-→ relaunch
-```
-
-Because frontend production build requires Node, self-update must provide a compatible Node/npm.
-
-After pulling the new source, determine the required Node version from the pulled checkout's:
-
-```text
-frontend/.node-version
-```
-
-This is important: do not permanently bind future source builds to the Node version hardcoded in the currently running JAR.
-
-Toolchain resolution should prefer:
+When desktop source updates build the backend, toolchain resolution should prefer:
 
 ```text
 bundled
@@ -268,11 +256,7 @@ bundled
 → managed download
 ```
 
-Downloaded Node versions should be cacheable side by side.
-
-A failed update must preserve the existing rollback behavior.
-
-Do not weaken dirty-worktree or history-divergence protections while changing updater code.
+Downloaded Node versions should be cacheable side by side. A failed desktop update must preserve the existing rollback behavior. Do not weaken dirty-worktree or history-divergence protections while changing updater code.
 
 ## Distribution
 
@@ -299,9 +283,7 @@ A release must not depend on the end user having Java, Git or Node installed glo
 
 ## Data and persistence
 
-SQLite is the default local database. PostgreSQL is an alternate deployment profile.
-
-Do not raw-copy a live SQLite database for backup. Preserve the existing consistent SQLite backup mechanism.
+SQLite is the default local database. PostgreSQL is an alternate deployment profile. `data/core/harmonia.db` is the only runtime database path. The historical `data/harmonia.db` file is compatibility-only: startup must not create, open, migrate, modify, back up, rename or delete it. Do not implement a legacy importer until the canonical workspace/translation model is complete.
 
 Database schema changes go through Flyway migrations.
 
@@ -311,13 +293,7 @@ Be particularly careful with operations that can overwrite or delete translation
 
 ## Jobs and concurrency
 
-Background work goes through the job subsystem.
-
-Long-running work must remain cancellable where practical.
-
-Do not introduce mutable per-run state into singleton Spring services.
-
-When modifying project data from background jobs, consider interaction with concurrent manual edits and other jobs. Do not assume that localhost usage means operations cannot overlap.
+The legacy project/job subsystem is removed. Canonical source ingestion uses its bounded upload queue and worker. Long-running canonical work remains cancellable where practical, and mutable per-run state must not be introduced into singleton Spring services.
 
 ## Filesystem
 

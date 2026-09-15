@@ -14,9 +14,6 @@ server:
 spring:
   application:
     name: harmonia-suite
-  flyway:
-    enabled: true
-    locations: classpath:db/migration/sqlite
   jackson:
     property-naming-strategy: SNAKE_CASE
     default-property-inclusion: non_null
@@ -25,7 +22,6 @@ spring:
 
 harmonia:
   workspace: .
-  db-path: data/harmonia.db
   core:
     db-path: data/core/harmonia.db
     postgres-schema: harmonia_core
@@ -44,18 +40,6 @@ harmonia:
     max-chunk-bytes: 16777216
     stale-upload-hours: 24
     zstd-level: 3
-  gemini:
-    api-key: ${GEMINI_API_KEY:}
-    model: gemini-3.5-flash-lite
-    models:
-      - gemini-3.5-flash-lite
-      - gemini-3.1-flash-lite
-    max-input-chars: 500000
-    max-output-tokens: 65536
-    retries: 5
-    request-delay-ms: 5000
-  openrouter:
-    api-key: ${OPENROUTER_API_KEY:}
   atlas:
     executable: ${HARMONIA_ATLAS_EXECUTABLE:}
     verification-timeout-ms: 300000

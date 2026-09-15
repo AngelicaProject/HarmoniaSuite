@@ -30,7 +30,7 @@ class NoCacheStaticFilterTest {
     @Test
     @DisplayName("api responses are left untouched")
     void apiUntouched() throws Exception {
-        MockHttpServletRequest request = request("/api/status");
+        MockHttpServletRequest request = request("/api/version");
         MockHttpServletResponse response = new MockHttpServletResponse();
         filter.doFilter(request, response, (chainRequest, chainResponse) -> {
         });

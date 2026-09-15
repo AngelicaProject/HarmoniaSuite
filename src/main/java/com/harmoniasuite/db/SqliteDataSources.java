@@ -7,8 +7,6 @@ import javax.sql.DataSource;
 import org.sqlite.SQLiteConfig;
 import org.sqlite.SQLiteDataSource;
 import org.sqlite.Function;
-import org.springframework.jdbc.datasource.DataSourceTransactionManager;
-import org.springframework.transaction.PlatformTransactionManager;
 
 public final class SqliteDataSources {
 
@@ -42,7 +40,4 @@ public final class SqliteDataSources {
         return dataSource;
     }
 
-    public static PlatformTransactionManager transactionManager(DataSource dataSource) {
-        return new DataSourceTransactionManager(dataSource);
-    }
 }

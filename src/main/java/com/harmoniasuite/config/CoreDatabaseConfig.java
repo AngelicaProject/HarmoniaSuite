@@ -9,6 +9,7 @@ import javax.sql.DataSource;
 import org.flywaydb.core.Flyway;
 import org.flywaydb.core.api.configuration.FluentConfiguration;
 import org.springframework.boot.autoconfigure.jdbc.DataSourceProperties;
+import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Profile;
@@ -20,6 +21,13 @@ public class CoreDatabaseConfig {
     private static final String SQLITE_MIGRATIONS = "classpath:db/core/migration/sqlite";
     private static final String POSTGRES_MIGRATIONS = "classpath:db/core/migration/postgresql";
     private static final Pattern POSTGRES_IDENTIFIER = Pattern.compile("[A-Za-z_][A-Za-z0-9_]*");
+
+    @Bean
+    @Profile("postgres")
+    @ConfigurationProperties("spring.datasource")
+    public DataSourceProperties canonicalDataSourceProperties() {
+        return new DataSourceProperties();
+    }
 
     @Bean(name = "coreDatabase", destroyMethod = "close")
     @Profile("!postgres")

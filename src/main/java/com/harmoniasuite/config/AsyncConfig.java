@@ -11,17 +11,6 @@ import java.util.concurrent.Executor;
 @EnableAsync
 public class AsyncConfig {
 
-    @Bean(name = "jobExecutor")
-    public Executor jobExecutor() {
-        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
-        executor.setCorePoolSize(2);
-        executor.setMaxPoolSize(4);
-        executor.setQueueCapacity(32);
-        executor.setThreadNamePrefix("xiv-job-");
-        executor.initialize();
-        return executor;
-    }
-
     @Bean(name = "sourceIngestionExecutor")
     public Executor sourceIngestionExecutor() {
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();

@@ -140,7 +140,7 @@ export class LocalGateway {
     const fetchImpl = this.options.fetchImpl || fetch;
     const timeout = this.options.readinessTimeoutMs || 30_000;
     const deadline = Date.now() + timeout;
-    const url = `http://127.0.0.1:${port}/api/status`;
+    const url = `http://127.0.0.1:${port}/api/version`;
     let lastError = "not started";
     while (Date.now() < deadline) {
       try {
