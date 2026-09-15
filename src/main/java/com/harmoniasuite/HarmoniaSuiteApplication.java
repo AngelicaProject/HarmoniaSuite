@@ -2,6 +2,7 @@ package com.harmoniasuite;
 
 import com.harmoniasuite.config.HarmoniaProperties;
 import com.harmoniasuite.config.WorkspacePaths;
+import com.harmoniasuite.source.atlas.AtlasProperties;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -14,7 +15,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 
 @SpringBootApplication
-@EnableConfigurationProperties(HarmoniaProperties.class)
+@EnableConfigurationProperties({HarmoniaProperties.class, AtlasProperties.class})
 public class HarmoniaSuiteApplication {
 
     public static void main(String[] args) {
