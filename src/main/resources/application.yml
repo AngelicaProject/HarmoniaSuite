@@ -26,6 +26,9 @@ spring:
 harmonia:
   workspace: .
   db-path: data/harmonia.db
+  core:
+    db-path: data/core/harmonia.db
+    postgres-schema: harmonia_core
   app:
     version: '@project.version@'
     build-time: '@maven.build.timestamp@'

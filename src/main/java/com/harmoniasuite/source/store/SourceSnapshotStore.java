@@ -6,6 +6,8 @@ import java.util.Optional;
 /** Internal query surface for immutable canonical source data. */
 public interface SourceSnapshotStore {
 
+    List<SourceSnapshot> listSnapshots();
+
     Optional<SourceSnapshot> findBySnapshotId(String snapshotId);
 
     default boolean existsBySnapshotId(String snapshotId) {

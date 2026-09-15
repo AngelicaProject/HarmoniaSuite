@@ -3,6 +3,7 @@ package com.harmoniasuite.exception;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.dao.DataAccessException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -24,6 +25,24 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(HarmoniaSuiteNotFoundException.class)
     public ResponseEntity<Map<String, String>> handleMissing(HarmoniaSuiteNotFoundException e) {
         return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("error", message(e)));
+    }
+
+    @ExceptionHandler(HarmoniaSuiteConflictException.class)
+    public ResponseEntity<Map<String, String>> handleConflict(HarmoniaSuiteConflictException e) {
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("error", message(e)));
+    }
+
+    @ExceptionHandler(HarmoniaSuiteCanonicalDatabaseException.class)
+    public ResponseEntity<Map<String, String>> handleCanonicalDatabase(
+            HarmoniaSuiteCanonicalDatabaseException e) {
+        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                .body(Map.of("error", "canonical source database is unavailable"));
+    }
+
+    @ExceptionHandler(DataAccessException.class)
+    public ResponseEntity<Map<String, String>> handleDatabase(DataAccessException e) {
+        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                .body(Map.of("error", "database is unavailable"));
     }
 
     @ExceptionHandler(IllegalArgumentException.class)

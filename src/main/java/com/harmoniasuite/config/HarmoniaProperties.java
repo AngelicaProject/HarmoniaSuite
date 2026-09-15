@@ -14,6 +14,7 @@ public class HarmoniaProperties {
 
     private String workspace = ".";
     private String dbPath = "data/harmonia.db";
+    private final Core core = new Core();
     private final Gemini gemini = new Gemini();
     private final Openrouter openrouter = new Openrouter();
     private final Http http = new Http();
@@ -35,6 +36,10 @@ public class HarmoniaProperties {
         this.dbPath = dbPath;
     }
 
+    public Core getCore() {
+        return core;
+    }
+
     public Gemini getGemini() {
         return gemini;
     }
@@ -49,6 +54,30 @@ public class HarmoniaProperties {
 
     public App getApp() {
         return app;
+    }
+
+    public static class Core {
+        @NotBlank
+        private String dbPath = "data/core/harmonia.db";
+
+        @NotBlank
+        private String postgresSchema = "harmonia_core";
+
+        public String getDbPath() {
+            return dbPath;
+        }
+
+        public void setDbPath(String dbPath) {
+            this.dbPath = dbPath;
+        }
+
+        public String getPostgresSchema() {
+            return postgresSchema;
+        }
+
+        public void setPostgresSchema(String postgresSchema) {
+            this.postgresSchema = postgresSchema;
+        }
     }
 
     public static class App {

@@ -107,6 +107,15 @@ public final class JdbcSourceSnapshotStore implements SourceSnapshotStore {
     }
 
     @Override
+    public List<SourceSnapshot> listSnapshots() {
+        return jdbc.query("""
+                SELECT %s
+                FROM source_snapshots
+                ORDER BY game_version, language, snapshot_id
+                """.formatted(SNAPSHOT_COLUMNS), snapshotMapper());
+    }
+
+    @Override
     public Optional<SourceSnapshot> findBySnapshotId(String snapshotId) {
         Objects.requireNonNull(snapshotId, "snapshotId");
         List<SourceSnapshot> rows = jdbc.query(
