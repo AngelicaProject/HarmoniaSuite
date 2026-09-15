@@ -1,15 +1,24 @@
 package com.harmoniasuite.source.upload;
 
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.Objects;
 
 public final class UploadSessionLocks {
 
-    private static final ConcurrentHashMap<String, Object> LOCKS = new ConcurrentHashMap<>();
+    private static final Object[] LOCKS = new Object[256];
+
+    static {
+        for (int index = 0; index < LOCKS.length; index++) {
+            LOCKS[index] = new Object();
+        }
+    }
 
     private UploadSessionLocks() {
     }
 
     public static Object forUpload(String uploadId) {
-        return LOCKS.computeIfAbsent(uploadId, ignored -> new Object());
+        Objects.requireNonNull(uploadId, "uploadId");
+        int hash = uploadId.hashCode();
+        hash ^= hash >>> 16;
+        return LOCKS[Math.floorMod(hash, LOCKS.length)];
     }
 }

@@ -10,7 +10,6 @@ import com.harmoniasuite.source.artifact.StoredSourceArtifact;
 import com.harmoniasuite.source.atlas.AtlasException;
 import com.harmoniasuite.source.atlas.AtlasInspection;
 import com.harmoniasuite.source.store.SourceSnapshot;
-import com.harmoniasuite.source.store.SourceSnapshotImportException;
 import com.harmoniasuite.source.store.SourceSnapshotImporter;
 import com.harmoniasuite.source.store.SourceSnapshotStore;
 import com.harmoniasuite.source.upload.SourceUploadFailure;
@@ -73,7 +72,8 @@ public final class SourceIngestionWorker implements SourceIngestionQueue {
         try {
             executor.execute(() -> processNow(uploadId));
         } catch (RejectedExecutionException exception) {
-            sessions.fail(uploadId, "PROCESSING_UNAVAILABLE", "source ingestion worker is unavailable");
+            LOGGER.warn("source upload {} remains queued because ingestion worker is unavailable",
+                    uploadId);
         }
     }
 
@@ -86,17 +86,10 @@ public final class SourceIngestionWorker implements SourceIngestionQueue {
                     || session.state() == SourceUploadState.UPLOADING) {
                 return;
             }
-            if (session.state().processing() && session.state() != SourceUploadState.QUEUED) {
-                if (!sessions.requeueProcessing(uploadId)) {
-                    return;
-                }
-                session = sessions.find(uploadId).orElse(null);
-                if (session == null) {
-                    return;
-                }
+            if (session.state() != SourceUploadState.QUEUED) {
+                return;
             }
-            if (session.state() == SourceUploadState.QUEUED
-                    && !sessions.transition(uploadId, SourceUploadState.QUEUED,
+            if (!sessions.transition(uploadId, SourceUploadState.QUEUED,
                     SourceUploadState.VERIFYING)) {
                 return;
             }
@@ -115,13 +108,13 @@ public final class SourceIngestionWorker implements SourceIngestionQueue {
 
     @EventListener(ApplicationReadyEvent.class)
     public void recoverOnStartup() {
-        recoverProcessing();
+        recoverPersistedProcessing();
         cleanupExpired();
     }
 
     @Scheduled(fixedDelay = 3_600_000L)
     public void scheduledMaintenance() {
-        recoverProcessing();
+        recoverQueued();
         cleanupExpired();
     }
 
@@ -273,39 +266,71 @@ public final class SourceIngestionWorker implements SourceIngestionQueue {
         }
     }
 
-    private void recoverProcessing() {
-        for (SourceUploadSession session : sessions.findProcessing()) {
-            try {
-                Path directory = paths.uploadDirectory(session.uploadId());
-                Path payload = paths.payloadPath(session.uploadId());
-                if (!Files.isDirectory(directory, LinkOption.NOFOLLOW_LINKS)
-                        || !Files.isRegularFile(payload, LinkOption.NOFOLLOW_LINKS)
-                        || Files.isSymbolicLink(payload)) {
-                    sessions.fail(session.uploadId(), "STAGING_MISSING",
-                            "managed upload staging is missing");
+    private void recoverPersistedProcessing() {
+        for (SourceUploadSession candidate : sessions.findProcessing()) {
+            synchronized (UploadSessionLocks.forUpload(candidate.uploadId())) {
+                SourceUploadSession session = sessions.find(candidate.uploadId()).orElse(null);
+                if (session == null || !session.state().processing()) {
                     continue;
                 }
-                if (session.state() != SourceUploadState.QUEUED) {
-                    sessions.requeueProcessing(session.uploadId());
-                }
-                enqueue(session.uploadId());
-            } catch (RuntimeException exception) {
-                sessions.fail(session.uploadId(), "STAGING_MISSING",
-                        "managed upload staging is unavailable");
+                recoverSession(session);
             }
         }
     }
 
-    private void cleanupExpired() {
+    private void recoverQueued() {
+        for (SourceUploadSession candidate : sessions.findQueued()) {
+            synchronized (UploadSessionLocks.forUpload(candidate.uploadId())) {
+                SourceUploadSession session = sessions.find(candidate.uploadId()).orElse(null);
+                if (session == null || session.state() != SourceUploadState.QUEUED) {
+                    continue;
+                }
+                enqueue(session.uploadId());
+            }
+        }
+    }
+
+    private void recoverSession(SourceUploadSession session) {
+        try {
+            Path directory = paths.uploadDirectory(session.uploadId());
+            Path payload = paths.payloadPath(session.uploadId());
+            if (!Files.isDirectory(directory, LinkOption.NOFOLLOW_LINKS)
+                    || !Files.isRegularFile(payload, LinkOption.NOFOLLOW_LINKS)
+                    || Files.isSymbolicLink(payload)) {
+                sessions.fail(session.uploadId(), "STAGING_MISSING",
+                        "managed upload staging is missing");
+                return;
+            }
+            if (session.state() != SourceUploadState.QUEUED) {
+                if (!sessions.requeueProcessing(session.uploadId())) {
+                    return;
+                }
+            }
+            enqueue(session.uploadId());
+        } catch (RuntimeException exception) {
+            sessions.fail(session.uploadId(), "STAGING_MISSING",
+                    "managed upload staging is unavailable");
+        }
+    }
+
+    void cleanupExpired() {
         long cutoff = System.currentTimeMillis()
                 - properties.getSourceIngestion().getStaleUploadHours() * 3_600_000L;
         for (SourceUploadState state : List.of(SourceUploadState.UPLOADING, SourceUploadState.FAILED)) {
-            for (SourceUploadSession session : sessions.findExpired(state, cutoff)) {
-                try {
-                    deleteTree(paths.uploadDirectory(session.uploadId()));
-                    sessions.delete(session.uploadId());
-                } catch (RuntimeException | IOException exception) {
-                    LOGGER.warn("could not clean source upload {}", session.uploadId());
+            for (SourceUploadSession candidate : sessions.findExpired(state, cutoff)) {
+                synchronized (UploadSessionLocks.forUpload(candidate.uploadId())) {
+                    SourceUploadSession session = sessions.find(candidate.uploadId()).orElse(null);
+                    if (session == null || (session.state() != SourceUploadState.UPLOADING
+                            && session.state() != SourceUploadState.FAILED)
+                            || session.updatedAtMs() >= cutoff) {
+                        continue;
+                    }
+                    try {
+                        deleteTree(paths.uploadDirectory(session.uploadId()));
+                        sessions.delete(session.uploadId());
+                    } catch (RuntimeException | IOException exception) {
+                        LOGGER.warn("could not clean source upload {}", session.uploadId());
+                    }
                 }
             }
         }

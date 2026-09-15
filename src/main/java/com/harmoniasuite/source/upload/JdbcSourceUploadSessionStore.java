@@ -87,6 +87,12 @@ public final class JdbcSourceUploadSessionStore implements SourceUploadSessionSt
     }
 
     @Override
+    public List<SourceUploadSession> findQueued() {
+        return jdbc.query("SELECT " + COLUMNS + " FROM source_upload_sessions"
+                + " WHERE state = 'QUEUED' ORDER BY created_at_ms", mapper());
+    }
+
+    @Override
     public List<SourceUploadSession> findExpired(SourceUploadState state, long cutoffMs) {
         return jdbc.query("SELECT " + COLUMNS + " FROM source_upload_sessions"
                 + " WHERE state = ? AND updated_at_ms < ? ORDER BY updated_at_ms",

@@ -11,6 +11,8 @@ public interface SourceUploadSessionStore {
 
     List<SourceUploadSession> findProcessing();
 
+    List<SourceUploadSession> findQueued();
+
     List<SourceUploadSession> findExpired(SourceUploadState state, long cutoffMs);
 
     boolean transition(String uploadId, SourceUploadState expected, SourceUploadState target);
