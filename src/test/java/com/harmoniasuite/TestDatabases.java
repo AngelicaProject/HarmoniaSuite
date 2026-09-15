@@ -21,4 +21,21 @@ public final class TestDatabases {
             throw new IllegalStateException("test database setup failed", e);
         }
     }
+
+    public static JdbcTemplate coreSqlite(Path dir) {
+        try {
+            javax.sql.DataSource dataSource =
+                    SqliteDataSources.create(dir.resolve("canonical-test.db").toAbsolutePath());
+            Flyway.configure().dataSource(dataSource)
+                    .locations("classpath:db/core/migration/sqlite")
+                    .load().migrate();
+            return new JdbcTemplate(dataSource);
+        } catch (Exception e) {
+            throw new IllegalStateException("canonical test database setup failed", e);
+        }
+    }
+
+    public static JdbcTemplate canonicalSqlite(Path dir) {
+        return coreSqlite(dir);
+    }
 }
