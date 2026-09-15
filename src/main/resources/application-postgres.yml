@@ -5,3 +5,7 @@ spring:
     password: ${PG_PASSWORD:harmonia}
   flyway:
     locations: classpath:db/migration/postgresql
+
+harmonia:
+  core:
+    postgres-schema: harmonia_core

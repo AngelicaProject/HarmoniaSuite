@@ -85,6 +85,37 @@ class SourceSnapshotStoreTest {
     }
 
     @Test
+    void listsSnapshotsInDeterministicMetadataOrder() {
+        core.update("""
+                INSERT INTO source_snapshots
+                    (snapshot_id, content_id, hxs_version, game_version, language, scope,
+                     extractor_version, lumina_version, sheet_count, row_count, string_cell_count)
+                VALUES (?, ?, 1, ?, ?, 'full', 'extractor-test', 'lumina-test', 0, 0, 0)
+                """, "sha256:" + "f".repeat(64), "sha256:" + "0".repeat(64),
+                "7.3.0", "en");
+        core.update("""
+                INSERT INTO source_snapshots
+                    (snapshot_id, content_id, hxs_version, game_version, language, scope,
+                     extractor_version, lumina_version, sheet_count, row_count, string_cell_count)
+                VALUES (?, ?, 1, ?, ?, 'full', 'extractor-test', 'lumina-test', 0, 0, 0)
+                """, "sha256:" + "e".repeat(64), "sha256:" + "1".repeat(64),
+                "7.2.0", "en");
+        core.update("""
+                INSERT INTO source_snapshots
+                    (snapshot_id, content_id, hxs_version, game_version, language, scope,
+                     extractor_version, lumina_version, sheet_count, row_count, string_cell_count)
+                VALUES (?, ?, 1, ?, ?, 'full', 'extractor-test', 'lumina-test', 0, 0, 0)
+                """, "sha256:" + "d".repeat(64), "sha256:" + "2".repeat(64),
+                "7.2.0", "ja");
+
+        List<SourceSnapshot> snapshots = new JdbcSourceSnapshotStore(core).listSnapshots();
+
+        assertEquals(List.of("7.2.0/en", "7.2.0/ja", "7.3.0/en"), snapshots.stream()
+                .map(snapshot -> snapshot.gameVersion() + "/" + snapshot.language())
+                .toList());
+    }
+
+    @Test
     void importPreservesEmptyMacroTextExactly() throws Exception {
         new JdbcTemplate(SqliteDataSources.create(hxsPath)).update("""
                 UPDATE string_cells
