@@ -11,6 +11,8 @@ import com.harmoniasuite.source.store.SourceSheet;
 import com.harmoniasuite.source.store.SourceSnapshot;
 import com.harmoniasuite.source.store.SourceSnapshotStore;
 import com.harmoniasuite.source.store.SourceStringCell;
+import com.harmoniasuite.source.artifact.SourceArtifact;
+import com.harmoniasuite.source.artifact.SourceArtifactRegistry;
 import com.harmoniasuite.service.source.SourceSnapshotService;
 import java.util.List;
 import java.util.Optional;
@@ -45,14 +47,27 @@ class SourceSnapshotServiceTest {
     void matchingSnapshotIsAvailableWithStoredMetadata() {
         SourceSnapshot stored = snapshot();
         store.snapshots.add(stored);
+        SourceArtifact present = new SourceArtifact(1, stored.id(), "sha256/aa/bb/file.hxs.zst",
+                "zstd", 10, 10, new byte[32], new byte[32], 1);
+        InMemoryArtifactRegistry artifacts = new InMemoryArtifactRegistry(present);
 
-        SourceSnapshotPreflightResponse response = service.preflight(request());
+        SourceSnapshotPreflightResponse response = new SourceSnapshotService(store, artifacts)
+                .preflight(request());
 
         assertEquals("AVAILABLE", response.status());
         assertEquals(null, response.snapshotId());
         assertEquals(stored.contentId(), response.snapshot().contentId());
         assertEquals(stored.gameVersion(), response.snapshot().gameVersion());
         assertEquals(stored.stringCellCount(), response.snapshot().stringCellCount());
+    }
+
+    @Test
+    void sourceSnapshotWithoutRegisteredArtifactRequiresUpload() {
+        store.snapshots.add(snapshot());
+        SourceSnapshotService strict = new SourceSnapshotService(store,
+                new InMemoryArtifactRegistry());
+
+        assertEquals("UPLOAD_REQUIRED", strict.preflight(request()).status());
     }
 
     @Test
@@ -144,6 +159,35 @@ class SourceSnapshotServiceTest {
         @Override
         public long countStringCells(String snapshotId) {
             return 0;
+        }
+    }
+
+    private static final class InMemoryArtifactRegistry implements SourceArtifactRegistry {
+        private final SourceArtifact artifact;
+
+        private InMemoryArtifactRegistry() {
+            this(null);
+        }
+
+        private InMemoryArtifactRegistry(SourceArtifact artifact) {
+            this.artifact = artifact;
+        }
+
+        @Override
+        public Optional<SourceArtifact> findBySnapshotId(String snapshotId) {
+            return artifact == null || !snapshotId.equals(SNAPSHOT_ID)
+                    ? Optional.empty() : Optional.of(artifact);
+        }
+
+        @Override
+        public Optional<SourceArtifact> findBySnapshotDbId(long snapshotDbId) {
+            return artifact == null || artifact.snapshotDbId() != snapshotDbId
+                    ? Optional.empty() : Optional.of(artifact);
+        }
+
+        @Override
+        public SourceArtifact register(SourceArtifact artifact) {
+            return artifact;
         }
     }
 }

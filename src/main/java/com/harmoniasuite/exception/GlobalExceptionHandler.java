@@ -8,11 +8,13 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import com.harmoniasuite.source.upload.UploadOffsetConflictException;
 
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.nio.file.NoSuchFileException;
 import java.util.Map;
+import java.util.LinkedHashMap;
 
 @RestControllerAdvice
 public class GlobalExceptionHandler {
@@ -30,6 +32,19 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(HarmoniaSuiteConflictException.class)
     public ResponseEntity<Map<String, String>> handleConflict(HarmoniaSuiteConflictException e) {
         return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("error", message(e)));
+    }
+
+    @ExceptionHandler(UploadOffsetConflictException.class)
+    public ResponseEntity<Map<String, Object>> handleUploadOffset(UploadOffsetConflictException e) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("error", message(e));
+        body.put("expected_offset", e.expectedOffset());
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(body);
+    }
+
+    @ExceptionHandler(SourceUploadTooLargeException.class)
+    public ResponseEntity<Map<String, String>> handleUploadTooLarge(SourceUploadTooLargeException e) {
+        return ResponseEntity.status(HttpStatus.PAYLOAD_TOO_LARGE).body(Map.of("error", message(e)));
     }
 
     @ExceptionHandler(HarmoniaSuiteCanonicalDatabaseException.class)
