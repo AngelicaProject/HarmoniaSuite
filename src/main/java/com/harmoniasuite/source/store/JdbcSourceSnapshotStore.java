@@ -55,6 +55,12 @@ public final class JdbcSourceSnapshotStore implements SourceSnapshotStore {
         this.transaction = new TransactionTemplate(new DataSourceTransactionManager(dataSource));
     }
 
+    SourceSnapshot importVerified(SourceSnapshotImporter.VerifiedHxs verified,
+                                  HxsSourceReader reader) {
+        Objects.requireNonNull(verified, "verified");
+        return importSnapshot(verified.path(), verified.inspection(), reader);
+    }
+
     /** Imports through a reader supplied by the trusted ingestion boundary. */
     SourceSnapshot importSnapshot(Path hxsPath, AtlasInspection trustedInspection,
                                   HxsSourceReader reader) {

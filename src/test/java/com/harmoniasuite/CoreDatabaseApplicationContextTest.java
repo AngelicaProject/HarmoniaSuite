@@ -56,7 +56,7 @@ class CoreDatabaseApplicationContextTest {
         assertNotNull(context.getBean(SourceSnapshotImporter.class));
         assertEquals(17, legacyJdbc.queryForObject(
                 "SELECT COUNT(*) FROM flyway_schema_history", Integer.class));
-        assertEquals(1, coreDatabase.jdbc().queryForObject(
+        assertEquals(2, coreDatabase.jdbc().queryForObject(
                 "SELECT COUNT(*) FROM flyway_schema_history", Integer.class));
         assertEquals(1, coreDatabase.jdbc().queryForObject(
                 "SELECT COUNT(*) FROM sqlite_master WHERE name = 'source_snapshots'",

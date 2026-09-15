@@ -21,14 +21,41 @@ public final class SourceSnapshotImporter {
         this.store = Objects.requireNonNull(store, "store");
     }
 
-    /** Inspect with Atlas, then ingest the same server-managed artifact. */
-    public SourceSnapshot importSnapshot(Path hxsPath) {
-        AtlasInspection inspection = atlasClient.inspect(hxsPath);
-        return importSnapshot(hxsPath, inspection);
+    /** Opaque Atlas-verified artifact handle. Its constructor is intentionally private. */
+    public static final class VerifiedHxs {
+        private final Path path;
+        private final AtlasInspection inspection;
+
+        private VerifiedHxs(Path path, AtlasInspection inspection) {
+            this.path = path;
+            this.inspection = inspection;
+        }
+
+        public Path path() {
+            return path;
+        }
+
+        public AtlasInspection inspection() {
+            return inspection;
+        }
     }
 
-    /** Package-private trusted seam for importer tests and internal staged-artifact callers. */
-    SourceSnapshot importSnapshot(Path hxsPath, AtlasInspection trustedInspection) {
-        return store.importSnapshot(hxsPath, trustedInspection, reader);
+    /** Inspect a managed HXS exactly once and return an opaque trusted handle. */
+    public VerifiedHxs verify(Path hxsPath) {
+        Objects.requireNonNull(hxsPath, "hxsPath");
+        Path managedPath = hxsPath.toAbsolutePath().normalize();
+        AtlasInspection inspection = atlasClient.inspect(managedPath);
+        return new VerifiedHxs(managedPath, inspection);
+    }
+
+    /** Import the exact artifact that produced the Atlas verification. */
+    public SourceSnapshot importVerified(VerifiedHxs verified) {
+        Objects.requireNonNull(verified, "verified");
+        return store.importVerified(verified, reader);
+    }
+
+    /** Inspect with Atlas, then ingest the same server-managed artifact. */
+    public SourceSnapshot importSnapshot(Path hxsPath) {
+        return importVerified(verify(hxsPath));
     }
 }

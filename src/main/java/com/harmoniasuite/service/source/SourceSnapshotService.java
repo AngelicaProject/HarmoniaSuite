@@ -10,12 +10,14 @@ import com.harmoniasuite.exception.HarmoniaSuiteConflictException;
 import com.harmoniasuite.exception.HarmoniaSuiteNotFoundException;
 import com.harmoniasuite.source.store.SourceSnapshot;
 import com.harmoniasuite.source.store.SourceSnapshotStore;
+import com.harmoniasuite.source.artifact.SourceArtifactRegistry;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.function.Supplier;
 import java.util.regex.Pattern;
 import org.springframework.dao.DataAccessException;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 /** Read and preflight operations for the canonical trusted source registry. */
@@ -25,9 +27,34 @@ public class SourceSnapshotService {
     private static final Pattern SHA256_ID = Pattern.compile("sha256:[0-9a-f]{64}");
 
     private final SourceSnapshotStore store;
+    private final SourceArtifactRegistry artifacts;
 
     public SourceSnapshotService(SourceSnapshotStore store) {
+        this(store, new SourceArtifactRegistry() {
+            @Override
+            public Optional<com.harmoniasuite.source.artifact.SourceArtifact> findBySnapshotId(
+                    String snapshotId) {
+                return Optional.empty();
+            }
+
+            @Override
+            public Optional<com.harmoniasuite.source.artifact.SourceArtifact> findBySnapshotDbId(
+                    long snapshotDbId) {
+                return Optional.empty();
+            }
+
+            @Override
+            public com.harmoniasuite.source.artifact.SourceArtifact register(
+                    com.harmoniasuite.source.artifact.SourceArtifact artifact) {
+                return artifact;
+            }
+        });
+    }
+
+    @Autowired
+    public SourceSnapshotService(SourceSnapshotStore store, SourceArtifactRegistry artifacts) {
         this.store = Objects.requireNonNull(store, "store");
+        this.artifacts = artifacts;
     }
 
     public SourceSnapshotPreflightResponse preflight(SourceSnapshotPreflightRequest request) {
@@ -41,6 +68,9 @@ public class SourceSnapshotService {
         if (!metadataMatches(snapshot, request)) {
             throw new HarmoniaSuiteConflictException(
                     "snapshot metadata conflicts with the trusted source snapshot");
+        }
+        if (read(() -> artifacts.findBySnapshotDbId(snapshot.id())).isEmpty()) {
+            return SourceSnapshotPreflightResponse.uploadRequired(request.snapshotId());
         }
         return SourceSnapshotPreflightResponse.available(SourceSnapshotDto.from(snapshot));
     }

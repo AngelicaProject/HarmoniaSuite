@@ -36,6 +36,14 @@ harmonia:
   http:
     connect-timeout-ms: 15000
     read-timeout-ms: 300000
+  source-ingestion:
+    staging-path: data/source-staging
+    artifact-path: data/source-artifacts
+    max-upload-bytes: 4294967296
+    max-hxs-bytes: 4294967296
+    max-chunk-bytes: 16777216
+    stale-upload-hours: 24
+    zstd-level: 3
   gemini:
     api-key: ${GEMINI_API_KEY:}
     model: gemini-3.5-flash-lite
