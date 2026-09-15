@@ -10,17 +10,9 @@ import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
-import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.sql.Statement;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
 import java.util.Objects;
-import java.util.Set;
 
 /** Streaming, read-only reader for an HXS SQLite artifact already verified by Atlas. */
 public class HxsSourceReader {
@@ -43,8 +35,7 @@ public class HxsSourceReader {
                 return;
             }
 
-            HxsLayout layout = HxsLayout.discover(connection);
-            readSheets(connection, layout, sink);
+            readSheets(connection, sink);
             sink.end();
         } catch (HxsReadException exception) {
             throw exception;
@@ -60,9 +51,9 @@ public class HxsSourceReader {
         SQLiteConfig config = new SQLiteConfig();
         config.setReadOnly(true);
         config.setExplicitReadOnly(true);
-        Connection connection;
         try {
-            connection = DriverManager.getConnection("jdbc:sqlite:" + path, config.toProperties());
+            Connection connection = DriverManager.getConnection("jdbc:sqlite:" + path,
+                    config.toProperties());
             connection.setReadOnly(true);
             return connection;
         } catch (SQLException exception) {
@@ -89,122 +80,97 @@ public class HxsSourceReader {
     }
 
     private static HxsMetadata readMetadata(Connection connection) throws SQLException {
-        TableLayout metadataTable = TableLayout.discover(connection, "hxs_meta");
-        Map<String, Object> values = new LinkedHashMap<>();
-        try (Statement statement = connection.createStatement();
-             ResultSet resultSet = statement.executeQuery(
-                     "SELECT * FROM " + quote(metadataTable.tableName()))) {
-            ResultSetMetaData resultMetadata = resultSet.getMetaData();
-            Map<String, Integer> columns = resultMetadataColumns(resultMetadata);
-            boolean keyValue = findColumn(columns, "key", "meta_key", "name") != null
-                    && findColumn(columns, "value", "meta_value") != null;
-            if (keyValue) {
-                int keyIndex = findColumn(columns, "key", "meta_key", "name");
-                int valueIndex = findColumn(columns, "value", "meta_value");
-                while (resultSet.next()) {
-                    Object key = resultSet.getObject(keyIndex);
-                    if (key == null || key.toString().isBlank()) {
-                        throw schemaError("hxs_meta contains a blank metadata key");
-                    }
-                    values.put(normalize(key.toString()), resultSet.getObject(valueIndex));
-                }
-            } else {
-                if (!resultSet.next()) {
-                    throw schemaError("hxs_meta must contain one metadata record");
-                }
-                for (int index = 1; index <= resultMetadata.getColumnCount(); index++) {
-                    values.put(normalize(resultMetadata.getColumnLabel(index)),
-                            resultSet.getObject(index));
-                }
-                if (resultSet.next()) {
-                    throw schemaError("hxs_meta must contain one metadata record");
-                }
+        try (Statement statement = forwardOnlyStatement(connection, FETCH_SIZE);
+             ResultSet resultSet = statement.executeQuery("""
+                     SELECT id, format_version, game_version, language, scope,
+                            snapshot_id, content_id, extractor_version, lumina_version,
+                            sheet_count, row_count, string_cell_count
+                     FROM hxs_meta
+                     ORDER BY id
+                     """)) {
+            if (!resultSet.next()) {
+                throw schemaError("hxs_meta must contain one record with id = 1");
             }
+            if (requiredLong(resultSet, 1, "hxs_meta.id") != 1) {
+                throw schemaError("hxs_meta.id must be 1");
+            }
+            HxsMetadata metadata = new HxsMetadata(
+                    requiredInt(resultSet, 2, "format version"),
+                    requiredText(resultSet, 3, "game version"),
+                    requiredText(resultSet, 4, "language"),
+                    requiredText(resultSet, 5, "scope"),
+                    requiredText(resultSet, 6, "snapshot ID"),
+                    requiredText(resultSet, 7, "content ID"),
+                    requiredText(resultSet, 8, "extractor version"),
+                    requiredText(resultSet, 9, "Lumina version"),
+                    requiredNonNegativeLong(resultSet, 10, "sheet count"),
+                    requiredNonNegativeLong(resultSet, 11, "row count"),
+                    requiredNonNegativeLong(resultSet, 12, "String cell count"));
+            if (resultSet.next()) {
+                throw schemaError("hxs_meta must contain exactly one record");
+            }
+            return metadata;
         }
-
-        return new HxsMetadata(
-                requiredInt(values, "hxs version", "hxs_version", "hxsVersion", "format_version", "formatVersion"),
-                requiredText(values, "game version", "game_version", "gameVersion"),
-                requiredText(values, "language", "language"),
-                requiredText(values, "scope", "scope"),
-                requiredText(values, "snapshot ID", "snapshot_id", "snapshotId"),
-                requiredText(values, "content ID", "content_id", "contentId"),
-                requiredText(values, "extractor version", "extractor_version", "extractorVersion"),
-                requiredText(values, "Lumina version", "lumina_version", "luminaVersion"),
-                requiredNonNegativeLong(values, "sheet count", "sheet_count", "sheetCount"),
-                requiredNonNegativeLong(values, "row count", "row_count", "rowCount"),
-                requiredNonNegativeLong(values, "String cell count", "string_cell_count", "stringCellCount"));
     }
 
-    private static void readSheets(Connection connection, HxsLayout layout, HxsSourceSink sink)
-            throws SQLException {
-        String select = layout.sheets().select(
-                layout.sheets().column("name", "sheet_name", "sheetName"),
-                layout.sheets().column("variant"),
-                layout.sheets().column("effective_language", "effectiveLanguage", "language"),
-                layout.sheets().column("column_count", "columnCount"),
-                layout.sheets().column("row_count", "rowCount"),
-                layout.sheets().column("schema_hash", "schemaHash"),
-                layout.sheets().column("technical_hash", "technicalHash"),
-                layout.sheets().column("string_hash", "stringHash"),
-                layout.sheets().column("content_hash", "contentHash"));
-        String sql = "SELECT " + select + " FROM " + quote(layout.sheets().tableName())
-                + " ORDER BY " + quote(layout.sheets().column("name", "sheet_name", "sheetName"));
+    private static void readSheets(Connection connection, HxsSourceSink sink) throws SQLException {
         try (Statement statement = forwardOnlyStatement(connection, FETCH_SIZE);
-             ResultSet resultSet = statement.executeQuery(sql)) {
+             ResultSet resultSet = statement.executeQuery("""
+                     SELECT id, name, variant, effective_language, column_count, row_count,
+                            schema_hash, technical_hash, string_hash, content_hash
+                     FROM sheets
+                     ORDER BY id
+                     """)) {
             while (resultSet.next()) {
+                long sheetId = requiredNonNegativeLong(resultSet, 1, "sheet ID");
                 HxsSheet sheet = new HxsSheet(
-                        requiredText(resultSet, 1, "sheet name"),
-                        requiredInt(resultSet, 2, "sheet variant"),
-                        requiredText(resultSet, 3, "effective language"),
-                        requiredNonNegativeLong(resultSet, 4, "sheet column count"),
-                        requiredNonNegativeLong(resultSet, 5, "sheet row count"),
-                        requiredHash(resultSet, 6, "schema hash"),
-                        requiredHash(resultSet, 7, "technical hash"),
-                        requiredHash(resultSet, 8, "string hash"),
-                        requiredHash(resultSet, 9, "content hash"));
+                        requiredText(resultSet, 2, "sheet name"),
+                        requiredInt(resultSet, 3, "sheet variant"),
+                        requiredText(resultSet, 4, "effective language"),
+                        requiredNonNegativeLong(resultSet, 5, "sheet column count"),
+                        requiredNonNegativeLong(resultSet, 6, "sheet row count"),
+                        requiredHash(resultSet, 7, "schema hash"),
+                        requiredHash(resultSet, 8, "technical hash"),
+                        requiredHash(resultSet, 9, "string hash"),
+                        requiredHash(resultSet, 10, "content hash"));
                 sink.beginSheet(sheet);
-                readColumns(connection, layout.columns(), sheet.name(), sink);
-                readRows(connection, layout.rows(), sheet.name(), sink);
-                readStringCells(connection, layout.stringCells(), sheet.name(), sink);
+                readColumns(connection, sheetId, sink);
+                readRows(connection, sheetId, sink);
+                readStringCells(connection, sheetId, sink);
                 sink.endSheet();
             }
         }
     }
 
-    private static void readColumns(Connection connection, TableLayout layout, String sheetName,
-                                    HxsSourceSink sink) throws SQLException {
-        String sheetColumn = layout.column("sheet_name", "sheetName", "sheet");
-        String columnIndex = layout.column("column_index", "columnIndex");
-        String sql = "SELECT " + layout.select(columnIndex, layout.column("offset"), layout.column("type"))
-                + " FROM " + quote(layout.tableName()) + " WHERE " + quote(sheetColumn)
-                + " = ? ORDER BY " + quote(columnIndex);
-        try (PreparedStatement statement = prepared(connection, sql, FETCH_SIZE)) {
-            statement.setString(1, sheetName);
+    private static void readColumns(Connection connection, long sheetId, HxsSourceSink sink)
+            throws SQLException {
+        try (PreparedStatement statement = prepared(connection, """
+                SELECT column_index, offset, type
+                FROM columns
+                WHERE sheet_id = ?
+                ORDER BY column_index
+                """, FETCH_SIZE)) {
+            statement.setLong(1, sheetId);
             try (ResultSet resultSet = statement.executeQuery()) {
                 while (resultSet.next()) {
                     sink.column(new HxsColumn(
                             requiredInt(resultSet, 1, "column index"),
-                            requiredLong(resultSet, 2, "column offset"),
-                            requiredText(resultSet, 3, "column type")));
+                            requiredNonNegativeLong(resultSet, 2, "column offset"),
+                            requiredInt(resultSet, 3, "column type")));
                 }
             }
         }
     }
 
-    private static void readRows(Connection connection, TableLayout layout, String sheetName,
-                                 HxsSourceSink sink) throws SQLException {
-        String sheetColumn = layout.column("sheet_name", "sheetName", "sheet");
-        String rowId = layout.column("row_id", "rowId");
-        String subrowId = layout.column("subrow_id", "subrowId");
-        String sql = "SELECT " + layout.select(rowId, subrowId,
-                layout.column("row_hash", "rowHash"),
-                layout.column("technical_hash", "technicalHash"),
-                layout.column("string_hash", "stringHash"))
-                + " FROM " + quote(layout.tableName()) + " WHERE " + quote(sheetColumn)
-                + " = ? ORDER BY " + quote(rowId) + ", " + quote(subrowId);
-        try (PreparedStatement statement = prepared(connection, sql, FETCH_SIZE)) {
-            statement.setString(1, sheetName);
+    private static void readRows(Connection connection, long sheetId, HxsSourceSink sink)
+            throws SQLException {
+        try (PreparedStatement statement = prepared(connection, """
+                SELECT row_id, subrow_id, row_hash, technical_hash, string_hash
+                FROM "rows"
+                WHERE sheet_id = ?
+                ORDER BY row_id, subrow_id
+                """, FETCH_SIZE)) {
+            statement.setLong(1, sheetId);
             try (ResultSet resultSet = statement.executeQuery()) {
                 while (resultSet.next()) {
                     sink.row(new HxsRow(
@@ -218,20 +184,15 @@ public class HxsSourceReader {
         }
     }
 
-    private static void readStringCells(Connection connection, TableLayout layout, String sheetName,
-                                         HxsSourceSink sink) throws SQLException {
-        String sheetColumn = layout.column("sheet_name", "sheetName", "sheet");
-        String rowId = layout.column("row_id", "rowId");
-        String subrowId = layout.column("subrow_id", "subrowId");
-        String columnIndex = layout.column("column_index", "columnIndex");
-        String sql = "SELECT " + layout.select(rowId, subrowId, columnIndex,
-                layout.column("macro_text", "macroText"),
-                layout.column("macro_hash", "macroHash"),
-                layout.column("raw_hash", "rawHash"))
-                + " FROM " + quote(layout.tableName()) + " WHERE " + quote(sheetColumn)
-                + " = ? ORDER BY " + quote(rowId) + ", " + quote(subrowId) + ", " + quote(columnIndex);
-        try (PreparedStatement statement = prepared(connection, sql, FETCH_SIZE)) {
-            statement.setString(1, sheetName);
+    private static void readStringCells(Connection connection, long sheetId, HxsSourceSink sink)
+            throws SQLException {
+        try (PreparedStatement statement = prepared(connection, """
+                SELECT row_id, subrow_id, column_index, macro_text, macro_hash, raw_hash
+                FROM string_cells
+                WHERE sheet_id = ?
+                ORDER BY row_id, subrow_id, column_index
+                """, FETCH_SIZE)) {
+            statement.setLong(1, sheetId);
             try (ResultSet resultSet = statement.executeQuery()) {
                 while (resultSet.next()) {
                     sink.stringCell(new HxsStringCell(
@@ -246,7 +207,8 @@ public class HxsSourceReader {
         }
     }
 
-    private static Statement forwardOnlyStatement(Connection connection, int fetchSize) throws SQLException {
+    private static Statement forwardOnlyStatement(Connection connection, int fetchSize)
+            throws SQLException {
         Statement statement = connection.createStatement(ResultSet.TYPE_FORWARD_ONLY,
                 ResultSet.CONCUR_READ_ONLY);
         statement.setFetchSize(fetchSize);
@@ -262,65 +224,47 @@ public class HxsSourceReader {
     }
 
     private static byte[] nullableHash(ResultSet resultSet, int index, String field) throws SQLException {
-        Object value = resultSet.getObject(index);
-        if (value == null) {
-            return null;
-        }
-        return hashBytes(value, field);
+        byte[] value = resultSet.getBytes(index);
+        return value == null ? null : hashBytes(value, field);
     }
 
     private static byte[] requiredHash(ResultSet resultSet, int index, String field) throws SQLException {
-        Object value = resultSet.getObject(index);
+        byte[] value = resultSet.getBytes(index);
         if (value == null) {
             throw schemaError(field + " is null");
         }
         return hashBytes(value, field);
     }
 
-    private static byte[] hashBytes(Object value, String field) {
-        if (!(value instanceof byte[] bytes) || bytes.length != 32) {
+    private static byte[] hashBytes(byte[] value, String field) {
+        if (value.length != 32) {
             throw schemaError(field + " must be exactly 32 raw bytes");
         }
-        return bytes;
+        return value;
     }
 
     private static String requiredText(ResultSet resultSet, int index, String field) throws SQLException {
-        Object value = resultSet.getObject(index);
-        if (value == null || value.toString().isBlank()) {
+        String value = resultSet.getString(index);
+        if (value == null || value.isBlank()) {
             throw schemaError(field + " is blank");
         }
-        return value.toString();
+        return value;
     }
 
     private static int requiredInt(ResultSet resultSet, int index, String field) throws SQLException {
-        long value = requiredLong(resultSet, index, field);
-        if (value < Integer.MIN_VALUE || value > Integer.MAX_VALUE) {
-            throw schemaError(field + " is outside the integer range");
+        int value = resultSet.getInt(index);
+        if (resultSet.wasNull()) {
+            throw schemaError(field + " is null");
         }
-        return (int) value;
+        return value;
     }
 
     private static long requiredLong(ResultSet resultSet, int index, String field) throws SQLException {
-        Object value = resultSet.getObject(index);
-        if (value instanceof Number number) {
-            return number.longValue();
+        long value = resultSet.getLong(index);
+        if (resultSet.wasNull()) {
+            throw schemaError(field + " is null");
         }
-        if (value != null) {
-            try {
-                return Long.parseLong(value.toString());
-            } catch (NumberFormatException ignored) {
-                // Convert to the same fail-closed schema error below.
-            }
-        }
-        throw schemaError(field + " is not an integer");
-    }
-
-    private static int requiredInt(Map<String, Object> values, String field, String... aliases) {
-        long value = requiredLong(values, field, aliases);
-        if (value < Integer.MIN_VALUE || value > Integer.MAX_VALUE) {
-            throw schemaError(field + " is outside the integer range");
-        }
-        return (int) value;
+        return value;
     }
 
     private static long requiredNonNegativeLong(ResultSet resultSet, int index, String field)
@@ -332,159 +276,7 @@ public class HxsSourceReader {
         return value;
     }
 
-    private static long requiredNonNegativeLong(Map<String, Object> values, String field,
-                                                String... aliases) {
-        long value = requiredLong(values, field, aliases);
-        if (value < 0) {
-            throw schemaError(field + " must be non-negative");
-        }
-        return value;
-    }
-
-    private static String requiredText(Map<String, Object> values, String field, String... aliases) {
-        Object value = findValue(values, aliases);
-        if (value == null || value.toString().isBlank()) {
-            throw schemaError(field + " is missing or blank");
-        }
-        return value.toString();
-    }
-
-    private static long requiredLong(Map<String, Object> values, String field, String... aliases) {
-        Object value = findValue(values, aliases);
-        if (value instanceof Number number) {
-            return number.longValue();
-        }
-        if (value != null) {
-            try {
-                return Long.parseLong(value.toString());
-            } catch (NumberFormatException ignored) {
-                // Convert to the same fail-closed schema error below.
-            }
-        }
-        throw schemaError(field + " is missing or not an integer");
-    }
-
-    private static Object findValue(Map<String, Object> values, String... aliases) {
-        for (String alias : aliases) {
-            String normalized = normalize(alias);
-            if (values.containsKey(normalized)) {
-                return values.get(normalized);
-            }
-        }
-        return null;
-    }
-
-    private static Map<String, Integer> resultMetadataColumns(ResultSetMetaData metadata) throws SQLException {
-        Map<String, Integer> columns = new HashMap<>();
-        for (int index = 1; index <= metadata.getColumnCount(); index++) {
-            columns.putIfAbsent(normalize(metadata.getColumnLabel(index)), index);
-            columns.putIfAbsent(normalize(metadata.getColumnName(index)), index);
-        }
-        return columns;
-    }
-
-    private static Integer findColumn(Map<String, Integer> columns, String... aliases) {
-        for (String alias : aliases) {
-            Integer index = columns.get(normalize(alias));
-            if (index != null) {
-                return index;
-            }
-        }
-        return null;
-    }
-
-    private static String normalize(String value) {
-        StringBuilder normalized = new StringBuilder(value.length());
-        for (int index = 0; index < value.length(); index++) {
-            char character = Character.toLowerCase(value.charAt(index));
-            if (character >= 'a' && character <= 'z'
-                    || character >= '0' && character <= '9') {
-                normalized.append(character);
-            }
-        }
-        return normalized.toString();
-    }
-
-    private static String quote(String identifier) {
-        return "\"" + identifier.replace("\"", "\"\"") + "\"";
-    }
-
     private static HxsReadException schemaError(String message) {
         return new HxsReadException(HxsReadException.Reason.SCHEMA, message);
-    }
-
-    private record HxsLayout(TableLayout sheets, TableLayout columns, TableLayout rows,
-                             TableLayout stringCells) {
-
-        private static HxsLayout discover(Connection connection) throws SQLException {
-            return new HxsLayout(
-                    TableLayout.discover(connection, "hxs_sheets", "sheets", "sheet_records", "sheet"),
-                    TableLayout.discover(connection, "hxs_columns", "columns", "sheet_columns", "column"),
-                    TableLayout.discover(connection, "hxs_rows", "rows", "sheet_rows", "row"),
-                    TableLayout.discover(connection, "hxs_string_cells", "string_cells", "string_cell",
-                            "cells"));
-        }
-    }
-
-    private record TableLayout(String tableName, Map<String, String> columns) {
-
-        private static TableLayout discover(Connection connection, String... candidates)
-                throws SQLException {
-            Set<String> tables = new HashSet<>();
-            try (Statement statement = connection.createStatement();
-                 ResultSet resultSet = statement.executeQuery(
-                         "SELECT name FROM sqlite_master WHERE type IN ('table', 'view')")) {
-                while (resultSet.next()) {
-                    tables.add(resultSet.getString(1));
-                }
-            }
-            String table = null;
-            for (String candidate : candidates) {
-                for (String available : tables) {
-                    if (candidate.equalsIgnoreCase(available)) {
-                        table = available;
-                        break;
-                    }
-                }
-                if (table != null) {
-                    break;
-                }
-            }
-            if (table == null) {
-                throw schemaError("required HXS table is missing: " + candidates[0]);
-            }
-
-            Map<String, String> columns = new LinkedHashMap<>();
-            try (Statement statement = connection.createStatement();
-                 ResultSet resultSet = statement.executeQuery(
-                         "SELECT * FROM " + quote(table) + " LIMIT 0")) {
-                ResultSetMetaData metadata = resultSet.getMetaData();
-                for (int index = 1; index <= metadata.getColumnCount(); index++) {
-                    columns.putIfAbsent(normalize(metadata.getColumnLabel(index)),
-                            metadata.getColumnLabel(index));
-                    columns.putIfAbsent(normalize(metadata.getColumnName(index)),
-                            metadata.getColumnName(index));
-                }
-            }
-            return new TableLayout(table, columns);
-        }
-
-        private String column(String... aliases) {
-            for (String alias : aliases) {
-                String column = columns.get(normalize(alias));
-                if (column != null) {
-                    return column;
-                }
-            }
-            throw schemaError("required HXS column is missing from " + tableName + ": " + aliases[0]);
-        }
-
-        private String select(String... selectedColumns) {
-            List<String> quoted = new ArrayList<>(selectedColumns.length);
-            for (String selectedColumn : selectedColumns) {
-                quoted.add(quote(selectedColumn));
-            }
-            return String.join(", ", quoted);
-        }
     }
 }

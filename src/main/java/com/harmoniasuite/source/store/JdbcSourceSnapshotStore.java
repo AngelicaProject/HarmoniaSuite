@@ -258,7 +258,7 @@ public final class JdbcSourceSnapshotStore implements SourceSnapshotStore {
             statement.setLong(1, column.sheetId());
             statement.setInt(2, column.columnIndex());
             statement.setLong(3, column.offset());
-            statement.setString(4, column.type());
+            statement.setInt(4, column.type());
         });
     }
 

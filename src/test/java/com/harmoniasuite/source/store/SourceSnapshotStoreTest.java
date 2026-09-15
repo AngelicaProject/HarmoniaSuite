@@ -68,9 +68,9 @@ class SourceSnapshotStoreTest {
         assertEquals(16L, core.queryForObject(
                 "SELECT offset FROM source_columns WHERE sheet_id = ? AND column_index = ?",
                 Long.class, sheet.id(), 3));
-        assertEquals("String", core.queryForObject(
+        assertEquals(1, core.queryForObject(
                 "SELECT type FROM source_columns WHERE sheet_id = ? AND column_index = ?",
-                String.class, sheet.id(), 3));
+                Integer.class, sheet.id(), 3));
         assertEquals(3, store.countRows(SNAPSHOT_ID));
         assertEquals(3, store.countStringCells(SNAPSHOT_ID));
         SourceStringCell cell = store.findStringCell(SNAPSHOT_ID, "Quest", 7, 1, 4).orElseThrow();
@@ -147,7 +147,7 @@ class SourceSnapshotStoreTest {
     @Test
     void perSheetColumnCountMismatchRollsBackAllTables() throws Exception {
         new JdbcTemplate(SqliteDataSources.create(hxsPath))
-                .update("UPDATE hxs_sheets SET column_count = 3 WHERE name = 'Quest'");
+                .update("UPDATE sheets SET column_count = 3 WHERE name = 'Quest'");
         JdbcSourceSnapshotStore store = new JdbcSourceSnapshotStore(core);
 
         assertThrows(SourceSnapshotImportException.class,
@@ -158,7 +158,7 @@ class SourceSnapshotStoreTest {
     @Test
     void perSheetRowCountMismatchRollsBackAllTables() throws Exception {
         new JdbcTemplate(SqliteDataSources.create(hxsPath))
-                .update("UPDATE hxs_sheets SET row_count = 3 WHERE name = 'Quest'");
+                .update("UPDATE sheets SET row_count = 3 WHERE name = 'Quest'");
         JdbcSourceSnapshotStore store = new JdbcSourceSnapshotStore(core);
 
         assertThrows(SourceSnapshotImportException.class,
@@ -194,6 +194,8 @@ class SourceSnapshotStoreTest {
         assertEquals("blob", core.queryForObject("SELECT typeof(schema_hash) FROM source_sheets LIMIT 1",
                 String.class));
         assertEquals("blob", core.queryForObject("SELECT typeof(macro_hash) FROM source_string_cells LIMIT 1",
+                String.class));
+        assertEquals("integer", core.queryForObject("SELECT typeof(type) FROM source_columns LIMIT 1",
                 String.class));
         assertEquals(0, core.queryForObject("SELECT COUNT(*) FROM source_snapshots WHERE snapshot_id LIKE '%path%'",
                 Integer.class));
@@ -300,103 +302,111 @@ class SourceSnapshotStoreTest {
     private static void createHxs(JdbcTemplate hxs) {
         hxs.execute("""
                 CREATE TABLE hxs_meta (
-                    hxs_version INTEGER, game_version TEXT, language TEXT, scope TEXT,
-                    snapshot_id TEXT, content_id TEXT, extractor_version TEXT,
-                    lumina_version TEXT, sheet_count INTEGER, row_count INTEGER,
-                    string_cell_count INTEGER
+                    id INTEGER PRIMARY KEY, format_version INTEGER NOT NULL,
+                    game_version TEXT NOT NULL, language TEXT NOT NULL, scope TEXT NOT NULL,
+                    content_id TEXT NOT NULL, snapshot_id TEXT NOT NULL,
+                    extractor_version TEXT NOT NULL, lumina_version TEXT NOT NULL,
+                    sheet_count INTEGER NOT NULL, row_count INTEGER NOT NULL,
+                    string_cell_count INTEGER NOT NULL
                 )
                 """);
         hxs.execute("""
-                CREATE TABLE hxs_sheets (
-                    name TEXT, variant INTEGER, effective_language TEXT,
-                    column_count INTEGER, row_count INTEGER,
-                    schema_hash BLOB, technical_hash BLOB, string_hash BLOB, content_hash BLOB
+                CREATE TABLE sheets (
+                    id INTEGER PRIMARY KEY, name TEXT NOT NULL, variant INTEGER NOT NULL,
+                    effective_language TEXT NOT NULL, column_count INTEGER NOT NULL,
+                    row_count INTEGER NOT NULL, schema_hash BLOB NOT NULL,
+                    technical_hash BLOB NOT NULL, string_hash BLOB NOT NULL,
+                    content_hash BLOB NOT NULL
                 )
                 """);
-        hxs.execute("CREATE TABLE hxs_columns (sheet_name TEXT, column_index INTEGER, offset INTEGER, type TEXT)");
+        hxs.execute("CREATE TABLE columns (sheet_id INTEGER, column_index INTEGER, offset INTEGER, type INTEGER)");
         hxs.execute("""
-                CREATE TABLE hxs_rows (
-                    sheet_name TEXT, row_id INTEGER, subrow_id INTEGER,
+                CREATE TABLE "rows" (
+                    sheet_id INTEGER, row_id INTEGER, subrow_id INTEGER,
                     row_hash BLOB, technical_hash BLOB, string_hash BLOB, technical_payload BLOB
                 )
                 """);
         hxs.execute("""
-                CREATE TABLE hxs_string_cells (
-                    sheet_name TEXT, row_id INTEGER, subrow_id INTEGER, column_index INTEGER,
+                CREATE TABLE string_cells (
+                    sheet_id INTEGER, row_id INTEGER, subrow_id INTEGER, column_index INTEGER,
                     macro_text TEXT, macro_hash BLOB, raw_hash BLOB, raw_value BLOB
                 )
                 """);
-        hxs.update("INSERT INTO hxs_meta VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                1, "7.2.0", "en", "full", SNAPSHOT_ID, CONTENT_ID,
+        hxs.update("INSERT INTO hxs_meta VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                1, 1, "7.2.0", "en", "full", CONTENT_ID, SNAPSHOT_ID,
                 "extractor-test", "lumina-test", 2, 3, 3);
-        hxs.update("INSERT INTO hxs_sheets VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                "Quest", 0, "en", 2, 2, hash(9), hash(10), hash(11), hash(12));
-        hxs.update("INSERT INTO hxs_sheets VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                "Subrow", 1, "en", 1, 1, hash(19), hash(20), hash(21), hash(22));
-        hxs.update("INSERT INTO hxs_columns VALUES (?, ?, ?, ?)", "Quest", 3, 16, "String");
-        hxs.update("INSERT INTO hxs_columns VALUES (?, ?, ?, ?)", "Quest", 4, 24, "String");
-        hxs.update("INSERT INTO hxs_columns VALUES (?, ?, ?, ?)", "Subrow", 1, 8, "String");
-        hxs.update("INSERT INTO hxs_rows VALUES (?, ?, ?, ?, ?, ?, ?)",
-                "Quest", 7, 0, hash(30), hash(31), hash(32), new byte[]{1});
-        hxs.update("INSERT INTO hxs_rows VALUES (?, ?, ?, ?, ?, ?, ?)",
-                "Quest", 7, 1, hash(33), hash(34), hash(35), new byte[]{2});
-        hxs.update("INSERT INTO hxs_rows VALUES (?, ?, ?, ?, ?, ?, ?)",
-                "Subrow", 9, 0, hash(36), hash(37), hash(38), new byte[]{3});
-        hxs.update("INSERT INTO hxs_string_cells VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                "Quest", 7, 0, 3, "{utf8}Quest text", hash(42), hash(43), new byte[]{4});
-        hxs.update("INSERT INTO hxs_string_cells VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                "Quest", 7, 1, 4, "{utf8}Quest subrow", hash(44), null, new byte[]{5});
-        hxs.update("INSERT INTO hxs_string_cells VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                "Subrow", 9, 0, 1, "{utf8}Subrow text", hash(45), hash(46), new byte[]{6});
+        hxs.update("INSERT INTO sheets VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                17, "Quest", 0, "en", 2, 2, hash(9), hash(10), hash(11), hash(12));
+        hxs.update("INSERT INTO sheets VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                23, "Subrow", 1, "en", 1, 1, hash(19), hash(20), hash(21), hash(22));
+        hxs.update("INSERT INTO columns VALUES (?, ?, ?, ?)", 17, 3, 16, 1);
+        hxs.update("INSERT INTO columns VALUES (?, ?, ?, ?)", 17, 4, 24, 1);
+        hxs.update("INSERT INTO columns VALUES (?, ?, ?, ?)", 23, 1, 8, 1);
+        hxs.update("INSERT INTO \"rows\" VALUES (?, ?, ?, ?, ?, ?, ?)",
+                17, 7, 0, hash(30), hash(31), hash(32), new byte[]{1});
+        hxs.update("INSERT INTO \"rows\" VALUES (?, ?, ?, ?, ?, ?, ?)",
+                17, 7, 1, hash(33), hash(34), hash(35), new byte[]{2});
+        hxs.update("INSERT INTO \"rows\" VALUES (?, ?, ?, ?, ?, ?, ?)",
+                23, 9, 0, hash(36), hash(37), hash(38), new byte[]{3});
+        hxs.update("INSERT INTO string_cells VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                17, 7, 0, 3, "{utf8}Quest text", hash(42), hash(43), new byte[]{4});
+        hxs.update("INSERT INTO string_cells VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                17, 7, 1, 4, "{utf8}Quest subrow", hash(44), null, new byte[]{5});
+        hxs.update("INSERT INTO string_cells VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                23, 9, 0, 1, "{utf8}Subrow text", hash(45), hash(46), new byte[]{6});
     }
 
     private static void createLargeHxs(JdbcTemplate hxs, int count, String snapshotId,
                                        String contentId) {
         hxs.execute("""
                 CREATE TABLE hxs_meta (
-                    hxs_version INTEGER, game_version TEXT, language TEXT, scope TEXT,
-                    snapshot_id TEXT, content_id TEXT, extractor_version TEXT,
-                    lumina_version TEXT, sheet_count INTEGER, row_count INTEGER,
-                    string_cell_count INTEGER
+                    id INTEGER PRIMARY KEY, format_version INTEGER NOT NULL,
+                    game_version TEXT NOT NULL, language TEXT NOT NULL, scope TEXT NOT NULL,
+                    content_id TEXT NOT NULL, snapshot_id TEXT NOT NULL,
+                    extractor_version TEXT NOT NULL, lumina_version TEXT NOT NULL,
+                    sheet_count INTEGER NOT NULL, row_count INTEGER NOT NULL,
+                    string_cell_count INTEGER NOT NULL
                 )
                 """);
         hxs.execute("""
-                CREATE TABLE hxs_sheets (
-                    name TEXT, variant INTEGER, effective_language TEXT,
-                    column_count INTEGER, row_count INTEGER,
-                    schema_hash BLOB, technical_hash BLOB, string_hash BLOB, content_hash BLOB
+                CREATE TABLE sheets (
+                    id INTEGER PRIMARY KEY, name TEXT NOT NULL, variant INTEGER NOT NULL,
+                    effective_language TEXT NOT NULL, column_count INTEGER NOT NULL,
+                    row_count INTEGER NOT NULL, schema_hash BLOB NOT NULL,
+                    technical_hash BLOB NOT NULL, string_hash BLOB NOT NULL,
+                    content_hash BLOB NOT NULL
                 )
                 """);
-        hxs.execute("CREATE TABLE hxs_columns (sheet_name TEXT, column_index INTEGER, offset INTEGER, type TEXT)");
+        hxs.execute("CREATE TABLE columns (sheet_id INTEGER, column_index INTEGER, offset INTEGER, type INTEGER)");
         hxs.execute("""
-                CREATE TABLE hxs_rows (
-                    sheet_name TEXT, row_id INTEGER, subrow_id INTEGER,
+                CREATE TABLE "rows" (
+                    sheet_id INTEGER, row_id INTEGER, subrow_id INTEGER,
                     row_hash BLOB, technical_hash BLOB, string_hash BLOB, technical_payload BLOB
                 )
                 """);
         hxs.execute("""
-                CREATE TABLE hxs_string_cells (
-                    sheet_name TEXT, row_id INTEGER, subrow_id INTEGER, column_index INTEGER,
+                CREATE TABLE string_cells (
+                    sheet_id INTEGER, row_id INTEGER, subrow_id INTEGER, column_index INTEGER,
                     macro_text TEXT, macro_hash BLOB, raw_hash BLOB, raw_value BLOB
                 )
                 """);
-        hxs.update("INSERT INTO hxs_meta VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                1, "7.2.0", "en", "full", snapshotId, contentId,
+        hxs.update("INSERT INTO hxs_meta VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                1, 1, "7.2.0", "en", "full", contentId, snapshotId,
                 "extractor-test", "lumina-test", 1, count, count);
-        hxs.update("INSERT INTO hxs_sheets VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                "Large", 0, "en", 1, count, hash(50), hash(51), hash(52), hash(53));
-        hxs.update("INSERT INTO hxs_columns VALUES (?, ?, ?, ?)", "Large", 1, 8, "String");
+        hxs.update("INSERT INTO sheets VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                31, "Large", 0, "en", 1, count, hash(50), hash(51), hash(52), hash(53));
+        hxs.update("INSERT INTO columns VALUES (?, ?, ?, ?)", 31, 1, 8, 1);
 
         List<Object[]> rows = new ArrayList<>(count);
         List<Object[]> cells = new ArrayList<>(count);
         for (int index = 0; index < count; index++) {
-            rows.add(new Object[]{"Large", index, 0, hash(index), hash(index + 1), hash(index + 2),
+            rows.add(new Object[]{31, index, 0, hash(index), hash(index + 1), hash(index + 2),
                     new byte[]{1}});
-            cells.add(new Object[]{"Large", index, 0, 1, "{utf8}row-" + index, hash(index + 3), null,
+            cells.add(new Object[]{31, index, 0, 1, "{utf8}row-" + index, hash(index + 3), null,
                     new byte[]{2}});
         }
-        hxs.batchUpdate("INSERT INTO hxs_rows VALUES (?, ?, ?, ?, ?, ?, ?)", rows);
-        hxs.batchUpdate("INSERT INTO hxs_string_cells VALUES (?, ?, ?, ?, ?, ?, ?, ?)", cells);
+        hxs.batchUpdate("INSERT INTO \"rows\" VALUES (?, ?, ?, ?, ?, ?, ?)", rows);
+        hxs.batchUpdate("INSERT INTO string_cells VALUES (?, ?, ?, ?, ?, ?, ?, ?)", cells);
     }
 
     private static AtlasInspection inspectionWithCounts(long sheetCount, long rowCount,

@@ -1,13 +1,13 @@
 package com.harmoniasuite.source.hxs;
 
-import java.util.Objects;
-
-public record HxsColumn(int columnIndex, long offset, String type) {
+public record HxsColumn(int columnIndex, long offset, int type) {
 
     public HxsColumn {
         if (columnIndex < 0) {
             throw new IllegalArgumentException("columnIndex must be non-negative");
         }
-        Objects.requireNonNull(type, "type");
+        if (offset < 0) {
+            throw new IllegalArgumentException("offset must be non-negative");
+        }
     }
 }

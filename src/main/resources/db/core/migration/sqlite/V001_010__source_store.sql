@@ -35,8 +35,8 @@ CREATE INDEX idx_source_sheets_snapshot ON source_sheets(snapshot_db_id);
 CREATE TABLE source_columns (
     sheet_id INTEGER NOT NULL REFERENCES source_sheets(id) ON DELETE CASCADE,
     column_index INTEGER NOT NULL CHECK (column_index >= 0),
-    offset INTEGER NOT NULL,
-    type TEXT NOT NULL,
+    offset INTEGER NOT NULL CHECK (offset >= 0),
+    type INTEGER NOT NULL,
     PRIMARY KEY (sheet_id, column_index)
 );
 
