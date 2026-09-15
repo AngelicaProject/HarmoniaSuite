@@ -17,6 +17,10 @@ public interface HxsSourceSink {
     default void row(HxsRow row) {
     }
 
+    /** Signals that all rows for the current sheet have been emitted. */
+    default void rowsComplete() {
+    }
+
     default void stringCell(HxsStringCell cell) {
     }
 

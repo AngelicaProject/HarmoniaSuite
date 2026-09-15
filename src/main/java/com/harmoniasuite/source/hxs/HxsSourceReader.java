@@ -136,6 +136,7 @@ public class HxsSourceReader {
                 sink.beginSheet(sheet);
                 readColumns(connection, sheetId, sink);
                 readRows(connection, sheetId, sink);
+                sink.rowsComplete();
                 readStringCells(connection, sheetId, sink);
                 sink.endSheet();
             }

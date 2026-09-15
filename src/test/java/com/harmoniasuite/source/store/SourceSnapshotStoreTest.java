@@ -306,6 +306,29 @@ class SourceSnapshotStoreTest {
                 .orElseThrow().macroText());
     }
 
+    @Test
+    void flushesRowsBeforeStringCellBatchForSmallRowDenseStringFixture() throws Exception {
+        int rowCount = 100;
+        int cellsPerRow = 21;
+        int stringCellCount = rowCount * cellsPerRow;
+        String snapshotId = "sha256:" + "g".repeat(64);
+        String contentId = "sha256:" + "h".repeat(64);
+        Path denseHxsPath = directory.resolve("small-rows-large-cells.hxs");
+        JdbcTemplate hxs = new JdbcTemplate(SqliteDataSources.create(denseHxsPath));
+        createSmallRowsLargeCellsHxs(hxs, rowCount, cellsPerRow, snapshotId, contentId);
+        AtlasInspection inspection = new AtlasInspection(
+                1, "7.2.0", "en", "full", snapshotId, contentId,
+                "extractor-test", "lumina-test", 1, rowCount, stringCellCount);
+
+        JdbcSourceSnapshotStore store = new JdbcSourceSnapshotStore(core);
+        store.importSnapshot(denseHxsPath, inspection, new HxsSourceReader());
+
+        assertEquals(rowCount, store.countRows(snapshotId));
+        assertEquals(stringCellCount, store.countStringCells(snapshotId));
+        assertEquals("{utf8}r99-c21", store.findStringCell(snapshotId, "DenseStrings", 99, 0, 21)
+                .orElseThrow().macroText());
+    }
+
     private static SourceSnapshot importAtStart(JdbcSourceSnapshotStore store, Path hxsPath,
                                                 CountDownLatch ready, CountDownLatch start)
             throws Exception {
@@ -433,6 +456,70 @@ class SourceSnapshotStoreTest {
                     new byte[]{1}});
             cells.add(new Object[]{31, index, 0, 1, "{utf8}row-" + index, hash(index + 3), null,
                     new byte[]{2}});
+        }
+        hxs.batchUpdate("INSERT INTO \"rows\" VALUES (?, ?, ?, ?, ?, ?, ?)", rows);
+        hxs.batchUpdate("INSERT INTO string_cells VALUES (?, ?, ?, ?, ?, ?, ?, ?)", cells);
+    }
+
+    private static void createSmallRowsLargeCellsHxs(JdbcTemplate hxs, int rowCount,
+                                                     int cellsPerRow, String snapshotId,
+                                                     String contentId) {
+        hxs.execute("""
+                CREATE TABLE hxs_meta (
+                    id INTEGER PRIMARY KEY, format_version INTEGER NOT NULL,
+                    game_version TEXT NOT NULL, language TEXT NOT NULL, scope TEXT NOT NULL,
+                    content_id TEXT NOT NULL, snapshot_id TEXT NOT NULL,
+                    extractor_version TEXT NOT NULL, lumina_version TEXT NOT NULL,
+                    sheet_count INTEGER NOT NULL, row_count INTEGER NOT NULL,
+                    string_cell_count INTEGER NOT NULL
+                )
+                """);
+        hxs.execute("""
+                CREATE TABLE sheets (
+                    id INTEGER PRIMARY KEY, name TEXT NOT NULL, variant INTEGER NOT NULL,
+                    effective_language TEXT NOT NULL, column_count INTEGER NOT NULL,
+                    row_count INTEGER NOT NULL, schema_hash BLOB NOT NULL,
+                    technical_hash BLOB NOT NULL, string_hash BLOB NOT NULL,
+                    content_hash BLOB NOT NULL
+                )
+                """);
+        hxs.execute("CREATE TABLE columns (sheet_id INTEGER, column_index INTEGER, offset INTEGER, type INTEGER)");
+        hxs.execute("""
+                CREATE TABLE "rows" (
+                    sheet_id INTEGER, row_id INTEGER, subrow_id INTEGER,
+                    row_hash BLOB, technical_hash BLOB, string_hash BLOB, technical_payload BLOB
+                )
+                """);
+        hxs.execute("""
+                CREATE TABLE string_cells (
+                    sheet_id INTEGER, row_id INTEGER, subrow_id INTEGER, column_index INTEGER,
+                    macro_text TEXT, macro_hash BLOB, raw_hash BLOB, raw_value BLOB
+                )
+                """);
+        hxs.update("INSERT INTO hxs_meta VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                1, 1, "7.2.0", "en", "full", contentId, snapshotId,
+                "extractor-test", "lumina-test", 1, rowCount, rowCount * cellsPerRow);
+        hxs.update("INSERT INTO sheets VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                71, "DenseStrings", 0, "en", cellsPerRow, rowCount,
+                hash(70), hash(71), hash(72), hash(73));
+
+        List<Object[]> columns = new ArrayList<>(cellsPerRow);
+        for (int columnIndex = 1; columnIndex <= cellsPerRow; columnIndex++) {
+            columns.add(new Object[]{71, columnIndex, columnIndex * 8L, 1});
+        }
+        hxs.batchUpdate("INSERT INTO columns VALUES (?, ?, ?, ?)", columns);
+
+        List<Object[]> rows = new ArrayList<>(rowCount);
+        List<Object[]> cells = new ArrayList<>(rowCount * cellsPerRow);
+        for (int rowId = 0; rowId < rowCount; rowId++) {
+            rows.add(new Object[]{71, rowId, 0, hash(rowId), hash(rowId + 1), hash(rowId + 2),
+                    new byte[]{1}});
+            for (int columnIndex = 1; columnIndex <= cellsPerRow; columnIndex++) {
+                int seed = rowId * cellsPerRow + columnIndex;
+                cells.add(new Object[]{71, rowId, 0, columnIndex,
+                        "{utf8}r" + rowId + "-c" + columnIndex, hash(seed + 3), null,
+                        new byte[]{2}});
+            }
         }
         hxs.batchUpdate("INSERT INTO \"rows\" VALUES (?, ?, ?, ?, ?, ?, ?)", rows);
         hxs.batchUpdate("INSERT INTO string_cells VALUES (?, ?, ?, ?, ?, ?, ?, ?)", cells);

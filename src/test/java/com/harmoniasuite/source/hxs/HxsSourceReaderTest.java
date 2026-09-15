@@ -109,28 +109,45 @@ class HxsSourceReaderTest {
         List<HxsColumn> columns = new ArrayList<>();
         List<HxsRow> rows = new ArrayList<>();
         List<HxsStringCell> cells = new ArrayList<>();
+        List<String> events = new ArrayList<>();
         new HxsSourceReader().read(hxsPath, INSPECTION, new HxsSourceSink() {
             @Override
             public void beginSheet(HxsSheet sheet) {
+                events.add("beginSheet");
                 sheets.add(sheet);
             }
 
             @Override
             public void column(HxsColumn column) {
+                events.add("column");
                 columns.add(column);
             }
 
             @Override
             public void row(HxsRow row) {
+                events.add("row");
                 rows.add(row);
             }
 
             @Override
+            public void rowsComplete() {
+                events.add("rowsComplete");
+            }
+
+            @Override
             public void stringCell(HxsStringCell cell) {
+                events.add("stringCell");
                 cells.add(cell);
+            }
+
+            @Override
+            public void endSheet() {
+                events.add("endSheet");
             }
         });
 
+        assertEquals(List.of("beginSheet", "column", "row", "row", "rowsComplete",
+                "stringCell", "endSheet"), events);
         assertEquals(1, sheets.size());
         assertEquals("Quest", sheets.get(0).name());
         assertEquals(1, columns.size());

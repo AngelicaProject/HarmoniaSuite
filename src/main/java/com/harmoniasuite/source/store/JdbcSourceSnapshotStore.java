@@ -372,6 +372,12 @@ public final class JdbcSourceSnapshotStore implements SourceSnapshotStore {
 
     private final class ImportSink implements HxsSourceSink {
 
+        private enum SheetPhase {
+            NONE,
+            ROWS,
+            STRING_CELLS
+        }
+
         private final AtlasInspection inspection;
         private final List<SourceColumn> columns = new ArrayList<>();
         private final List<SourceRow> rows = new ArrayList<>(BATCH_SIZE);
@@ -385,6 +391,7 @@ public final class JdbcSourceSnapshotStore implements SourceSnapshotStore {
         private long observedStringCells;
         private long currentSheetRows;
         private long currentSheetStringCells;
+        private SheetPhase phase = SheetPhase.NONE;
 
         private ImportSink(AtlasInspection inspection) {
             this.inspection = inspection;
@@ -420,6 +427,7 @@ public final class JdbcSourceSnapshotStore implements SourceSnapshotStore {
             stringCells.clear();
             currentSheetRows = 0;
             currentSheetStringCells = 0;
+            phase = SheetPhase.ROWS;
             observedSheets++;
         }
 
@@ -432,6 +440,7 @@ public final class JdbcSourceSnapshotStore implements SourceSnapshotStore {
         @Override
         public void row(HxsRow row) {
             requireCurrentSheet();
+            requirePhase(SheetPhase.ROWS, "row");
             rows.add(new SourceRow(currentSheetDbId, row.rowId(), row.subrowId(), row.rowHash(),
                     row.technicalHash(), row.stringHash()));
             currentSheetRows++;
@@ -443,8 +452,18 @@ public final class JdbcSourceSnapshotStore implements SourceSnapshotStore {
         }
 
         @Override
+        public void rowsComplete() {
+            requireCurrentSheet();
+            requirePhase(SheetPhase.ROWS, "rowsComplete");
+            insertRows(rows);
+            rows.clear();
+            phase = SheetPhase.STRING_CELLS;
+        }
+
+        @Override
         public void stringCell(HxsStringCell cell) {
             requireCurrentSheet();
+            requirePhase(SheetPhase.STRING_CELLS, "stringCell");
             stringCells.add(new SourceStringCell(0, currentSheetDbId, cell.rowId(), cell.subrowId(),
                     cell.columnIndex(), cell.macroText(), cell.macroHash(), cell.rawHash()));
             currentSheetStringCells++;
@@ -458,10 +477,9 @@ public final class JdbcSourceSnapshotStore implements SourceSnapshotStore {
         @Override
         public void endSheet() {
             requireCurrentSheet();
+            requirePhase(SheetPhase.STRING_CELLS, "endSheet");
             insertColumns(currentSheetDbId, columns);
-            insertRows(rows);
             insertStringCells(stringCells);
-            rows.clear();
             stringCells.clear();
             if (columns.size() != currentSheet.columnCount()) {
                 throw new SourceSnapshotImportException("sheet column count mismatch for " + currentSheet.name());
@@ -470,6 +488,7 @@ public final class JdbcSourceSnapshotStore implements SourceSnapshotStore {
                 throw new SourceSnapshotImportException("sheet row count mismatch for " + currentSheet.name());
             }
             currentSheet = null;
+            phase = SheetPhase.NONE;
             columns.clear();
         }
 
@@ -502,6 +521,14 @@ public final class JdbcSourceSnapshotStore implements SourceSnapshotStore {
         private void requireCurrentSheet() {
             if (currentSheet == null) {
                 throw new SourceSnapshotImportException("HXS emitted a record outside a sheet");
+            }
+        }
+
+        private void requirePhase(SheetPhase expected, String event) {
+            if (phase != expected) {
+                throw new SourceSnapshotImportException(
+                        "HXS emitted " + event + " during " + phase.name().toLowerCase()
+                                + " phase; expected " + expected.name().toLowerCase() + " phase");
             }
         }
     }
