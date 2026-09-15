@@ -25,9 +25,10 @@ cache/               downloads and build caches
 state/               install-state, lock and diagnostics (Windows; Linux uses XDG state_root)
 ```
 
-User-data root содержит `data/harmonia.db`, WAL/SHM sidecars, `backups/`, `projects/`, source
-exports, logs and user configuration. Installer никогда не делает version directory источником
-этих данных и не удаляет их при обычном uninstall.
+User-data root содержит canonical database `data/core/harmonia.db`, its WAL/SHM sidecars, source
+exports, logs and user configuration. The historical `data/harmonia.db` path is a compatibility
+boundary only: the runtime leaves an existing file untouched. Installer никогда не делает version
+directory источником этих данных и не удаляет их при обычном uninstall.
 
 ## Process model и gateway boundary
 
@@ -37,7 +38,7 @@ exports, logs and user configuration. Installer никогда не делает
 
 В local mode main process запускает принадлежащий ему Spring child с
 `--server.address=127.0.0.1 --server.port=0 --harmonia.gateway-instance=<token>`, принимает
-от него после bind точный порт через identity-bound readiness marker, затем ждёт `GET /api/status`
+от него после bind точный порт через identity-bound readiness marker, затем ждёт `GET /api/version`
 и только после readiness загружает UI. В remote mode child не запускается; proxy разрешает HTTPS gateway (HTTP
 только для loopback или явного development override). Renderer видит только относительные
 `/api/**`: `harmonia://app/api/**` проксируется main process, остальные пути custom protocol
@@ -129,7 +130,7 @@ without a deliberate migration and backup coverage.
 
 ## Known non-production update path
 
-The current Java `UpdateService` still performs `git pull` and `git reset --hard` in a checkout.
-That path is not the production release/update contract; responsibility belongs to the
-transactional `apps/installer` flow. Release platform and artifact boundaries are documented in
+Spring no longer owns source updates or checkout mutation. Update responsibility belongs to the
+transactional `apps/installer` flow, while the desktop shell owns launch and gateway orchestration.
+Release platform and artifact boundaries are documented in
 [`release-operations.md`](release-operations.md).

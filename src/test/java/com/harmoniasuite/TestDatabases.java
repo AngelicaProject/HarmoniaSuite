@@ -10,18 +10,6 @@ public final class TestDatabases {
     private TestDatabases() {
     }
 
-    public static JdbcTemplate sqlite(Path dir) {
-        try {
-            javax.sql.DataSource dataSource =
-                    SqliteDataSources.create(dir.resolve("test.db").toAbsolutePath());
-            Flyway.configure().dataSource(dataSource).locations("classpath:db/migration/sqlite")
-                    .load().migrate();
-            return new JdbcTemplate(dataSource);
-        } catch (Exception e) {
-            throw new IllegalStateException("test database setup failed", e);
-        }
-    }
-
     public static JdbcTemplate coreSqlite(Path dir) {
         try {
             javax.sql.DataSource dataSource =

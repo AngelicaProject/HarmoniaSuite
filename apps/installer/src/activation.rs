@@ -106,7 +106,11 @@ impl ActivationConfig {
         Self {
             java_binary: java_binary.into(),
             workspace: paths.user_data_root.clone(),
-            database_path: paths.user_data_root.join("data").join("harmonia.db"),
+            database_path: paths
+                .user_data_root
+                .join("data")
+                .join("core")
+                .join("harmonia.db"),
             health_timeout: Duration::from_secs(30),
         }
     }
@@ -181,7 +185,7 @@ impl<R: ProcessRunner> HealthChecker for LocalBackendHealthChecker<R> {
                 "--server.port=0".to_owned(),
                 format!("--harmonia.gateway-instance={instance}"),
                 format!("--harmonia.workspace={}", config.workspace.display()),
-                format!("--harmonia.db-path={}", config.database_path.display()),
+                format!("--harmonia.core.db-path={}", config.database_path.display()),
             ])
             .env("HARMONIA_NO_BROWSER", "1")
             .current_dir(version_dir)
@@ -224,7 +228,7 @@ impl<R: ProcessRunner> LocalBackendHealthChecker<R> {
             }
             if let Some(port) = port {
                 match client
-                    .get(format!("http://127.0.0.1:{port}/api/status"))
+                    .get(format!("http://127.0.0.1:{port}/api/version"))
                     .send()
                 {
                     Ok(response) if response.status().is_success() => return Ok(()),
@@ -2583,7 +2587,7 @@ mod tests {
     fn corrupt_database_snapshot_fails_before_live_db_write() {
         let root = tempdir().unwrap();
         let user_data = root.path().join("user-data");
-        let database = user_data.join("data/harmonia.db");
+        let database = user_data.join("data/core/harmonia.db");
         fs::create_dir_all(database.parent().unwrap()).unwrap();
         fs::write(&database, b"before").unwrap();
         let snapshot = DatabaseSnapshot::create(&user_data, &database, "tx-corrupt")
@@ -3465,7 +3469,7 @@ mod tests {
             .unwrap();
 
         let (second_path, second) = fixture_result(&paths, &"b".repeat(40), "tx-b");
-        let database = paths.user_data_root.join("data/harmonia.db");
+        let database = paths.user_data_root.join("data/core/harmonia.db");
         let error = engine
             .activate(
                 second_path,

@@ -27,7 +27,7 @@ npm run dev
 The shell finds `target/harmonia-suite.jar` automatically. Set `HARMONIA_GATEWAY_JAR` when using a
 different backend artifact, and `HARMONIA_WORKSPACE` to point at an existing development workspace.
 The shell starts Spring with `--server.port=0`, consumes an identity-bound readiness marker with
-the actual loopback port, waits for `/api/status`, and stops that child when the window closes.
+the actual loopback port, waits for `/api/version`, and stops that child when the window closes.
 
 ## Installed runtime
 

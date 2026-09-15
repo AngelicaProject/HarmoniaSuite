@@ -15,8 +15,8 @@ describe("harmonia protocol mapping", () => {
   });
 
   it("maps API requests to the active gateway while preserving query", () => {
-    expect(apiGatewayUrl("https://gateway.example.test/base", "/api/status?x=1")).toBe(
-      "https://gateway.example.test/base/api/status?x=1",
+    expect(apiGatewayUrl("https://gateway.example.test/base", "/api/version?x=1")).toBe(
+      "https://gateway.example.test/base/api/version?x=1",
     );
   });
 
