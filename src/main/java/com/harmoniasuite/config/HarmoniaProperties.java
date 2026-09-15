@@ -11,7 +11,6 @@ public class HarmoniaProperties {
 
     private String workspace = ".";
     private final Core core = new Core();
-    private final Http http = new Http();
     private final App app = new App();
     private final SourceIngestion sourceIngestion = new SourceIngestion();
 
@@ -25,10 +24,6 @@ public class HarmoniaProperties {
 
     public Core getCore() {
         return core;
-    }
-
-    public Http getHttp() {
-        return http;
     }
 
     public App getApp() {
@@ -156,27 +151,6 @@ public class HarmoniaProperties {
 
         public void setZstdLevel(int zstdLevel) {
             this.zstdLevel = zstdLevel;
-        }
-    }
-
-    public static class Http {
-        @Min(1000) private long connectTimeoutMs = 15000;
-        @Min(30000) private long readTimeoutMs = 300000;
-
-        public long getConnectTimeoutMs() {
-            return connectTimeoutMs;
-        }
-
-        public void setConnectTimeoutMs(long connectTimeoutMs) {
-            this.connectTimeoutMs = connectTimeoutMs;
-        }
-
-        public long getReadTimeoutMs() {
-            return readTimeoutMs;
-        }
-
-        public void setReadTimeoutMs(long readTimeoutMs) {
-            this.readTimeoutMs = readTimeoutMs;
         }
     }
 

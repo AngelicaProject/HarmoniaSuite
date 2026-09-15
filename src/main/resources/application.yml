@@ -29,9 +29,6 @@ harmonia:
     version: '@project.version@'
     build-time: '@maven.build.timestamp@'
     commit: '@app.commit@'
-  http:
-    connect-timeout-ms: 15000
-    read-timeout-ms: 300000
   source-ingestion:
     staging-path: data/source-staging
     artifact-path: data/source-artifacts
