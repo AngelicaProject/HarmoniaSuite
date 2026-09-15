@@ -2,7 +2,8 @@ package com.harmoniasuite;
 
 import com.harmoniasuite.config.HarmoniaProperties;
 import com.harmoniasuite.config.WorkspacePaths;
-import com.harmoniasuite.source.atlas.AtlasProperties;
+import com.harmoniasuite.source.infrastructure.config.AtlasProperties;
+import com.harmoniasuite.source.infrastructure.config.SourceIngestionProperties;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.autoconfigure.flyway.FlywayAutoConfiguration;
@@ -20,7 +21,8 @@ import java.nio.file.Path;
         DataSourceAutoConfiguration.class,
         FlywayAutoConfiguration.class
 })
-@EnableConfigurationProperties({HarmoniaProperties.class, AtlasProperties.class})
+@EnableConfigurationProperties({HarmoniaProperties.class, AtlasProperties.class,
+        SourceIngestionProperties.class})
 public class HarmoniaSuiteApplication {
 
     public static void main(String[] args) {

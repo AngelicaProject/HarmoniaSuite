@@ -6,9 +6,9 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.harmoniasuite.config.CoreDatabase;
-import com.harmoniasuite.source.store.JdbcSourceSnapshotStore;
-import com.harmoniasuite.source.store.SourceSnapshotImporter;
-import com.harmoniasuite.source.store.SourceSnapshotStore;
+import com.harmoniasuite.source.infrastructure.persistence.JdbcSourceSnapshotRepository;
+import com.harmoniasuite.source.application.SourceSnapshotImportService;
+import com.harmoniasuite.source.application.port.SourceSnapshotRepository;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Map;
@@ -50,9 +50,9 @@ class CoreDatabaseApplicationContextTest {
         assertEquals(0, context.getBeansOfType(JdbcTemplate.class).size());
         assertEquals(0, context.getBeansOfType(PlatformTransactionManager.class).size());
         assertNotNull(coreDatabase);
-        assertNotNull(context.getBean(JdbcSourceSnapshotStore.class));
-        assertNotNull(context.getBean(SourceSnapshotStore.class));
-        assertNotNull(context.getBean(SourceSnapshotImporter.class));
+        assertNotNull(context.getBean(JdbcSourceSnapshotRepository.class));
+        assertNotNull(context.getBean(SourceSnapshotRepository.class));
+        assertNotNull(context.getBean(SourceSnapshotImportService.class));
         assertEquals(2, coreDatabase.jdbc().queryForObject(
                 "SELECT COUNT(*) FROM flyway_schema_history", Integer.class));
         assertEquals(1, coreDatabase.jdbc().queryForObject(

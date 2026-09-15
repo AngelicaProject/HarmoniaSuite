@@ -1,7 +1,7 @@
-package com.harmoniasuite.source.hxs;
+package com.harmoniasuite.source.infrastructure.hxs;
 
 import com.harmoniasuite.db.SqliteDataSources;
-import com.harmoniasuite.source.atlas.AtlasInspection;
+import com.harmoniasuite.source.domain.SourceSnapshotMetadata;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -21,7 +21,7 @@ class HxsSourceReaderTest {
 
     private static final String SNAPSHOT_ID = "sha256:" + "a".repeat(64);
     private static final String CONTENT_ID = "sha256:" + "b".repeat(64);
-    private static final AtlasInspection INSPECTION = new AtlasInspection(
+    private static final SourceSnapshotMetadata INSPECTION = new SourceSnapshotMetadata(
             1, "7.2.0", "en", "full", SNAPSHOT_ID, CONTENT_ID,
             "extractor-test", "lumina-test", 1, 2, 1);
 
@@ -33,59 +33,17 @@ class HxsSourceReaderTest {
     @BeforeEach
     void setUp() throws Exception {
         hxsPath = directory.resolve("fixture.hxs");
-        JdbcTemplate jdbc = new JdbcTemplate(SqliteDataSources.create(hxsPath));
-        jdbc.execute("""
-                CREATE TABLE hxs_meta (
-                    id INTEGER PRIMARY KEY, format_version INTEGER NOT NULL,
-                    game_version TEXT NOT NULL, language TEXT NOT NULL, scope TEXT NOT NULL,
-                    content_id TEXT NOT NULL, snapshot_id TEXT NOT NULL,
-                    extractor_version TEXT NOT NULL, lumina_version TEXT NOT NULL,
-                    sheet_count INTEGER NOT NULL, row_count INTEGER NOT NULL,
-                    string_cell_count INTEGER NOT NULL
-                )
-                """);
-        jdbc.execute("""
-                CREATE TABLE sheets (
-                    id INTEGER PRIMARY KEY, name TEXT NOT NULL, variant INTEGER NOT NULL,
-                    effective_language TEXT NOT NULL, column_count INTEGER NOT NULL,
-                    row_count INTEGER NOT NULL, schema_hash BLOB NOT NULL,
-                    technical_hash BLOB NOT NULL, string_hash BLOB NOT NULL,
-                    content_hash BLOB NOT NULL
-                )
-                """);
-        jdbc.execute("CREATE TABLE columns (sheet_id INTEGER, column_index INTEGER, offset INTEGER, type INTEGER)");
-        jdbc.execute("""
-                CREATE TABLE "rows" (
-                    sheet_id INTEGER, row_id INTEGER, subrow_id INTEGER,
-                    row_hash BLOB, technical_hash BLOB, string_hash BLOB,
-                    technical_payload BLOB
-                )
-                """);
-        jdbc.execute("""
-                CREATE TABLE string_cells (
-                    sheet_id INTEGER, row_id INTEGER, subrow_id INTEGER, column_index INTEGER,
-                    macro_text TEXT, macro_hash BLOB, raw_hash BLOB, raw_value BLOB
-                )
-                """);
-        jdbc.update("""
-                INSERT INTO hxs_meta VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, 1, 1, "7.2.0", "en", "full", CONTENT_ID, SNAPSHOT_ID,
-                "extractor-test", "lumina-test", 1, 2, 1);
-        byte[] sheetHash = hash(9);
-        jdbc.update("INSERT INTO sheets VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                41, "Quest", 0, "en", 1, 2, sheetHash, hash(10), hash(11), hash(12));
-        jdbc.update("INSERT INTO columns VALUES (?, ?, ?, ?)", 41, 3, 16, 1);
-        jdbc.update("INSERT INTO \"rows\" VALUES (?, ?, ?, ?, ?, ?, ?)",
-                41, 7, 0, hash(20), hash(21), hash(22), new byte[]{1, 2, 3});
-        jdbc.update("INSERT INTO \"rows\" VALUES (?, ?, ?, ?, ?, ?, ?)",
-                41, 7, 1, hash(30), hash(31), hash(32), new byte[]{4, 5, 6});
-        jdbc.update("INSERT INTO string_cells VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                41, 7, 1, 3, "{utf8}Hello", hash(40), null, new byte[]{8, 9});
+        HxsV1TestFixture.create(hxsPath, INSPECTION)
+                .sheet(41, "Quest", 0, "en", 1, 2, hash(9), hash(10), hash(11), hash(12))
+                .column(41, 3, 16, 1)
+                .row(41, 7, 0, hash(20), hash(21), hash(22), new byte[]{1, 2, 3})
+                .row(41, 7, 1, hash(30), hash(31), hash(32), new byte[]{4, 5, 6})
+                .stringCell(41, 7, 1, 3, "{utf8}Hello", hash(40), null, new byte[]{8, 9});
     }
 
     @Test
     void metadataMismatchFailsBeforeSourceCallbacks() {
-        AtlasInspection mismatch = new AtlasInspection(
+        SourceSnapshotMetadata mismatch = new SourceSnapshotMetadata(
                 1, "7.2.1", "en", "full", SNAPSHOT_ID, CONTENT_ID,
                 "extractor-test", "lumina-test", 1, 2, 1);
         List<String> events = new ArrayList<>();

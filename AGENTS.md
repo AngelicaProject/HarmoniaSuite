@@ -26,6 +26,8 @@ The legacy application runtime has been removed. Files under `db/migration/**` a
 
 Canonical backend code is developed by bounded context. Do not introduce new top-level global architectural buckets such as `controller/`, `service/`, `repository/`, `dto/`, `mapping/` or `domain/`. New canonical modules use package-by-feature with explicit `api/application/domain/infrastructure` boundaries. MapStruct is the standard DTO mapper. Controllers remain thin, SQL belongs in repository or infrastructure adapters, and legacy data compatibility must not become a dependency of canonical domain code.
 
+Detailed package boundaries and runtime flow are documented in [docs/backend-architecture.md](docs/backend-architecture.md).
+
 ## Repository layout
 
 ```text

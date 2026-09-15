@@ -1,4 +1,4 @@
-package com.harmoniasuite.source.atlas;
+package com.harmoniasuite.source.infrastructure.atlas;
 
 /** Small Java child used to exercise process capture and termination without a real Atlas binary. */
 public final class AtlasProcessProbe {

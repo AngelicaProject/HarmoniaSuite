@@ -1,4 +1,4 @@
-package com.harmoniasuite.service.system;
+package com.harmoniasuite.system.application;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
