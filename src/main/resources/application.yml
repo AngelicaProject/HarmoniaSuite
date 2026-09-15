@@ -45,6 +45,11 @@ harmonia:
     request-delay-ms: 5000
   openrouter:
     api-key: ${OPENROUTER_API_KEY:}
+  atlas:
+    executable: ${HARMONIA_ATLAS_EXECUTABLE:}
+    verification-timeout-ms: 300000
+    max-stdout-bytes: 1048576
+    max-stderr-bytes: 65536
 
 logging:
   level:
