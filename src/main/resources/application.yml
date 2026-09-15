@@ -47,7 +47,7 @@ harmonia:
     api-key: ${OPENROUTER_API_KEY:}
   atlas:
     executable: ${HARMONIA_ATLAS_EXECUTABLE:}
-    verification-timeout-ms: 30000
+    verification-timeout-ms: 300000
     max-stdout-bytes: 1048576
     max-stderr-bytes: 65536
 

@@ -49,7 +49,7 @@ class AtlasClientTest {
                 CONTENT_ID, "0.1.0", "7.7.0", 7912, 1801071, 2474141), inspection);
         assertEquals(List.of(javaExecutable().toString(), "inspect",
                 hxsPath.toAbsolutePath().normalize().toString(), "--json"), runner.arguments);
-        assertEquals(Duration.ofMillis(30_000), runner.timeout);
+        assertEquals(Duration.ofMillis(300_000), runner.timeout);
         assertEquals(1_048_576, runner.maxStdoutBytes);
         assertEquals(65_536, runner.maxStderrBytes);
     }

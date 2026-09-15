@@ -12,7 +12,7 @@ public class AtlasProperties {
     private String executable = "";
 
     @Min(1)
-    private long verificationTimeoutMs = 30_000;
+    private long verificationTimeoutMs = 300_000;
 
     @Min(1)
     private int maxStdoutBytes = 1_048_576;
