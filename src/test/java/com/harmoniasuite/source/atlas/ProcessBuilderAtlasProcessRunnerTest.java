@@ -1,4 +1,4 @@
-package com.harmoniasuite.source.atlas;
+package com.harmoniasuite.source.infrastructure.atlas;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;

@@ -1,4 +1,4 @@
-package com.harmoniasuite.source.artifact;
+package com.harmoniasuite.source.infrastructure.storage;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;

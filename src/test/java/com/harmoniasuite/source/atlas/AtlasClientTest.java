@@ -1,6 +1,8 @@
-package com.harmoniasuite.source.atlas;
+package com.harmoniasuite.source.infrastructure.atlas;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.harmoniasuite.source.infrastructure.config.AtlasProperties;
+import com.harmoniasuite.source.domain.SourceSnapshotMetadata;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -43,9 +45,9 @@ class AtlasClientTest {
     @Test
     @DisplayName("valid inspect JSON becomes strongly typed verified metadata")
     void validInspection() {
-        AtlasInspection inspection = client().inspect(hxsPath);
+        SourceSnapshotMetadata inspection = client().inspect(hxsPath);
 
-        assertEquals(new AtlasInspection(1, "7.2.0", "en", "full", SNAPSHOT_ID,
+        assertEquals(new SourceSnapshotMetadata(1, "7.2.0", "en", "full", SNAPSHOT_ID,
                 CONTENT_ID, "0.1.0", "7.7.0", 7912, 1801071, 2474141), inspection);
         assertEquals(List.of(javaExecutable().toString(), "inspect",
                 hxsPath.toAbsolutePath().normalize().toString(), "--json"), runner.arguments);
