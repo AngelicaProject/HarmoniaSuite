@@ -56,8 +56,8 @@ public final class JdbcSourceSnapshotStore implements SourceSnapshotStore {
     }
 
     /** Imports through a reader supplied by the trusted ingestion boundary. */
-    public SourceSnapshot importSnapshot(Path hxsPath, AtlasInspection trustedInspection,
-                                          HxsSourceReader reader) {
+    SourceSnapshot importSnapshot(Path hxsPath, AtlasInspection trustedInspection,
+                                  HxsSourceReader reader) {
         Objects.requireNonNull(hxsPath, "hxsPath");
         Objects.requireNonNull(trustedInspection, "trustedInspection");
         Objects.requireNonNull(reader, "reader");

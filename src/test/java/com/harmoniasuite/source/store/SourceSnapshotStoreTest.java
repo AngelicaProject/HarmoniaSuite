@@ -14,6 +14,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.jdbc.core.JdbcTemplate;
 
+import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
 import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.ArrayList;
@@ -25,6 +27,7 @@ import java.util.concurrent.Future;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -79,6 +82,32 @@ class SourceSnapshotStoreTest {
         assertNull(cell.rawHash());
         assertEquals(0, core.queryForObject("SELECT COUNT(*) FROM source_string_cells WHERE macro_text = ?",
                 Integer.class, "{utf8}Quest raw value"));
+    }
+
+    @Test
+    void importPreservesEmptyMacroTextExactly() throws Exception {
+        new JdbcTemplate(SqliteDataSources.create(hxsPath)).update("""
+                UPDATE string_cells
+                SET macro_text = ''
+                WHERE sheet_id = ? AND row_id = ? AND subrow_id = ? AND column_index = ?
+                """, 17, 7, 0, 3);
+
+        importStore();
+
+        assertEquals("", core.queryForObject("""
+                SELECT macro_text
+                FROM source_string_cells
+                WHERE sheet_id = (SELECT id FROM source_sheets WHERE name = 'Quest')
+                  AND row_id = ? AND subrow_id = ? AND column_index = ?
+                """, String.class, 7, 0, 3));
+    }
+
+    @Test
+    void trustedStoreImportSeamIsNotPublic() throws NoSuchMethodException {
+        Method importMethod = JdbcSourceSnapshotStore.class.getDeclaredMethod(
+                "importSnapshot", Path.class, AtlasInspection.class, HxsSourceReader.class);
+
+        assertFalse(Modifier.isPublic(importMethod.getModifiers()));
     }
 
     @Test

@@ -149,6 +149,35 @@ class HxsSourceReaderTest {
     }
 
     @Test
+    void acceptsEmptyMacroTextWithoutNormalization() throws Exception {
+        new JdbcTemplate(SqliteDataSources.create(hxsPath))
+                .update("UPDATE string_cells SET macro_text = '' WHERE sheet_id = ?", 41);
+        List<HxsStringCell> cells = new ArrayList<>();
+
+        new HxsSourceReader().read(hxsPath, INSPECTION, new HxsSourceSink() {
+            @Override
+            public void stringCell(HxsStringCell cell) {
+                cells.add(cell);
+            }
+        });
+
+        assertEquals(1, cells.size());
+        assertEquals("", cells.get(0).macroText());
+    }
+
+    @Test
+    void rejectsNullMacroText() throws Exception {
+        new JdbcTemplate(SqliteDataSources.create(hxsPath))
+                .update("UPDATE string_cells SET macro_text = NULL WHERE sheet_id = ?", 41);
+
+        HxsReadException exception = assertThrows(HxsReadException.class,
+                () -> new HxsSourceReader().read(hxsPath, INSPECTION, new HxsSourceSink() {
+                }));
+
+        assertEquals(HxsReadException.Reason.SCHEMA, exception.getReason());
+    }
+
+    @Test
     void opensArtifactStrictlyReadOnly() throws Exception {
         HxsSourceReader reader = new HxsSourceReader();
         try (Connection connection = reader.openReadOnlyConnection(hxsPath)) {

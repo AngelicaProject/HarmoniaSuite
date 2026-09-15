@@ -199,7 +199,7 @@ public class HxsSourceReader {
                             requiredLong(resultSet, 1, "String cell row ID"),
                             requiredInt(resultSet, 2, "String cell subrow ID"),
                             requiredInt(resultSet, 3, "String cell column index"),
-                            requiredText(resultSet, 4, "macro text"),
+                            requiredString(resultSet, 4, "macro text"),
                             requiredHash(resultSet, 5, "macro hash"),
                             nullableHash(resultSet, 6, "raw hash")));
                 }
@@ -247,6 +247,15 @@ public class HxsSourceReader {
         String value = resultSet.getString(index);
         if (value == null || value.isBlank()) {
             throw schemaError(field + " is blank");
+        }
+        return value;
+    }
+
+    private static String requiredString(ResultSet resultSet, int index, String field)
+            throws SQLException {
+        String value = resultSet.getString(index);
+        if (value == null) {
+            throw schemaError(field + " is null");
         }
         return value;
     }
